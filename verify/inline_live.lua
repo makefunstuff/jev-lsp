@@ -37,6 +37,11 @@ local function skip(label)
 end
 
 vim.opt.runtimepath:prepend(vim.fn.getcwd() .. '/nvim')
+
+-- Surface what the server logged if anything fails: a dead model endpoint looks exactly
+-- like a product defect from this side of the connection.
+local server_log = dofile(vim.fn.getcwd() .. '/verify/harness_log.lua')
+server_log.capture()
 require('meta').setup({
   cmd = { BIN },
   keymaps = false,
@@ -56,7 +61,8 @@ end, 25)
 
 local client = vim.lsp.get_clients({ bufnr = buf, name = 'meta' })[1]
 if not check(client ~= nil, 'the plugin attached a client') then
-  say(('[inline_live] %d failure(s), %d skip(s)'):format(failures, skips))
+  if failures > 0 then server_log.dump() end
+say(('[inline_live] %d failure(s), %d skip(s)'):format(failures, skips))
   os.exit(1)
 end
 
@@ -103,5 +109,6 @@ check(
   'and nothing was inserted into the buffer unasked'
 )
 
+if failures > 0 then server_log.dump() end
 say(('[inline_live] %d failure(s), %d skip(s)'):format(failures, skips))
 os.exit(failures == 0 and 0 or 1)

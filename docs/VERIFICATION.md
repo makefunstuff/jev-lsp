@@ -23,6 +23,13 @@ not for the code they touch.
 
 Rows below that cite an unbuilt harness are the requirement, not a report of coverage.
 
+**A red run says why.** Every harness prints the server's own `window/logMessage` lines when
+it fails (`verify/harness_log.lua` for the Lua ones; the Python ones carry the same in their
+FAIL detail). This matters more than it sounds: at the other end of an LSP connection a dead
+model endpoint is indistinguishable from a product defect — the client simply gets no
+findings and no edit — and a stale stub process left bound to the port has twice been
+mistaken for a regression.
+
 ## 1. Independent LSP client
 
 `verify/lsp_client.py` — a stdio LSP client written against the specification, **sharing

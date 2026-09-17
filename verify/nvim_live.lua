@@ -90,6 +90,11 @@ local here = debug.getinfo(1, 'S').source:sub(2)
 local PLUGIN = vim.fn.fnamemodify(here, ':p:h:h') .. '/nvim'
 vim.opt.runtimepath:prepend(PLUGIN)
 
+-- Surface what the server logged if anything fails: a dead model endpoint looks
+-- exactly like a product defect from this side of the connection.
+local server_log = dofile(vim.fn.fnamemodify(here, ':p:h') .. '/harness_log.lua')
+server_log.capture()
+
 local root = os.getenv('META_ROOT')
 if root == nil or root == '' then
   root = vim.fn.tempname() .. '-meta-live'
@@ -232,5 +237,6 @@ for _, c in ipairs(vim.lsp.get_clients({ name = 'meta' })) do
 end
 sleep(300)
 
+if failures > 0 then server_log.dump() end
 say(('[nvim_live] %d failure(s), %d skip(s)'):format(failures, skips))
 os.exit(failures == 0 and 0 or 1)
