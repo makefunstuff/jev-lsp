@@ -1,0 +1,224 @@
+# Verification
+
+Nothing is claimed without a mechanism below. Tests are named for the defect they catch,
+not for the code they touch.
+
+**Status of this document.** It specifies the proof each claim requires, and what is built.
+
+| Artefact | State | Last result |
+|---|---|---|
+| `verify/probes/` | built | 7 probes, all green (`verify/probes/run.sh`) |
+| `verify/lsp_client.py` | built | 27 ok, 0 FAIL, 0 skip, 0 warn against the real binary |
+| `verify/smoke.py` | built | 32/32 against the real binary |
+| `verify/queue_test.py` | built | 5/5; proven to fail on the pre-fix behaviour |
+| `verify/supersede_probe.py` | built | 7/7 — written independently by the verifier agent; control case plus a race case, and it asserts the race was actually set up |
+| `verify/plan_test.py` | built | 35/35 — the plan loop, server-side apply, revert, staleness, divergence, multi-file creation |
+| `verify/cli_parity.py` | built | 12/12 — the CLI and the LSP produce identical findings and byte-identical edits |
+| `verify/real_model.py` | built | real endpoint, reports rather than asserts; run against DeepSeek through the omp auth gateway |
+| `verify/stub_model.py` | built | scripted endpoint; no GPU, no network |
+| `verify/nvim_live.lua` | built | 0 failures, 0 skips — real plugin, real server, real buffer |
+| `verify/goldens/` | **not built** | planned with U6; the anchor-ambiguity rules are covered by `meta-core` unit tests instead |
+| `verify/bench.sh` | **not built** | latency budgets are asserted where they can be (`codeAction` p99 in `lsp_client.py` step 3); a standalone bench waits for U9 |
+
+Rows below that cite an unbuilt harness are the requirement, not a report of coverage.
+
+## 1. Independent LSP client
+
+`verify/lsp_client.py` — a stdio LSP client written against the specification, **sharing
+no code with the server**, depending only on the Python standard library.
+
+It performs, in order, and asserts at each step:
+
+1. `initialize` → `initialized`; assert `server_capabilities.positionEncoding == "utf-8"`,
+   `codeActionProvider.resolveProvider == true`, `diagnosticProvider.identifier == "meta"`.
+2. `textDocument/didOpen` with a fixture file.
+3. `textDocument/codeAction` → assert p99 latency budget, assert **no action contains an
+   `edit`** (N2 — the fast path must not carry edits).
+4. `textDocument/codeAction` with `triggerKind: Automatic` → assert only `ready` actions,
+   no `pending` placeholder.
+5. `codeAction/resolve` on the first action → assert `documentChanges` is present,
+   every `TextDocumentEdit` has an **integer** `version`, and no bare `changes` key.
+6. `workspace/applyEdit` → assert `applied == true`.
+7. Mutate the document, resolve the *same* action again → assert **no `edit` is returned**
+   (staleness), and that the response is not an error.
+8. `textDocument/diagnostic` → assert findings carry `data.finding_id` and `data.verb`.
+9. `workspace/executeCommand` `meta.cancel` mid-flight → assert a `$/progress` `end` was
+   received for the token and no `edit` followed.
+
+Because it is written from the spec, a disagreement between it and the server is a real
+protocol defect, not a test artifact.
+
+## 2. Live Neovim
+
+`verify/nvim_live.lua` — real Neovim, real plugin, real server, run under
+`nvim --headless -u verify/minimal_init.lua`:
+
+- start the server through `vim.lsp.start` with the plugin's config
+- open a fixture, save it, wait for the sign column to gain a diagnostic; assert the
+  diagnostic text and line
+- call `vim.lsp.buf.code_action()`, drive `vim.ui.select` with a stubbed chooser, assert
+  the buffer changed exactly as the returned edit specified
+- assert one `:Meta undo` restores the buffer byte-for-byte
+- assert `:Meta stop` results in zero further model calls within 2 s (counted by a stub
+  endpoint)
+
+This is the only test that proves the product claim — the rest prove the protocol.
+
+## 3. Golden intents
+
+Fixture repository plus a **stub model** that returns canned responses keyed by
+`context_hash`. Property-based, not exact-diff:
+
+- for every verb × fixture scope, the pipeline produces an edit that (a) parses, (b) lands
+  inside the requested scope, (c) is idempotent — re-applying the same response to the
+  result produces a no-op edit
+- ambiguous anchors (`match` occurring 0 or 2 times) produce **no edit** and one repair
+  attempt, verified by call count against the stub
+- malformed JSON, over-long output, and truncated output each produce no edit and no
+  panic
+
+Fixtures are regenerable and byte-identical across runs; `verify/goldens/` is committed
+with a header recording the stub version and model tier.
+
+## 4. Defect injection
+
+Each row is a test that must fail when the defect is injected and pass otherwise. This
+suite is the actual regression net; it is run in CI *and* as part of the design review.
+
+| Injected defect | Test that must catch it |
+|---|---|
+| `documentChanges` replaced by bare `changes` | `test_edit_contract.py` — validator self-test |
+| `version` omitted from a `TextDocumentEdit` | validator self-test, reproducing `[R3]`'s `util.lua:541` crash as a *rejection* |
+| `version` set to a stale value | `verify/lsp_client.py` step 7 |
+| Model call placed inside the `codeAction` handler | latency bench, `codeAction` p99 budget |
+| Unbounded inline-completion calls | stub endpoint call counter under a simulated 60 s insert session |
+| Cache keyed by `(uri, version)` instead of content hash | revert-then-resolve test: same content, different version, must hit |
+| `title` derived from model output | determinism test: two cold runs must produce identical titles |
+| Budget check after the call instead of before | budget test asserting the stub sees exactly `max_calls_per_min` calls |
+| `$/progress` `end` omitted on the error path | `verify/lsp_client.py` step 9 |
+| Progress sent for a token the client never supplied or created | `verify/lsp_client.py` conformance check; `verify/probes/streaming.lua` for the client side |
+| Token smuggled through `arguments` instead of `workDoneToken` | same — the server would still "work" against Neovim, which is why the check lives in the independent client |
+| `workDoneProgress: true` declared on a provider that never reports | capability audit in the independent client's `initialize` assertions |
+| Support gated on a filetype allowlist | `verify/probes/language.lua` — with `filetypes = nil`, all 11 fixtures attach after the plugin pass |
+| An edit arriving while an analysis is in flight is dropped rather than queued | `verify/queue_test.py` — proven to fail with the old behaviour injected (0 refreshes, 0 findings) and pass when queued |
+| A superseded analysis emits no refresh | same test, first assertion |
+| A client answering `workspace/configuration` with `{}` resets unrelated settings | `meta-core` `config::tests::an_empty_payload_changes_nothing` and `the_environment_wins_over_the_client_payload` |
+| A reasoning model exhausting its token budget returns nothing | `meta-core` `model::tests::a_reasoning_model_that_ran_out_of_budget_says_so` — the error must name `finish_reason=length` and the fix |
+| The model echoes the schema instead of filling it | `meta-core` `verbs::tests::the_schema_is_an_example_not_a_template_to_echo`; the schema is a concrete example plus an explicit "never use a field name as a value" rule |
+| An answer that re-emits the lines it did not consume duplicates them | `meta-core` `edit::tests::an_answer_that_reshapes_a_block_absorbs_the_re_emitted_lines` and `an_insertion_that_would_duplicate_a_line_that_stays_is_refused` |
+| A file with no detectable language not synced | same probe: `plain`, `data.log`, `f.zzz` must arrive as documents |
+| Gating the verb set on a treesitter parser | golden test with the parser absent: the same verb set is offered and scope falls back to `structural`/`whole_file` |
+| Language hook mutating buffer state | `verify/probes/language.lua`: `the language hook did not mutate buffer state` |
+| A skipped buffer reported silently | `:Meta status` test asserting `over_size`, `binary`, `ignored`, `generic_scope` are surfaced |
+| Model output applied without anchor resolution | golden test: ambiguous anchor must yield no edit |
+| `ERROR` severity emitted from the findings contract | schema rejection test |
+
+## 5. Latency bench
+
+`verify/bench.sh` drives the Python client against a fixture workspace with a stub model
+whose latency is configurable, and reports p50/p99 per method against the table in
+`docs/ARCHITECTURE.md` §4. A budget miss is a failure, not a warning. Real-model latency
+is measured separately and reported as `[U]` context, never as a pass condition.
+
+## 6. What counts as proof
+
+| Claim | Proof required |
+|---|---|
+| "The protocol conforms" | `verify/lsp_client.py` green |
+| "It works in Neovim" | `verify/nvim_live.lua` green |
+| "It does not burn tokens" | stub-endpoint call counters under the defect-injection suite |
+| "The edit contract is safe" | validator self-test + the `[R3]` probe table reproduced |
+| "It is fast enough" | `verify/bench.sh` against the §4 budgets |
+| "Streaming status reaches the editor" | `verify/probes/streaming.lua` green — client-supplied token in the request params, `begin,report,end` observed |
+| "The frozen contract is implemented by a real client" | `verify/probes/trace.lua` green — a reference server's payloads for §2/§4/§8 are accepted, applied, and refused exactly as specified |
+| "Every file is supported, not just known filetypes" | `verify/probes/language.lua` green — 8/11 attached by the built-in path, 11/11 after the plugin pass, including files with no language at all |
+| "The model output is usable" | golden intents |
+
+Anything not covered above is reported as unverified, with the exact probe that would
+settle it.
+
+## 7. Real model
+
+`verify/real_model.py` runs the live server against a real endpoint and reports what it
+observes rather than asserting stub-shaped expectations. Run through the omp auth gateway,
+which resolves the provider credential server-side, so no key is handled here:
+
+```sh
+python3 verify/real_model.py --base-url http://127.0.0.1:4000/v1 --model deepseek/deepseek-flash
+```
+
+Against `deepseek/deepseek-flash`, six consecutive runs, after the three defects below were
+fixed:
+
+| | measured |
+|---|---|
+| ambient review | 2.2–3.1 s, 1 finding each |
+| `codeAction/resolve` | 1.1–5.1 s, edit returned every time |
+| tokens per session | ~1.4–2.2 k |
+| resulting file parses | 6/6 |
+
+This is what the fast path buys: the menu itself is still a cache read, and the seconds are
+spent only after a pick. It also closed the last untested claim — every earlier result came
+from the scripted endpoint.
+
+## 8. What the real model found that the stub could not
+
+Recorded because each was invisible to a scripted model, and each is now pinned by a test:
+
+1. **Reasoning models exhaust a tight ceiling.** At 2048 tokens `deepseek-flash` returned
+   `finish_reason=length` with empty content, because reasoning consumed the whole budget.
+   The error now names that cause and the fix, and verb ceilings are 4096/2048.
+2. **A placeholder schema gets echoed.** The model returned the field name `verb_hint` where
+   an object was expected — the schema had been written as a fillable template. It is now a
+   concrete example plus an explicit "never use a field name as a value" rule.
+3. **An answer can cover more than its anchor.** Anchored on a one-line `statement`, the
+   model answered with a block opener plus the body re-indented under it. Applied literally
+   that duplicated the body; truncated, it left an empty block. The replaced range now
+   *absorbs* the lines the answer re-emits, bounded by the document.
+
+## 9. Known unverified
+
+- **Undo granularity** of a client-applied `WorkspaceEdit` `[R10]`. Headless script
+  execution cannot record undo blocks, so the probe was inconclusive. What *is* verified is
+  the plugin's own path: `verify/nvim_live.lua` asserts `:Meta undo` restores the buffer
+  byte-for-byte, which is the behaviour the product depends on. Plain `u` remains unmeasured.
+- **Model quality** on any verb. The suite proves the pipeline, never the usefulness of a
+  particular model's output; that is measured by the user, in the editor, and recorded
+  separately.
+- **A real model.** Every automated run uses `verify/stub_model.py`. The HTTP client, the
+  tier config, the `think` control, and the response parser are unit-tested against canned
+  payloads, and the wiring is exercised end to end — but no automated test has talked to a
+  live `llama.cpp` server, because that costs a GPU. Run it deliberately:
+  `META_BASE_URL=http://127.0.0.1:<port>/v1 META_MODEL=<model> python3 verify/smoke.py`.
+- **Real-model latency.** The `codeAction` budget is asserted against the stub. What a
+  7B–35B model costs on this machine in `codeAction/resolve` is unmeasured.
+
+## 10. Known limitations
+
+Recorded because they are deliberate boundaries, not oversights:
+
+- **Inline completion is served but its ghost text is unverified in this harness.** The
+  server side is covered (`verify/inline_test.py`, 14/14) and Neovim is shown to accept the
+  advertised capability and attach its completor (`verify/inline_live.lua`). What cannot be
+  driven headless: Neovim fires **none** of the events the completor listens for —
+  `InsertEnter`, `CursorMovedI` and `TextChangedP` each fire zero times after `startinsert`
+  plus a text change, and neither the automatic path nor `inline_completion.get()` issues a
+  request. The probe that settles it: in an interactive Neovim, enable inline completion,
+  type in a buffer, and confirm ghost text appears and `<Tab>` accepts it.
+- **`inlineCompletionProvider` is injected rather than declared**, because `lsp-types` 0.94
+  (pinned by tower-lsp 0.20) has no field for it — it first appears in 0.95.0. The injection
+  is one function at the transport boundary, tested in `crates/meta-lsp/src/advertised.rs`,
+  and disappears the day the dependency moves.
+- **`shutdown` with an explicit `params` member is rejected** with `-32602 Unexpected
+  params`. tower-lsp only accepts `()` for a no-params method, and JSON-RPC 2.0 permits
+  omitting `params` but does not define a null one, so the rejection is spec-correct.
+  Measured: params absent → `{"result": null}`; `null`, `[]`, `{}` → `-32602`. **Neovim is
+  unaffected** — `lsp/client.lua:911` calls `rpc.request('shutdown', nil, …)` and Lua drops
+  a nil table value, so the member never reaches the wire. A client that sends null will see
+  a failed shutdown and may force-stop the server.
+- **No treesitter scope.** Scope resolution is structural (brace or indentation) with a
+  whole-file fallback. `scope_source` reports which was used, so the quality is never
+  claimed to be higher than it is. Adding grammars is additive and changes no protocol.
+- **`languages.overrides[].verbs` narrows the menu but nothing enforces the complement** —
+  a client can invoke any verb through a hand-built action. The server validates the result,
+  not the request (the version stamp and anchor rules are what protect the buffer).

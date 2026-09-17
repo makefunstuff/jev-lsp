@@ -1,0 +1,16 @@
+[package]
+name = "meta-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+parking_lot = "0.12"
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+ureq = { version = "3", features = ["json"] }
+
+[lints.rust]
+unsafe_code = "forbid"

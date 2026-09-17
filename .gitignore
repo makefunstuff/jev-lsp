@@ -1,0 +1,17 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Editor / tooling scratch
+.direnv/
+.local/
+tags
+.DS_Store
+
+# Runtime artifacts — never tracked, always deletable
+/meta.log
+*.meta-cache
+
+# Python bytecode from the verification harness
+__pycache__/
+*.pyc

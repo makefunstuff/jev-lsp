@@ -1,0 +1,22 @@
+[package]
+name = "meta"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "meta"
+path = "src/main.rs"
+
+[dependencies]
+meta-core = { path = "../meta-core" }
+serde_json.workspace = true
+
+[dev-dependencies]
+# The test backend implements `meta_core::model::Backend`, whose error type is `anyhow::Error`,
+# and the scripted document store is locked from several threads.
+anyhow.workspace = true
+parking_lot = "0.12"
+
+[lints.rust]
+unsafe_code = "forbid"
