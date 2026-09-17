@@ -85,7 +85,7 @@ be enforced before any model call.
 | Method | Class | Gate | Notes |
 |---|---|---|---|
 | `textDocument/codeAction` | p99 < 50 ms, no model call | none needed | Reads the conclusion cache for `(uri, content_hash)`. Cold cache with `triggerKind = Invoked` returns one `disabled` action carrying `data` and `disabled.reason = "analyzing…"` `[R4]`. With `triggerKind = Automatic`, returns only already-computed actions, never a placeholder. |
-| `codeAction/resolve` | p50 < 2 s, hard timeout 30 s | per-session call budget | Where generation happens. Returns the action with `edit` and/or `command` filled. On timeout, returns the action unchanged so the client falls back rather than erroring `[R4]`. |
+| `codeAction/resolve` | p50 < 2 s, hard timeout 90 s | per-session call budget | Where generation happens. Returns the action with `edit` and/or `command` filled. On timeout, returns the action unchanged so the client falls back rather than erroring `[R4]`. |
 
 ### 3.2 Client to server, observation
 
@@ -253,6 +253,29 @@ restores the bytes recorded before the edit and then forgets the id, so a second
 No command takes a token argument: progress is reported under the `workDoneToken` of the
 enclosing request (§3.5), and cancelling a request is `$/cancelRequest` against the id the
 plugin's send call returned. `meta.cancel` exists only for work the plugin did not issue.
+
+### 6.1 Error codes
+
+`error.code` is contract, not prose: the CLI maps it to an exit code and the plugin shows it
+verbatim, so it is named here and asserted by the harness. Every command answers with a
+`Result` envelope (§7) whether it succeeded or not.
+
+| Code | Meaning |
+|---|---|
+| `bad_arguments` | The command's arguments are missing or malformed; the message names the shape it needs |
+| `unknown_document` | No open document matches the `uri` given |
+| `unknown_plan` | The plan id is not one this session holds (never persisted — N9) |
+| `unknown_edit` | Nothing to revert for that `edit_id`; a second revert is this, not a no-op |
+| `bad_uri` | The document's uri cannot be parsed |
+| `rejected_by_client` | `workspace/applyEdit` was refused by the client; its reason is passed through |
+| `apply_failed` | The apply request itself failed |
+| `not_implemented` | The command is not served at all — asserted against a name no version serves |
+| `skipped` | A gate or a disabled feature refused the work; the message names which |
+| `over_budget` | A call or token budget is exhausted (the CLI maps this to exit 3) |
+| `stale` | The target moved or changed since the work was prepared (exit 4) |
+| `model_error` | The model call failed, including a timeout or an exhausted answer |
+| `contract_error` | The model's answer did not satisfy its contract after repair (`docs/MODEL.md` §5) |
+| `rejected_edit` | The answer could not be applied to this document — an anchor that does not locate, or a replacement that repeats lines it did not consume |
 
 Server-initiated progress is cancelled by the client with `window/workDoneProgress/cancel`
 (client→server notification, `WorkDoneProgressCancelParams {token}`), which the server must
@@ -437,4 +460,6 @@ Recorded so the refusals are not relitigated:
 | 2026-09-18 | **N10/N11 added**: support is unconditional and language is metadata. `language` and `scope_source` added to action `data` and to plan artifacts; `languages` config section added; filetype allowlists and grammar-gated verbs explicitly refused. Verified by `verify/probes/language.lua` — with `filetypes = nil` the client attaches 8 of 11 fixtures, leaving the unidentifiable ones to the plugin's attach pass. |
 | 2026-09-18 | **§2 rewritten around "advertise only what is served"**, with the advertised set reduced to the implemented providers. `explain` moved out of the code-action menu to the `meta.explain` command, because a resolved action's `command` is executed by the client by sending it back to the server, so it cannot open a buffer. `meta.recompute` added; `meta.plan`/`apply`/`revert` marked specified-but-unserved and unadvertised. Implementation: `crates/meta-lsp`. |
 | 2026-09-18 | **U5, U6 and U8 built**: `meta.plan`/`meta.apply`/`meta.revert` are served and advertised; a plan step is applied *by the server* through `workspace/applyEdit`, re-anchored against live content and refused as `stale` when the target moved. Multi-file edits (`resourceOperations: create`) verified end to end. Post-apply verification implemented: the server predicts what an applied edit will produce and publishes an `ERROR` diagnostic naming the divergence — the one legitimate use of `publishDiagnostics` (§9). The one-shot CLI (`crates/meta`) implements §11 with all five exit codes, and `verify/cli_parity.py` proves it produces identical findings and byte-identical edits to the LSP path. |
+| 2026-09-18 | **§6.1 added: the command error codes are named.** They were already contract in practice — the CLI maps them to exit codes and the plugin surfaces them verbatim — but only `not_implemented` and `unknown_edit` were written down, so a harness asserting the real codes could be broken by a rename the document never mentioned. |
+| 2026-09-18 | **Resolve timeout raised 30 s → 90 s, ceilings raised, repair widened.** Measured against a real reasoning model: an 8192-token answer took over 60 s on a Rust rewrite, so the old 30 s cap converted valid-but-slow answers into transport errors; and a rejected answer is often answered the same way again, so the repair budget went from one attempt to two. `MAX_REPAIR_ATTEMPTS` now covers *applicability* failures as well as JSON ones — an anchor that cannot be located, or a replacement that repeats lines it did not consume — which docs/MODEL.md §5 specified and the implementation had not. Over a nine-run soak on three languages: 8 applied, 0 left a file unparseable, against 2/6 and 8/12 before. |
 | 2026-09-18 | **U7 built.** Inline completion is served and advertised: `textDocument/inlineCompletion` is registered as a custom method (the pinned `lsp-types` has no handler for a 3.18-draft method) and `inlineCompletionProvider` is injected into the `initialize` response, because Neovim attaches its completor only for a client that advertises it. Gates: off by default, binary/size/ignore, a content-hash answer cache, a prefix floor that applies only to timed requests, and its own per-minute window so completions cannot starve explicit work. Also implemented `workspace/didChangeConfiguration`, without which the plugin's kill switch could never take effect. |

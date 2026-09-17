@@ -55,6 +55,10 @@ Rules that are enforced mechanically, so a violation wastes the whole response:
 If a shorter quote would be ambiguous, quote more surrounding text.
 - `replacement` replaces the ENTIRE scope of that anchor, from its first line to its last. \
 Return the complete new text for the scope, not a fragment and not a diff.
+- If your change needs to touch more lines than the anchor names — a one-line `statement` \
+whose fix restructures the block around it — do NOT put those extra lines in `replacement`. \
+Anchor on the enclosing block instead, and rewrite that whole block. A replacement that \
+repeats lines it did not consume is rejected, because applying it would duplicate them.
 - Never emit line numbers or character offsets; the server computes them from `match`.
 - Do not reformat, reorder, or otherwise touch code outside the scope.
 - If no safe change is possible, return empty `replacements` and explain why in `rationale`.";
@@ -218,9 +222,11 @@ pub fn render(verb: Verb, ctx: &Context) -> PromptSpec {
     let max_tokens = match verb.output() {
         // Reasoned answers need room for the reasoning as well as the answer: a thinking
         // model that exhausts this returns `finish_reason=length` with empty content.
-        // Measured against a real reasoning model, 2048 was not enough; these are
-        // ceilings, not targets, so a model that finishes early costs nothing extra.
-        Output::Edit => 4096,
+        // Measured against a real reasoning model: 2048 was not enough, and 4096 was still
+        // not enough for a Rust rewrite, so the ceiling is now generous. These are ceilings,
+        // not targets — a model that finishes early costs nothing extra — and the session
+        // token budget is what actually bounds the spend.
+        Output::Edit => 8192,
         _ => 2048,
     };
     PromptSpec {

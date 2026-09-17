@@ -84,15 +84,20 @@ impl Drop for Permit<'_> {
     }
 }
 
-/// How many times a contract violation is retried before giving up.
-const MAX_REPAIR_ATTEMPTS: usize = 1;
+/// How many times a rejected answer is retried before giving up (docs/MODEL.md §5).
+///
+/// Measured against a real model: one attempt is not enough. A model that answers with the
+/// wrong shape tends to answer with it again, and a second, differently-worded complaint
+/// converts a meaningful share of those. The cost is bounded either way — two extra calls at
+/// most, each taking its own budget permit.
+const MAX_REPAIR_ATTEMPTS: usize = 2;
 
 /// Build the follow-up request for a rejected answer.
 ///
 /// The original context is re-sent unchanged so the model is not asked to work from a
 /// summary, and the previous answer is quoted back with the parser's own complaint — which
 /// is far more actionable than "your JSON was wrong".
-fn repair_context(original: &context::Context, error: &contract::ContractError, previous: &str) -> context::Context {
+fn repair_context(original: &context::Context, error: &str, previous: &str) -> context::Context {
     let quoted: String = previous.chars().take(1200).collect();
     let mut repaired = original.clone();
     repaired.code = original.code.clone();
@@ -322,19 +327,39 @@ impl Engine {
                 Generated::Artifact(raw.markdown)
             }
             _ => {
-                let (raw, _usage) = self.with_repair(
-                    &cfg,
-                    verb.tier(),
-                    &ctx,
-                    |c| verbs::render(verb, c),
-                    contract::parse_edit,
-                )?;
                 let profile = meta_core::lang::profile(&doc.language.name);
                 let opts = BuildOptions {
                     max_scope_lines: cfg.languages.max_scope_lines,
                 };
-                let proposal = edit::build_proposal(&doc.text, &raw, &profile, &opts)
-                    .map_err(|e| Failure::Edit(e.to_string()))?;
+                // Both kinds of failure are repaired, within one shared budget: the response
+                // not being valid JSON, and the answer not being applicable to this document
+                // (an anchor that cannot be located, or one whose replacement re-emits the
+                // lines that follow it). docs/MODEL.md §5 specifies the second kind, and a
+                // real model produced it in 2 of 12 soak runs — the model is never otherwise
+                // told that its answer was unusable, and re-prompting with the reason fixes it.
+                let proposal;
+                let mut attempt_ctx = ctx.clone();
+                let mut repairs = 0usize;
+                loop {
+                    let attempt = self.chat_with(&cfg, verb.tier(), verbs::render(verb, &attempt_ctx))?;
+                    let refusal = match contract::parse_edit(&attempt.text) {
+                        Err(e) => e.to_string(),
+                        Ok(raw) => match edit::build_proposal(&doc.text, &raw, &profile, &opts) {
+                            Ok(built) => {
+                                proposal = built;
+                                break;
+                            }
+                            Err(e) => e.to_string(),
+                        },
+                    };
+                    if repairs >= MAX_REPAIR_ATTEMPTS {
+                        return Err(Failure::Edit(format!(
+                            "{refusal} (after {MAX_REPAIR_ATTEMPTS} repair attempt(s))"
+                        )));
+                    }
+                    repairs += 1;
+                    attempt_ctx = repair_context(&ctx, &refusal, &attempt.text);
+                }
                 Generated::Edit(proposal)
             }
         };
@@ -428,7 +453,7 @@ impl Engine {
 
         let mut last = first_error;
         for _ in 0..MAX_REPAIR_ATTEMPTS {
-            let repair = repair_context(ctx, &last, &response.text);
+            let repair = repair_context(ctx, &last.to_string(), &response.text);
             let retry = self.chat_with(cfg, tier_kind, render(&repair))?;
             tokens_in += retry.prompt_tokens;
             tokens_out += retry.completion_tokens;
@@ -738,11 +763,15 @@ mod tests {
         // A persistently malformed model is still a Contract failure, not an infinite
         // retry: this subsumes the older "malformed review is a contract failure" case,
         // which stopped being true the moment one repair attempt was added.
-        let (e, scripted) = engine(&["nope", "still not JSON", "and again"]);
+        let (e, scripted) = engine(&["nope", "still not JSON", "and again", "one more"]);
         let f = e.analyze(&doc(CODE)).unwrap_err();
         assert!(matches!(f, Failure::Contract(_)), "{f:?}");
         assert!(f.message().contains("repair attempt"), "{}", f.message());
-        assert_eq!(scripted.seen.lock().len(), 2, "exactly one repair");
+        assert_eq!(
+            scripted.seen.lock().len(),
+            1 + MAX_REPAIR_ATTEMPTS,
+            "the repair budget is spent, and no further call is made"
+        );
     }
 
     #[test]
@@ -803,14 +832,52 @@ mod tests {
 
     #[test]
     fn an_unlocatable_anchor_surfaces_as_a_rejected_edit() {
-        let (e, _) = engine(&[
-            r#"{"replacements":[{"anchor":{"match":"not in the file"},"replacement":"x"}]}"#,
-        ]);
+        // Both attempts answer the same unusable thing, so the surfaced message is the last
+        // complaint and the repair budget is visibly spent.
+        let bad = r#"{"replacements":[{"anchor":{"match":"not in the file"},"replacement":"x"}]}"#;
+        // One attempt plus the full repair budget, all answering the same unusable thing.
+        let (e, scripted) = engine(&[bad, bad, bad]);
         let d = doc(CODE);
         let scope = e.scope_at(&d, 1, None);
         let f = e.generate(&d, Verb::Rewrite, &scope, &[]).unwrap_err();
         assert!(matches!(f, Failure::Edit(_)), "{f:?}");
-        assert!(f.message().contains("does not occur"));
+        assert!(f.message().contains("does not occur"), "{}", f.message());
+        assert!(f.message().contains("repair attempt"), "{}", f.message());
+        assert_eq!(
+            scripted.seen.lock().len(),
+            1 + MAX_REPAIR_ATTEMPTS,
+            "one attempt plus the full repair budget"
+        );
+    }
+
+    #[test]
+    fn an_answer_that_does_not_apply_is_repaired_with_the_reason() {
+        // The shape a real model produced in a soak run: anchored on one statement, it
+        // answered with text that repeats a line further down, which would duplicate it.
+        // Re-prompting with that complaint turns a dead end into a usable edit.
+        let (e, scripted) = engine(&[
+            r#"{"summary":"s","replacements":[{"anchor":{"kind":"statement","match":"two"},"replacement":"TWO\nx\nfour"}]}"#,
+            r#"{"summary":"s","replacements":[{"anchor":{"kind":"statement","match":"two"},"replacement":"TWO"}]}"#,
+        ]);
+        let d = Document::new(
+            "file:///tmp/notes.txt",
+            1,
+            "one\ntwo\nthree\nfour\n".to_string(),
+            Some(""),
+        );
+        let scope = e.scope_at(&d, 1, None);
+        match e.generate(&d, Verb::Rewrite, &scope, &[]).unwrap() {
+            Generated::Edit(p) => assert_eq!(p.ops[0].new_text, "TWO"),
+            other => panic!("expected an edit, got {other:?}"),
+        }
+        let seen = scripted.seen.lock();
+        assert_eq!(seen.len(), 2, "the rejection was retried once");
+        assert!(seen[1].user.contains("YOUR PREVIOUS ANSWER WAS REJECTED"));
+        assert!(
+            seen[1].user.contains("already follow the anchor"),
+            "the model is told what was wrong with its answer: {}",
+            &seen[1].user[seen[1].user.len().saturating_sub(300)..]
+        );
     }
 
     #[test]

@@ -130,8 +130,19 @@ version live at that moment — which is why a plan is still valid after you edi
 
 ## 5. Repair
 
-Implemented in `Engine::with_repair` (`crates/meta-lsp/src/engine.rs`): one model call, plus
-at most `MAX_REPAIR_ATTEMPTS` (= 1) repair calls, only for a contract violation.
+Implemented in `crates/meta-lsp/src/engine.rs`: one model call, plus at most
+`MAX_REPAIR_ATTEMPTS` (= 2) repair calls, for either kind of rejected answer.
+
+Two failures are repaired, sharing one budget:
+
+* the response does not satisfy its contract (not JSON, or missing required fields);
+* the response cannot be applied to this document — an anchor that occurs zero or several
+  times, or a replacement that repeats lines it did not consume, which would duplicate them.
+
+The second kind was specified here and missing from the implementation for most of this
+work. Measured: a real model produced it in a substantial share of soak runs, and a second,
+differently-worded complaint converts a meaningful part of them. Two attempts rather than one
+because a model that answers with the wrong shape tends to answer with it again.
 
 1. Parse the response against the verb's contract.
 2. On failure, re-prompt with the **parser's own complaint** and the rejected answer quoted

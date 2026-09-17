@@ -15,6 +15,7 @@ not for the code they touch.
 | `verify/plan_test.py` | built | 35/35 — the plan loop, server-side apply, revert, staleness, divergence, multi-file creation |
 | `verify/cli_parity.py` | built | 12/12 — the CLI and the LSP produce identical findings and byte-identical edits |
 | `verify/real_model.py` | built | real endpoint, reports rather than asserts; run against DeepSeek through the omp auth gateway |
+| `verify/soak.py` | built | several languages through the whole loop against a real endpoint; last result 8/9 applied, 0 unparseable |
 | `verify/stub_model.py` | built | scripted endpoint; no GPU, no network |
 | `verify/nvim_live.lua` | built | 0 failures, 0 skips — real plugin, real server, real buffer |
 | `verify/goldens/` | **not built** | planned with U6; the anchor-ambiguity rules are covered by `meta-core` unit tests instead |
@@ -105,6 +106,8 @@ suite is the actual regression net; it is run in CI *and* as part of the design 
 | A client answering `workspace/configuration` with `{}` resets unrelated settings | `meta-core` `config::tests::an_empty_payload_changes_nothing` and `the_environment_wins_over_the_client_payload` |
 | A reasoning model exhausting its token budget returns nothing | `meta-core` `model::tests::a_reasoning_model_that_ran_out_of_budget_says_so` — the error must name `finish_reason=length` and the fix |
 | The model echoes the schema instead of filling it | `meta-core` `verbs::tests::the_schema_is_an_example_not_a_template_to_echo`; the schema is a concrete example plus an explicit "never use a field name as a value" rule |
+| A slow-but-valid answer turned into a transport error by a timeout below the token ceiling | `verify/soak.py` — the run that measured 66 s against a 30 s cap |
+| An answer that cannot be applied is never re-prompted | `meta-lsp` `engine::tests::an_answer_that_does_not_apply_is_repaired_with_the_reason` |
 | An answer that re-emits the lines it did not consume duplicates them | `meta-core` `edit::tests::an_answer_that_reshapes_a_block_absorbs_the_re_emitted_lines` and `an_insertion_that_would_duplicate_a_line_that_stays_is_refused` |
 | A file with no detectable language not synced | same probe: `plain`, `data.log`, `f.zzz` must arrive as documents |
 | Gating the verb set on a treesitter parser | golden test with the parser absent: the same verb set is offered and scope falls back to `structural`/`whole_file` |
@@ -197,14 +200,14 @@ Recorded because each was invisible to a scripted model, and each is now pinned 
 
 Recorded because they are deliberate boundaries, not oversights:
 
-- **Inline completion is served but its ghost text is unverified in this harness.** The
-  server side is covered (`verify/inline_test.py`, 14/14) and Neovim is shown to accept the
-  advertised capability and attach its completor (`verify/inline_live.lua`). What cannot be
-  driven headless: Neovim fires **none** of the events the completor listens for —
-  `InsertEnter`, `CursorMovedI` and `TextChangedP` each fire zero times after `startinsert`
-  plus a text change, and neither the automatic path nor `inline_completion.get()` issues a
-  request. The probe that settles it: in an interactive Neovim, enable inline completion,
-  type in a buffer, and confirm ghost text appears and `<Tab>` accepts it.
+- **Inline completion ghost text is verified interactively, not headlessly.** The server side
+  is covered (`verify/inline_test.py`, 14/14). A headless Neovim cannot drive it: it fires
+  **none** of `InsertEnter` / `CursorMovedI` / `TextChangedP`, measured as zero each after
+  `startinsert` plus a text change, so `verify/inline_live.lua` reports a skip for the ghost
+  text itself. Driving a real Neovim in a PTY settles it — the events fire, the client asks
+  (`triggerKind = 2`, at the cursor), the server answers one item, and the ghost text renders
+  while the buffer stays untouched. The probe is the sequence in `inline_live.lua` run in a
+  terminal instead of `--headless`.
 - **`inlineCompletionProvider` is injected rather than declared**, because `lsp-types` 0.94
   (pinned by tower-lsp 0.20) has no field for it — it first appears in 0.95.0. The injection
   is one function at the transport boundary, tested in `crates/meta-lsp/src/advertised.rs`,

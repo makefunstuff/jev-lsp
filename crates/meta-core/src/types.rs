@@ -13,7 +13,7 @@ pub const RESULT_SCHEMA: &str = "meta.result/1";
 ///
 /// Bumped whenever the wording or the schema changes, so a conclusion produced by an older
 /// prompt can never be served as if it came from the current one.
-pub const PROMPT_VERSION: &str = "2";
+pub const PROMPT_VERSION: &str = "3";
 
 /// What a verb does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

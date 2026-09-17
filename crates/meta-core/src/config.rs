@@ -53,8 +53,11 @@ impl Default for TierConfig {
             base_url: "http://127.0.0.1:8080/v1".to_string(),
             model: "qwen2.5-coder-7b-instruct".to_string(),
             api_key_env: None,
-            timeout_ms: 30_000,
-            max_tokens: 4096,
+            // Measured: a reasoning model answering an 8192-token ceiling took over 60 s on a
+            // Rust rewrite, so a 30 s cap turned a slow-but-valid answer into a transport
+            // error. This is a ceiling too — the call returns as soon as the model stops.
+            timeout_ms: 90_000,
+            max_tokens: 8192,
             temperature: 0.0,
             think: Think::Off,
             fim_tokens: None,

@@ -12,7 +12,9 @@ Runs, in order, and asserts at each step (docs/VERIFICATION.md §1):
 
   1. `initialize` -> `initialized`; `positionEncoding == "utf-8"` (N1),
      `codeActionProvider.resolveProvider == true`, `diagnosticProvider.identifier == "meta"`,
-     `executeCommandProvider.workDoneProgress == true` (§2).
+     `executeCommandProvider.workDoneProgress == true`, all seven §6 commands advertised, and
+     `inlineCompletionProvider` advertised (§2, injected at the transport boundary) — with
+     §2's "advertise only what is served" as the rule the set is checked against.
   2. `textDocument/didOpen` for two fixture documents written into a temp dir under the
      workspace (a normal `.py` and a never-touched control `.txt`). A notification carries
      no assertion of its own; the control document exists to make step 9 checkable.
@@ -31,12 +33,13 @@ Runs, in order, and asserts at each step (docs/VERIFICATION.md §1):
      findings, `kind == "full"`, a `resultId`, and `data.finding_id` + `data.verb` on every
      item (§9). An empty report after that refresh is a FAIL — a correct-but-empty pull
      before it is exactly the mistake a real client must not make.
-  9. `workspace/executeCommand` with a `workDoneToken` in the params, on an advertised and
-     served command: a `$/progress` `begin` and an `end` arrive for that token (§3.5), no
-     `$/progress` arrives under a token this client never supplied or created (§3.5), an
-     unadvertised command still answers `{ok: false, error: {code: "not_implemented"}}`
-     (§6), and no `textDocument/publishDiagnostics` arrives for a document the server has
-     not changed (§9).
+  9. `workspace/executeCommand` with a `workDoneToken` in the params, on a served command:
+     a `$/progress` `begin` and an `end` arrive for that token (§3.5), no `$/progress`
+     arrives under a token this client never supplied or created (§3.5), the two failure
+     paths stay distinct — an unserved `meta.nonexistent` answers `not_implemented`, a
+     served `meta.plan` with unusable arguments answers `bad_arguments` (§6.1) — and no
+     `textDocument/publishDiagnostics` arrives for a document the server has not changed
+     (§9).
 
 Two readings the frozen documents leave open, settled here and recorded so a reviewer can
 challenge them:
@@ -51,10 +54,10 @@ challenge them:
     client->server request under that name is not in the specification, and a client that
     invented one would report a defect where there is none.
   * Step 9 command. PROTOCOL §3.5's normal path is a `workDoneToken` inside the
-    `workspace/executeCommand` params, and PROTOCOL §6 (amended 2026-09-18) advertises only
-    the commands that are served, so the progress assertions are driven on `meta.status`
-    when it is advertised (else the first advertised command) rather than on
-    `meta.plan`, which is specified-but-unserved and therefore must *not* be advertised.
+    `workspace/executeCommand` params, and PROTOCOL §6 serves all seven commands, so the
+    progress assertions are driven on `meta.status` when it is advertised (else the first
+    advertised command) — a served command that answers immediately still owes the request
+    its `begin` and `end`.
     docs/VERIFICATION.md §1 words this step as "`meta.cancel` mid-flight"; that is the same
     assertion over a different command — §3.5's token rule, checked as `begin` and `end`
     under the token this request supplied — and the ticket specifies the token form, so the
@@ -1058,19 +1061,19 @@ def run_steps(session, workspace, timeout, report, keep_fixtures=False):
                     % _describe(sorted(server_capabilities.keys()))[:200])
         session.save_include_text = _cap(
             server_capabilities, "textDocumentSync", "save", "includeText") is True
-        # PROTOCOL §2, "advertise only what is served" (+ §6): a client must not be told
-        # about a provider or command that can only fail, and the specified-but-unserved
-        # commands must still answer structurally rather than vanish.
-        served = ("meta.status", "meta.recompute", "meta.explain", "meta.cancel")
-        unserved = ("meta.plan", "meta.apply", "meta.revert")
-        report.check(1, "the served commands are advertised (%s)" % ", ".join(served),
+        # PROTOCOL §2/§6: advertise exactly what is served, and §6's served set is all
+        # seven commands. codeLens/inlayHint remain unasserted either way — the info line
+        # above prints the whole advertised member set, so a client author can see it.
+        served = ("meta.status", "meta.recompute", "meta.explain", "meta.plan", "meta.apply",
+                  "meta.revert", "meta.cancel")
+        report.check(1, "all seven §6 commands are advertised (%s)" % ", ".join(served),
                      all(command in commands for command in served),
                      "missing: %s" % _describe([c for c in served if c not in commands]))
-        report.check(1, "the specified-but-unserved commands are not advertised (%s) (§6)"
-                    % ", ".join(unserved),
-                     not any(command in commands for command in unserved),
-                     "advertised anyway: %s"
-                     % _describe([c for c in unserved if c in commands]))
+        inline_completion = _cap(server_capabilities, "inlineCompletionProvider")
+        report.check(1, "inlineCompletionProvider is advertised (§2 — injected at the "
+                        "transport boundary, since the pinned lsp-types cannot express it)",
+                     isinstance(inline_completion, dict),
+                     "got %s" % _describe(inline_completion))
 
         # -- step 2 --------------------------------------------------------
         report.step(2, "textDocument/didOpen fixtures in a temp dir under the workspace")
@@ -1303,21 +1306,34 @@ def run_steps(session, workspace, timeout, report, keep_fixtures=False):
                          bool(end_time) and end_time[-1] <= response_at,
                          "end at %s, response at %s"
                          % (end_time[-1] if end_time else None, response_at))
-        # §6: the specified-but-unserved commands are unadvertised yet still answer
-        # structurally instead of vanishing. No workDoneToken here on purpose: a server
-        # that mints one for a request that supplied none is caught just below.
-        refusal, _ = _try_request(
+        # §6/§6.1: a command that is not served — §6.1's words are "asserted against a name
+        # no version serves" — answers structurally instead of vanishing.
+        unserved, _ = _try_request(
             session, report, 9, "workspace/executeCommand",
-            {"command": "meta.plan", "arguments": [{"goal": "make retry cancellable"}]},
-            timeout,
-            label="invoking an unserved command does not return a JSON-RPC error")
-        envelope = refusal if isinstance(refusal, dict) else {}
+            {"command": "meta.nonexistent", "arguments": [{}]}, timeout,
+            label="an unserved command does not return a JSON-RPC error")
+        envelope = unserved if isinstance(unserved, dict) else {}
         error_body = envelope.get("error") if isinstance(envelope.get("error"), dict) else {}
-        report.check(9, "an unserved command answers structurally — meta.plan -> "
-                        "{ok: false, error: {code: \"not_implemented\"}} (§6)",
+        report.check(9, "an unserved command answers structurally — meta.nonexistent -> "
+                        "{ok: false, error: {code: \"not_implemented\"}} (§6.1)",
                      envelope.get("ok") is False
                      and error_body.get("code") == "not_implemented",
-                     "response=%s" % _describe(refusal)[:160])
+                     "response=%s" % _describe(unserved)[:160])
+        # §6.1: `bad_arguments` is "arguments are missing or malformed; the message names the
+        # shape it needs" — a different code from not_implemented, so the plugin can tell a
+        # typo in the arguments from a missing feature.
+        bad_args, _ = _try_request(
+            session, report, 9, "workspace/executeCommand",
+            {"command": "meta.plan", "arguments": []}, timeout,
+            label="a served command with unusable arguments does not return a JSON-RPC error")
+        envelope = bad_args if isinstance(bad_args, dict) else {}
+        error_body = envelope.get("error") if isinstance(envelope.get("error"), dict) else {}
+        report.check(9, "a served command with unusable arguments answers bad_arguments, "
+                        "not not_implemented — meta.plan with [] (§6.1)",
+                     envelope.get("ok") is False
+                     and error_body.get("code") == "bad_arguments"
+                     and bool(error_body.get("message")),
+                     "response=%s" % _describe(bad_args)[:160])
         unowned = session.unowned_progress()
         report.check(9, "no $/progress under a token this client never supplied or created "
                         "(§3.5)", not unowned, "unowned tokens: %s" % _describe(unowned))
@@ -1375,6 +1391,9 @@ class StubServer(threading.Thread):
                  second one first — a client that matched responses by arrival order
                  instead of by id would fail
     """
+
+    SERVED_COMMANDS = ("meta.status", "meta.recompute", "meta.explain", "meta.plan",
+                       "meta.apply", "meta.revert", "meta.cancel")
 
     def __init__(self, rfile, wfile, mode="actions", defect=None, superseded=False):
         threading.Thread.__init__(self, name="stub-server", daemon=True)
@@ -1561,40 +1580,50 @@ class StubServer(threading.Thread):
                 "items": items,
             })
         elif method == "workspace/executeCommand":
+            command = params.get("command")
+            arguments = params.get("arguments") or []
             token = params.get("workDoneToken")
-            if token is None:
-                pass                                   # no token supplied: no progress due
-            elif self.defect == "token_in_arguments":
-                # The §3.5 defect the frozen contract calls out: a token smuggled through
-                # `arguments` instead of the request's workDoneToken field.
-                smuggled = next((item.get("token")
-                                 for item in (params.get("arguments") or [])
-                                 if isinstance(item, dict) and item.get("token")),
-                                "meta:smuggled")
-                self._progress(smuggled, "begin")
-                self._progress(smuggled, "end")
-            elif self.defect == "unowned_progress":
-                self._progress("meta:never-supplied", "begin")
-                self._progress("meta:never-supplied", "end")
-            elif self.defect == "no_progress_end":
-                self._progress(token, "begin", title="stub", percentage=0)
-                self._progress(token, "report", message="halfway", percentage=50)
-            else:
-                self._progress(token, "begin", title="stub", percentage=0)
-                self._progress(token, "report", message="halfway", percentage=50)
-                self._progress(token, "end", message="done")
-            if params.get("command") in ("meta.status", "meta.recompute", "meta.explain",
-                                         "meta.cancel"):
-                self._respond(msg_id, {"schema": "meta.result/1", "ok": True, "artifacts": [],
-                                       "diagnostics": [], "edit_ids": []})
-            else:
-                # §6: specified-but-unserved commands answer structurally, not silently.
+            if command not in self.SERVED_COMMANDS:
+                # §6: not served — an unknown name, or one a future version adds before it
+                # is implemented — answers structurally, not silently.
                 self._respond(msg_id, {
                     "schema": "meta.result/1", "ok": False, "artifacts": [],
                     "diagnostics": [], "edit_ids": [],
                     "error": {"code": "not_implemented",
-                              "message": "%s is not implemented in this version"
-                                         % params.get("command")}})
+                              "message": "%s is not implemented in this version" % command}})
+            elif command == "meta.plan" and not any(
+                    isinstance(argument, dict) and argument.get("goal")
+                    for argument in arguments):
+                # §6: served, but these arguments are unusable — a different code, so a
+                # caller can tell a typo from a missing feature.
+                self._respond(msg_id, {
+                    "schema": "meta.result/1", "ok": False, "artifacts": [],
+                    "diagnostics": [], "edit_ids": [],
+                    "error": {"code": "bad_arguments",
+                              "message": "meta.plan needs {goal, scope}"}})
+            else:
+                if token is None:
+                    pass                               # no token supplied: no progress due
+                elif self.defect == "token_in_arguments":
+                    # The §3.5 defect the frozen contract calls out: a token smuggled
+                    # through `arguments` instead of the request's workDoneToken field.
+                    smuggled = next((item.get("token") for item in arguments
+                                     if isinstance(item, dict) and item.get("token")),
+                                    "meta:smuggled")
+                    self._progress(smuggled, "begin")
+                    self._progress(smuggled, "end")
+                elif self.defect == "unowned_progress":
+                    self._progress("meta:never-supplied", "begin")
+                    self._progress("meta:never-supplied", "end")
+                elif self.defect == "no_progress_end":
+                    self._progress(token, "begin", title="stub", percentage=0)
+                    self._progress(token, "report", message="halfway", percentage=50)
+                else:
+                    self._progress(token, "begin", title="stub", percentage=0)
+                    self._progress(token, "report", message="halfway", percentage=50)
+                    self._progress(token, "end", message="done")
+                self._respond(msg_id, {"schema": "meta.result/1", "ok": True, "artifacts": [],
+                                       "diagnostics": [], "edit_ids": []})
         elif method == "shutdown":
             self._respond(msg_id, None)
         elif method == "stub/echo":
@@ -1676,9 +1705,11 @@ class StubServer(threading.Thread):
             },
             "diagnosticProvider": {"identifier": "meta", "interFileDependencies": False,
                                    "workspaceDiagnostics": True},
-            "executeCommandProvider": {"commands": ["meta.status", "meta.recompute",
-                                                    "meta.explain", "meta.cancel"],
-                                       "workDoneProgress": True},
+            "inlineCompletionProvider": {},
+            "executeCommandProvider": {
+                "commands": ["meta.status", "meta.recompute", "meta.explain", "meta.plan",
+                             "meta.apply", "meta.revert", "meta.cancel"],
+                "workDoneProgress": True},
         }, "serverInfo": {"name": "verify-stub", "version": "0"}}
 
     def _action(self, uri, version):

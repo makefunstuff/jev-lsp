@@ -97,6 +97,17 @@ end
 --- The client config, for `vim.lsp.config('meta', …)`. Fresh on every call; mutation of the
 --- result is therefore safe.
 --- @return vim.lsp.Config
+--- The `meta` section from whatever shape the caller passed.
+---
+--- `{ inline_completion = … }` and `{ meta = { inline_completion = … } }` both mean the same
+--- thing here; anything else would be a silent no-op.
+local function section(settings)
+  if type(settings) ~= 'table' then
+    return {}
+  end
+  return settings.meta or settings
+end
+
 function M.configure()
   local opts = M.opts
   return {
@@ -106,7 +117,12 @@ function M.configure()
     get_language_id = M.get_language_id,
     -- Only the kill switch lives here: PROTOCOL §10 supplies the rest, and the server holds
     -- its own defaults, so there is exactly one place that owns each default.
-    settings = vim.tbl_deep_extend('force', { meta = { enabled = true } }, opts.settings or {}),
+    --
+    -- The section the server reads is `meta`, and Neovim looks that up by name, so what the
+    -- caller passes has to end up under it. `setup({ settings = { inline_completion = … } })`
+    -- is the shape the config schema (PROTOCOL §10) invites, so it is accepted directly
+    -- rather than silently dropped because the `meta` wrapper was missing.
+    settings = { meta = vim.tbl_deep_extend('force', { enabled = true }, section(opts.settings)) },
     handlers = opts.handlers,
   }
 end

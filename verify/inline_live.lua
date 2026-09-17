@@ -94,7 +94,8 @@ if #marks > 0 then
   local virt = marks[1][4] and marks[1][4].virt_text
   check(virt ~= nil and virt[1][1] ~= '', ('ghost text is the model text: %q'):format(virt and virt[1][1] or ''))
 else
-  skip('ghost text needs an interactive session: headless fires no insert-mode events')
+  skip('ghost text needs an interactive session: headless fires no insert-mode events. '
+    .. 'Verified in a real PTY — see docs/VERIFICATION.md §9')
 end
 
 check(

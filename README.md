@@ -116,6 +116,7 @@ at a local llama.cpp OpenAI-compatible server, or set `api_key_env` for a remote
 | `python3 verify/inline_test.py` | 14/14 — the capability, the handler, and every gate |
 | `nvim --headless -l verify/inline_live.lua` | 0 failures (ghost text itself needs an interactive session) |
 | `python3 verify/real_model.py` | 6/6 against **DeepSeek** — 1 finding, an edit, and a file that still parses, every run |
+| `python3 verify/soak.py` | **8/9** across Python, Rust and TypeScript against DeepSeek; 0 files left unparseable |
 
 The last row is the one that matters: everything else uses a scripted endpoint. Real-model
 latency measured 2.2–3.1 s for the ambient pass and 1.1–5.1 s for `codeAction/resolve`, with
@@ -134,6 +135,11 @@ inline completion (off by default), `$/progress` streaming, and the `meta.status
 commands. Capabilities and commands not yet
 implemented are **not advertised** (PROTOCOL §2).
 
+Measured on a real model: ambient 1.5–7 s, resolve 1.5–31 s, and the menu itself instant.
+One recurring failure remains and is by design: when the model answers with a replacement that
+spans more than the anchor it named, the edit is *refused* rather than applied, because
+applying it would duplicate the lines it did not consume.
+
 Not built: code lens, inlay hints, and treesitter-backed scope. `docs/ROADMAP.md` tracks
 each, and `docs/VERIFICATION.md` §9 records what is served but not yet proven here.
 
@@ -145,6 +151,7 @@ python3 verify/smoke.py                       # 32 end-to-end checks, self-hosti
 python3 verify/queue_test.py                  # the mid-flight-edit race, stalled stub
 # real model (via the omp auth gateway, which resolves the credential server-side)
 python3 verify/real_model.py --base-url http://127.0.0.1:4000/v1 --model deepseek/deepseek-flash
+python3 verify/soak.py --base-url http://127.0.0.1:4000/v1 --model deepseek/deepseek-flash --rounds 3
 python3 verify/supersede_probe.py             # same contract, independent probe + control
 python3 verify/plan_test.py                   # plan -> server-side apply -> revert
 python3 verify/inline_test.py                 # inline completion and every gate before it
