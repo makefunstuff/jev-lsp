@@ -1068,6 +1068,97 @@ do
   end
 end
 
+-- 11. The parser's scope -------------------------------------------------------------------
+
+-- When a parser can name the enclosing declaration, the request carries it and the server
+-- anchors on that instead of on its own structural guess. Lua is the language to test with
+-- because its parser ships with Neovim; a language without one is not a failure, it just goes
+-- out without a range and the server resolves the scope as it does for the CLI.
+do
+  local lua_bufnr, lua_attached = open_fixture('scope.lua', {
+    'local M = {}',
+    '',
+    'function M.alpha(x)',
+    '  return x + 1',
+    'end',
+    '',
+    'function M.beta(x)',
+    '  return x * 2',
+    'end',
+    '',
+    'return M',
+  })
+  check(lua_attached, 'the plugin attached a client to the scope fixture')
+
+  local client = vim.lsp.get_clients({ bufnr = lua_bufnr, name = 'meta' })[1]
+  if client == nil then
+    skip('the parser scope', 'no client on the scope fixture')
+  else
+    local captured = nil
+    local orig = client.request
+    client.request = function(_, method, params, ...)
+      if method == 'workspace/executeCommand' and params.command == 'meta.explain' then
+        captured = params.arguments
+      end
+      return orig(_, method, params, ...)
+    end
+    vim.api.nvim_set_current_buf(lua_bufnr)
+    vim.api.nvim_win_set_cursor(0, { 8, 2 }) -- inside `beta`
+    require('meta').explain()
+    vim.wait(5000, function()
+      return captured ~= nil
+    end, 25)
+    client.request = orig
+
+    local arg = (captured and captured[1]) or {}
+    check(
+      type(arg.range) == 'table' and arg.range.start_line == 6 and arg.range.end_line == 8,
+      'the request carries the declaration the parser found',
+      vim.inspect(arg.range)
+    )
+    check(arg.line == 7, 'and the cursor position it was asked about', vim.inspect(arg.line))
+
+    -- A language in the table with no parser installed behaves the same as one that is not in
+    -- the table at all: no range, and the server decides. `python` has no parser here.
+    local py_bufnr = open_fixture('scope_python.py', {
+      'def alpha(x):',
+      '    return x + 1',
+    })
+    local py_client = vim.lsp.get_clients({ bufnr = py_bufnr, name = 'meta' })[1]
+    if py_client == nil then
+      skip('the structural fallback', 'no client on the python fixture')
+    else
+      local seen = nil
+      local orig2 = py_client.request
+      py_client.request = function(_, method, params, ...)
+        if method == 'workspace/executeCommand' and params.command == 'meta.explain' then
+          seen = params.arguments
+        end
+        return orig2(_, method, params, ...)
+      end
+      vim.api.nvim_set_current_buf(py_bufnr)
+      vim.api.nvim_win_set_cursor(0, { 2, 4 })
+      require('meta').explain()
+      vim.wait(5000, function()
+        return seen ~= nil
+      end, 25)
+      py_client.request = orig2
+      local py_arg = (seen and seen[1]) or {}
+      check(py_arg.uri ~= nil, 'the request goes out regardless', vim.inspect(py_arg))
+      check(
+        py_arg.range == nil or type(py_arg.range) == 'table',
+        'a missing parser is not an error, it is an absent range',
+        vim.inspect(py_arg.range)
+      )
+    end
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find('meta://', 1, true) then
+        vim.api.nvim_buf_delete(b, { force = true })
+      end
+    end
+  end
+end
+
 -- Report ---------------------------------------------------------------------------------------
 
 -- Lens state first, and a settle before the stop. Neovim's lens provider schedules a

@@ -383,6 +383,25 @@ fn build_workspace_edit(
     }
 }
 
+/// An explicit scope carried in a command's argument, when the client resolved it itself.
+///
+/// `ExecuteCommandParams` has no range of its own, so a client that knows better than the
+/// structural resolver — one with a parser, which is where nesting, strings and comments are
+/// actually understood — says so. The result is an *explicit* scope, and the server reports it
+/// as such (`scope_source`), so where an extent came from is visible rather than hidden.
+fn explicit_scope(arg: &Value) -> Option<meta_core::types::LineRange> {
+    let range = arg.get("range")?;
+    let start_line = range.get("start_line").and_then(|v| v.as_u64())? as u32;
+    let end_line = range.get("end_line").and_then(|v| v.as_u64())? as u32;
+    if end_line < start_line {
+        return None;
+    }
+    Some(meta_core::types::LineRange {
+        start_line,
+        end_line,
+    })
+}
+
 /// One finding as a client receives it in a Result. The same fields the diagnostic carries,
 /// so the two surfaces cannot describe the same finding differently.
 fn finding_json(f: &Finding) -> Value {
@@ -1217,12 +1236,13 @@ impl MetaServer {
                 let Some(arg) = params.arguments.first() else {
                     return result_err("bad_arguments", "meta.explain needs {uri, line}");
                 };
+                let explicit = explicit_scope(arg);
                 let uri = arg.get("uri").and_then(|v| v.as_str()).unwrap_or_default().to_string();
                 let line = arg.get("line").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                 let Some(doc) = self.state.doc(&uri) else {
                     return result_err("unknown_document", "no open document for that uri");
                 };
-                let scope = self.engine.scope_at(&doc, line, None);
+                let scope = self.engine.scope_at(&doc, line, explicit);
                 let (target, scope_for_call) = (doc.clone(), scope.clone());
                 // The answer as it arrives, for the client that asked to see it. The token is
                 // the one the client put in the request (§3.5 path 1), so no create request is
@@ -1332,6 +1352,7 @@ impl MetaServer {
                     return result_err("bad_arguments", "meta.plan needs {goal, scope:{uri, line}}");
                 };
                 let goal = arg.get("goal").and_then(|v| v.as_str()).unwrap_or_default().trim().to_string();
+                let explicit = arg.get("scope").and_then(explicit_scope);
                 let uri = arg
                     .get("scope")
                     .and_then(|s| s.get("uri"))
@@ -1346,7 +1367,7 @@ impl MetaServer {
                 let Some(doc) = self.state.doc(&uri) else {
                     return result_err("unknown_document", "no open document for that uri");
                 };
-                let scope = self.engine.scope_at(&doc, line, None);
+                let scope = self.engine.scope_at(&doc, line, explicit);
                 let (target, scope_for_call) = (doc.clone(), scope.clone());
                 let outcome = self
                     .blocking(move |engine| engine.plan(&target, &scope_for_call, &goal))

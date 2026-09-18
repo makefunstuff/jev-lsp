@@ -94,6 +94,20 @@ In the action `data` and in artifacts, `language` is carried as metadata
 (`PROTOCOL.md` §4, §7) so a user can see what the model was told, and so a bad result can
 be attributed to a bad classification.
 
+### 4.1 Where an extent comes from now
+
+The chain is unchanged on the server: structural, parser-free, always produces something,
+reports its provenance as `scope_source` (N12 and `PROTOCOL.md` §6 name the same idea for
+partial results). What changed is that a *client* with a parser can answer first. The plugin
+sends an explicit `range` for `explain` and `plan` when treesitter can name the enclosing
+declaration, and the server anchors on it and reports `scope_source = "explicit"`. Without a
+parser, without the language in the plugin's table, or without such a declaration, the range is
+simply absent and the server decides — which is the same path the CLI takes, always.
+
+So a client-resolved scope is visible, not hidden: the answer says which side resolved it. The
+listing in `nvim/lua/meta/init.lua` (`TS_SCOPE_NODES`) is deliberately short, and a language
+missing from it is not a failure.
+
 ## 4. Scope resolution — never unavailable
 
 | Strategy | When | Result |

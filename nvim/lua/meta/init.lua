@@ -211,16 +211,88 @@ function M.recompute(cb)
   M.command('meta.recompute', {}, cb)
 end
 
---- The scope argument `meta.plan`, `meta.review`, `meta.explain` take (PROTOCOL §6): where the
---- request is anchored. The server resolves the real scope itself (PROTOCOL N5) — this says
---- which file the user was in and which line the cursor was on.
---- @return { uri: string, line: integer }
-local function cursor_scope()
-  return {
-    uri = vim.uri_from_bufnr(vim.api.nvim_get_current_buf()),
-    line = vim.api.nvim_win_get_cursor(0)[1] - 1,
-  }
+--- Node types that are a scope, per parser language.
+---
+--- Deliberately short. A language that is not listed is not a failure: the request goes out
+--- without a range and the server resolves the scope with the same structural rules the CLI
+--- uses, and the answer says which one produced the extent (`scope_source`). A parser is
+--- simply a better answer to the same question when one is available, because it knows about
+--- nesting, strings and comments and the structural resolver has to guess.
+local TS_SCOPE_NODES = {
+  bash = { 'function_definition' },
+  c = { 'function_definition' },
+  cpp = { 'function_definition', 'class_specifier' },
+  go = { 'function_declaration', 'method_declaration' },
+  javascript = { 'function_declaration', 'method_definition', 'class_declaration' },
+  lua = { 'function_declaration', 'function_definition' },
+  python = { 'function_definition', 'class_definition', 'decorated_definition' },
+  rust = { 'function_item', 'impl_item', 'struct_item', 'enum_item', 'trait_item', 'mod_item' },
+  typescript = { 'function_declaration', 'method_definition', 'class_declaration' },
+}
+
+--- The enclosing declaration according to the parser, when there is a parser.
+---
+--- `nil` is a normal answer — no parser installed, no language in the table, no such
+--- declaration — and the server then decides, exactly as it does for the CLI.
+--- @return { start_line: integer, end_line: integer }?
+local function treesitter_scope(bufnr, line)
+  local ok, range = pcall(function()
+    local lang = vim.treesitter.language.get_lang(vim.bo[bufnr].filetype)
+    local types = lang and TS_SCOPE_NODES[lang]
+    if not types then
+      return nil
+    end
+    local wanted = {}
+    for _, t in ipairs(types) do
+      wanted[t] = true
+    end
+    -- The parser is obtained explicitly rather than via `get_node`, which answers nil unless a
+    -- parser is already attached — and an error here is the answer "no parser installed",
+    -- which the caller turns into "let the server decide".
+    local parser = vim.treesitter.get_parser(bufnr, lang)
+    local root = parser:parse()[1]:root()
+    local node = root:named_descendant_for_range(line, 0, line, 0)
+    local found = nil
+    while node do
+      if wanted[node:type()] then
+        found = node
+      end
+      node = node:parent()
+    end
+    if not found then
+      return nil
+    end
+    local start_line, _, end_line = found:range()
+    if start_line > line or end_line < line then
+      return nil
+    end
+    return { start_line = start_line, end_line = end_line }
+  end)
+  if not ok or type(range) ~= 'table' then
+    return nil
+  end
+  return range
 end
+
+--- The scope argument `meta.plan`, `meta.explain` and friends take (PROTOCOL §6): where the
+--- request is anchored.
+---
+--- The range is the one thing this adds beyond file and line: when a parser can name the
+--- enclosing declaration, the request carries it, and the server anchors on that instead of
+--- on its own structural guess. Without one the server resolves the scope itself, which is
+--- the same path the CLI takes (PROTOCOL N5, `LANGUAGE.md` §4).
+--- @return { uri: string, line: integer, range: table? }
+local function cursor_scope()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local line = vim.api.nvim_win_get_cursor(0)[1] - 1
+  local scope = { uri = vim.uri_from_bufnr(bufnr), line = line }
+  local range = treesitter_scope(bufnr, line)
+  if range ~= nil then
+    scope.range = range
+  end
+  return scope
+end
+
 
 --- `:Meta explain` — the cursor's file and line.
 ---
@@ -268,17 +340,6 @@ function M.open_artifact(artifact, bufnr)
   if vim.api.nvim_get_current_buf() ~= bufnr then
     vim.cmd('sbuffer ' .. bufnr)
   end
-end
-
---- The scope argument `meta.plan`, `meta.review` and friends take (PROTOCOL §6): where the
---- request is anchored. The server resolves the scope itself (PROTOCOL N5) — this only says
---- which file and which line the user was on.
---- @return { uri: string, line: integer }
-local function cursor_scope()
-  return {
-    uri = vim.uri_from_bufnr(vim.api.nvim_get_current_buf()),
-    line = vim.api.nvim_win_get_cursor(0)[1] - 1,
-  }
 end
 
 --- `:Meta plan [goal]` — `docs/UX.md` §1: free text enters here and nowhere else, because the
