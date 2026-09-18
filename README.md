@@ -65,6 +65,9 @@ verified against 0.12.5).
 ```sh
 cargo build --release
 
+# try it by hand: see test/visual/README.md for what to press and what to expect
+nvim -u test/visual/init.lua
+
 # 1. the plugin: it owns the universal attach pass, the language hook and :Meta
 ln -s /path/to/meta-lsp/nvim ~/.local/share/nvim/site/pack/meta/start/meta
 
@@ -146,6 +149,9 @@ each, and `docs/VERIFICATION.md` §9 records what is served but not yet proven h
 
 ```sh
 cargo build --release
+
+# try it by hand: see test/visual/README.md for what to press and what to expect
+nvim -u test/visual/init.lua
 
 # no GPU, no network: a scripted endpoint stands in for the model
 python3 verify/smoke.py                       # 32 end-to-end checks, self-hosting its stub

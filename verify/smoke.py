@@ -84,6 +84,9 @@ class Lsp:
         self.next_id = 0
         self.docs = {}
         self.settings = None
+        # Seconds to stall before answering workspace/configuration. A test that wants to
+        # reproduce a save landing before the client's settings arrive sets this.
+        self.config_delay = 0
         self.pending = {}
         self.notifications = []
         self.requests_from_server = []
@@ -141,6 +144,8 @@ class Lsp:
     def _answer(self, msg):
         method = msg["method"]
         if method == "workspace/configuration":
+            if self.config_delay:
+                time.sleep(self.config_delay)
             section = self.settings if getattr(self, "settings", None) is not None else {}
             result = [section for _ in msg.get("params", {}).get("items", [])]
         elif method == "workspace/applyEdit":

@@ -7,6 +7,7 @@ use meta_core::document::Document;
 use meta_core::model::Backend;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// One document's analysis slot. At most one run per document at a time, and a request
@@ -54,6 +55,14 @@ pub struct AppState {
     pub cache: Cache,
     pub budget: Budget,
     config: RwLock<Config>,
+    /// Set once the client's `meta` section has been read.
+    ///
+    /// A buffer saved during startup can be analysed before the first
+    /// `workspace/configuration` round trip finishes, and the analysis would then run against
+    /// the built-in defaults — a client that configured an endpoint and watched the server
+    /// call somewhere else. Model work waits for this instead of being dropped.
+    config_ready: AtomicBool,
+    config_notify: tokio::sync::Notify,
     pub backend: Arc<dyn Backend>,
     root: RwLock<Option<String>>,
 }
@@ -71,6 +80,8 @@ impl AppState {
             cache: Cache::new(512),
             budget: Budget::new(2),
             config: RwLock::new(config),
+            config_ready: AtomicBool::new(false),
+            config_notify: tokio::sync::Notify::new(),
             backend,
             root: RwLock::new(None),
         })
@@ -83,11 +94,33 @@ impl AppState {
     /// Apply a `workspace/configuration` payload over the current settings. The
     /// environment is re-applied afterwards, so a client with no opinion about model
     /// endpoints cannot undo what the shell set.
-    pub fn merge_config(&self, value: Option<&serde_json::Value>) {
+    /// Returns the parse error when the payload could not be applied, so the caller can say
+    /// so rather than leaving the server quietly on its defaults.
+    pub fn merge_config(&self, value: Option<&serde_json::Value>) -> Option<String> {
         let current = self.config.read().clone();
-        let mut next = current.merged_with(value);
+        let mut next = match current.try_merged_with(value) {
+            Ok(next) => next,
+            Err(e) => return Some(e),
+        };
         next.apply_env_overrides();
         *self.config.write() = next;
+        self.config_ready.store(true, Ordering::Release);
+        self.config_notify.notify_waiters();
+        None
+    }
+
+    /// True once the client's settings have been read at least once.
+    pub fn config_is_ready(&self) -> bool {
+        self.config_ready.load(Ordering::Acquire)
+    }
+
+    /// Wait for the first configuration read, so model work is not started against defaults.
+    /// Bounded: a client that never answers must not stall the server forever.
+    pub async fn await_config(&self, limit: std::time::Duration) {
+        if self.config_is_ready() {
+            return;
+        }
+        let _ = tokio::time::timeout(limit, self.config_notify.notified()).await;
     }
 
     pub fn doc(&self, uri: &str) -> Option<Document> {

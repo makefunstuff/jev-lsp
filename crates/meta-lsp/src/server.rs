@@ -99,6 +99,9 @@ impl MetaServer {
         let state = self.state.clone();
         let client = self.client.clone();
         tokio::spawn(async move {
+            // A save that lands during startup must not be analysed against the built-in
+            // defaults: wait for the client's settings, then proceed.
+            state.await_config(std::time::Duration::from_secs(5)).await;
             let mut wait = debounce;
             loop {
                 if let Some(d) = wait.take() {
@@ -688,7 +691,13 @@ impl LanguageServer for MetaServer {
                 .collect(),
         };
 
-        match self.engine.generate(&doc, data.verb, &scope, &in_scope) {
+        let verb = data.verb;
+        // The document is still needed afterwards, to stamp the edit.
+        let target = doc.clone();
+        let outcome = self
+            .blocking(move |engine| engine.generate(&target, verb, &scope, &in_scope))
+            .await;
+        match outcome {
             Ok(Generated::Edit(proposal)) => {
                 let root = self.state.root();
                 action.edit = Some(build_workspace_edit(&doc, &proposal, root.as_deref()));
@@ -898,10 +907,11 @@ impl MetaServer {
             .as_ref()
             .and_then(|c| c.trigger_kind)
             .is_some_and(|k| k == 1);
-        match self
-            .engine
-            .complete(&doc, params.position.line, params.position.character, invoked)
-        {
+        let (line, character) = (params.position.line, params.position.character);
+        let outcome = self
+            .blocking(move |engine| engine.complete(&doc, line, character, invoked))
+            .await;
+        match outcome {
             Ok(text) if !text.is_empty() => Ok(crate::inline::InlineList {
                 items: vec![crate::inline::InlineItem {
                     insert_text: text,
@@ -923,6 +933,26 @@ impl MetaServer {
         }
     }
 
+    /// Run an engine call off the async worker.
+    ///
+    /// The model client is synchronous (one blocking `ureq` implementation, no async in
+    /// `meta-core`), so calling it from an `async fn` blocks a runtime thread for as long as
+    /// the request takes — up to the tier timeout. Inline completion fires on a 200 ms timer
+    /// while the user types, so this is not theoretical: it is how a language server stalls
+    /// every other handler behind one model call.
+    ///
+    /// Every model-calling handler goes through here.
+    async fn blocking<T, F>(&self, work: F) -> Result<T, Failure>
+    where
+        F: FnOnce(Engine) -> Result<T, Failure> + Send + 'static,
+        T: Send + 'static,
+    {
+        let state = self.state.clone();
+        tokio::task::spawn_blocking(move || work(Engine::new(state)))
+            .await
+            .map_err(|e| Failure::Model(format!("the worker task failed: {e}")))?
+    }
+
     /// Read the `meta` section from the client and merge it over the current settings.
     async fn pull_configuration(&self) {
         let items = vec![ConfigurationItem {
@@ -933,7 +963,35 @@ impl MetaServer {
             Ok(values) => {
                 if let Some(first) = values.into_iter().next() {
                     if !first.is_null() {
-                        self.state.merge_config(Some(&first));
+                        if let Some(why) = self.state.merge_config(Some(&first)) {
+                            // Silence here means the client believes it configured the server
+                            // and the server is on its defaults — a whole class of confusing
+                            // behaviour, so it is reported rather than swallowed.
+                            self.client
+                                .log_message(
+                                    MessageType::ERROR,
+                                    format!(
+                                        "meta: the `meta` settings could not be applied ({why}); running on the built-in defaults"
+                                    ),
+                                )
+                                .await;
+                        } else {
+                            // Which endpoints are actually in force. A client that believes it
+                            // configured something while the server runs on its defaults is
+                            // otherwise invisible, and proving that took an afternoon.
+                            let cfg = self.state.config();
+                            self.client
+                                .log_message(
+                                    MessageType::LOG,
+                                    format!(
+                                        "meta: settings applied — reason {} · review {} · inline completion {}",
+                                        cfg.models.reason.base_url,
+                                        cfg.models.review.base_url,
+                                        if cfg.inline_completion.enabled { "on" } else { "off" }
+                                    ),
+                                )
+                                .await;
+                        }
                     }
                 }
             }
@@ -1001,7 +1059,11 @@ impl MetaServer {
                     return result_err("unknown_document", "no open document for that uri");
                 };
                 let scope = self.engine.scope_at(&doc, line, None);
-                match self.engine.generate(&doc, Verb::Explain, &scope, &[]) {
+                let (target, scope_for_call) = (doc.clone(), scope.clone());
+                let outcome = self
+                    .blocking(move |engine| engine.generate(&target, Verb::Explain, &scope_for_call, &[]))
+                    .await;
+                match outcome {
                     Ok(Generated::Artifact(markdown)) => json!({
                         "schema": ARTIFACT_SCHEMA,
                         "kind": "explanation",
@@ -1034,7 +1096,11 @@ impl MetaServer {
                     return result_err("unknown_document", "no open document for that uri");
                 };
                 let scope = self.engine.scope_at(&doc, line, None);
-                match self.engine.plan(&doc, &scope, &goal) {
+                let (target, scope_for_call) = (doc.clone(), scope.clone());
+                let outcome = self
+                    .blocking(move |engine| engine.plan(&target, &scope_for_call, &goal))
+                    .await;
+                match outcome {
                     Ok((plan, rejected)) => {
                         let artifact = self.plan_artifact(&plan, &doc);
                         self.state.put_plan(plan);
@@ -1085,7 +1151,11 @@ impl MetaServer {
                         continue;
                     };
                     let (findings, _) = self.findings_for(&doc);
-                    match self.engine.apply_step(&plan, n, &doc, &findings) {
+                    let (step_plan, target) = (plan.clone(), doc.clone());
+                    let outcome = self
+                        .blocking(move |engine| engine.apply_step(&step_plan, n, &target, &findings))
+                        .await;
+                    match outcome {
                         Ok(proposal) => {
                             let root = self.state.root();
                             let edit = build_workspace_edit(&doc, &proposal, root.as_deref());

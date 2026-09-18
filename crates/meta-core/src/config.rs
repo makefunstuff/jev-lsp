@@ -266,18 +266,25 @@ impl Config {
     /// payload is ignored rather than fatal, because a bad settings table must not take
     /// the editor's language server down.
     pub fn merged_with(&self, value: Option<&serde_json::Value>) -> Config {
+        self.try_merged_with(value).unwrap_or_else(|_| self.clone())
+    }
+
+    /// [`merged_with`](Self::merged_with), but saying why it gave up.
+    ///
+    /// The fallback keeps the previous settings, which is the safe thing to do and also a
+    /// silent one: a payload that fails to parse leaves the server on its defaults while the
+    /// client believes it configured something. Callers that can report the error should use
+    /// this and log it.
+    pub fn try_merged_with(&self, value: Option<&serde_json::Value>) -> Result<Config, String> {
         let Some(patch) = value else {
-            return self.clone();
+            return Ok(self.clone());
         };
         if !patch.is_object() {
-            return self.clone();
+            return Ok(self.clone());
         }
-        let mut base = match serde_json::to_value(self) {
-            Ok(v) => v,
-            Err(_) => return self.clone(),
-        };
+        let mut base = serde_json::to_value(self).map_err(|e| e.to_string())?;
         deep_merge(&mut base, patch);
-        serde_json::from_value(base).unwrap_or_else(|_| self.clone())
+        serde_json::from_value(base).map_err(|e| e.to_string())
     }
 
     pub fn tier(&self, tier: crate::types::Tier) -> &TierConfig {
@@ -376,6 +383,26 @@ mod tests {
         c.models.reason.base_url = "http://kept:1/v1".into();
         assert_eq!(c.merged_with(Some(&serde_json::json!({}))).models.reason.base_url, "http://kept:1/v1");
         assert_eq!(c.merged_with(None).models.reason.base_url, "http://kept:1/v1");
+    }
+
+    #[test]
+    fn the_payload_the_plugin_actually_sends_applies() {
+        // Lifted from a debug trace of Neovim answering workspace/configuration, verbatim.
+        let payload = serde_json::json!({
+            "enabled": true,
+            "inline_completion": { "enabled": true },
+            "models": {
+                "fim": { "base_url": "http://127.0.0.1:37313/v1", "model": "qwen3.6-35b-a3b-iq3xxs", "timeout_ms": 30000 },
+                "reason": { "base_url": "http://127.0.0.1:37313/v1", "model": "qwen3.6-35b-a3b-iq3xxs", "timeout_ms": 120000 },
+                "review": { "base_url": "http://127.0.0.1:37313/v1", "model": "qwen3.6-35b-a3b-iq3xxs", "timeout_ms": 120000 }
+            }
+        });
+        let merged = Config::default().merged_with(Some(&payload));
+        assert_eq!(merged.models.reason.base_url, "http://127.0.0.1:37313/v1");
+        assert_eq!(merged.models.reason.model, "qwen3.6-35b-a3b-iq3xxs");
+        assert_eq!(merged.models.reason.timeout_ms, 120_000);
+        assert_eq!(merged.models.review.base_url, "http://127.0.0.1:37313/v1");
+        assert!(merged.inline_completion.enabled);
     }
 
     #[test]
