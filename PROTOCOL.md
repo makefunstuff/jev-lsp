@@ -151,6 +151,39 @@ worse than no lens. `vim.lsp.codelens.run()` re-requests and then sends the comm
 server, so the plugin wraps `run` and dispatches its own namespace locally; every other
 command passes through untouched `[R14]`.
 
+### 3.4.3 `meta.definitions` — what the client's parser found
+
+The server has no parser, by design (`LANGUAGE.md` §4): its declaration scan is structural, and
+in C, C++, Java and C# — languages that declare a function by *shape* rather than by keyword —
+it finds no functions at all. The client is the side with parsers, so it sends what treesitter
+found:
+
+```jsonc
+// plugin -> server, on attach, on change (debounced), and on save
+{ "command": "meta.definitions",
+  "arguments": [ { "uri": "file:///…/statusline.lua", "version": 7,
+                   "definitions": [ { "start_line": 45, "end_line": 51 },
+                                    { "start_line": 114, "end_line": 128 } ] } ] }
+```
+
+Rules:
+
+- **Version-stamped.** The server uses the set only while it describes the document version the
+  client is editing. A set from an older version is ignored, and the structural scan answers
+  instead — so a missed push costs accuracy and never correctness. A lens pointing at whatever
+  now occupies those lines would be worse than no lens.
+- **It replaces the scan, it does not merge with it.** The client's set has to be a superset of
+  what the scan would have found, which is why the plugin's node table lists type declarations
+  beside functions. Two sources merged per request would be two sources of truth.
+- **Silence means the scan.** A client without a parser for the language sends nothing, and
+  gets exactly the behaviour described in §3.4.1 and §3.4.2.
+- **Not in the session record.** This one is the client telling the server what it already
+  knows, sent on every change; recording it would bury the work the record exists to show.
+
+Measured: on a 249-line Lua file the scan found 12 of 12 after a keyword fix and the parser
+found the same 12; on a C file the scan finds the struct and **no functions**, and the parser's
+set gives all three declarations.
+
 ### 3.4.2 `inlayHint` — the badge, and why it is off
 
 One hint per declaration that has **cached findings**, at the end of the declaration's head
@@ -345,6 +378,7 @@ Ordered, all mandatory, all evaluated before any model call:
 | `meta.recompute` | `{}` | `Result` | yes |
 | `meta.explain` | `{uri, line, range?}` | `Artifact` (§7, `kind: "explanation"`) | yes |
 | `meta.followup` | `{uri, line, question, finding_id?, range?}` | `Artifact` (§7, `kind: "answer"`) | yes |
+| `meta.definitions` | `{uri, version, definitions:[{start_line, end_line}]}` | `Result` with `{stored}` — the client's own parser answering §3.4.3 | no |
 | `meta.session` | `{limit?}` | `Result` with `{entries, count, path}` | no |
 | `meta.cancel` | `{progress_token}` | `Result` | yes |
 | `meta.plan` | `{goal, scope}` | `Artifact` | yes |

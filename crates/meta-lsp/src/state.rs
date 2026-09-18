@@ -34,6 +34,20 @@ pub struct AppliedEdit {
     pub before: String,
 }
 
+/// A declaration the *client* found with its own parser (PROTOCOL §3.4.3).
+///
+/// The client has the parser and this side does not, by design (`LANGUAGE.md` §4). The plugin
+/// sends what treesitter found, version-stamped, and the server uses it in place of its own
+/// structural scan. Definitions whose version no longer matches the document are ignored, so a
+/// stale set means the structural answer rather than a lens pointing at the wrong line.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ClientDefinition {
+    pub start_line: u32,
+    pub end_line: u32,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
 pub struct AppState {
     docs: RwLock<HashMap<String, Document>>,
     /// Per-document generation counter, so a slow analysis cannot publish over a newer one.
@@ -47,6 +61,8 @@ pub struct AppState {
     /// to take the *oldest*: a plan a user is reading should not disappear while a newer one
     /// arrives, and a map's iteration order cannot promise that.
     plans: Mutex<Vec<meta_core::types::Plan>>,
+    /// Declarations the client sent, by uri, with the document version they describe.
+    definitions: Mutex<std::collections::HashMap<String, (i32, Vec<ClientDefinition>)>>,
     /// What each applied edit replaced, for `meta.revert`.
     applied: Mutex<HashMap<String, AppliedEdit>>,
     /// The text each server-applied edit was predicted to produce, checked against what
@@ -77,6 +93,7 @@ impl AppState {
             generations: Mutex::new(HashMap::new()),
             analysis: Mutex::new(HashMap::new()),
             plans: Mutex::new(Vec::new()),
+            definitions: Mutex::new(std::collections::HashMap::new()),
             applied: Mutex::new(HashMap::new()),
             predictions: Mutex::new(HashMap::new()),
             fim: crate::inline::FimLimiter::new(),
@@ -181,6 +198,24 @@ impl AppState {
             plans.remove(0);
         }
         plans.push(plan);
+    }
+
+    /// Record what the client's parser found, for one document version.
+    pub fn put_definitions(&self, uri: &str, version: i32, defs: Vec<ClientDefinition>) {
+        self.definitions
+            .lock()
+            .insert(uri.to_string(), (version, defs));
+    }
+
+    /// The client's declarations, but only for the version it sent them for: an answer about
+    /// a document that has moved on is worse than no answer, because a lens would point at
+    /// whatever now occupies those lines.
+    pub fn definitions(&self, uri: &str, version: i32) -> Option<Vec<ClientDefinition>> {
+        self.definitions
+            .lock()
+            .get(uri)
+            .filter(|(v, _)| *v == version)
+            .map(|(_, d)| d.clone())
     }
 
     pub fn plan(&self, id: &str) -> Option<meta_core::types::Plan> {
@@ -308,6 +343,30 @@ mod tests {
                 files: None,
             },
         }
+    }
+
+    #[test]
+    fn client_definitions_are_used_only_for_the_version_they_describe() {
+        let s = AppState::new(Arc::new(Null), Config::default());
+        let defs = || {
+            vec![ClientDefinition {
+                start_line: 4,
+                end_line: 8,
+                name: Some("f".into()),
+            }]
+        };
+        assert!(s.definitions("file:///a.c", 1).is_none(), "nothing sent, nothing to use");
+
+        s.put_definitions("file:///a.c", 1, defs());
+        assert!(s.definitions("file:///a.c", 1).is_some(), "the version it describes");
+        assert!(
+            s.definitions("file:///a.c", 2).is_none(),
+            "a document that moved on gets the structural scan, not a stale set of lines"
+        );
+
+        s.put_definitions("file:///a.c", 2, defs());
+        assert!(s.definitions("file:///a.c", 2).is_some(), "and the next push replaces it");
+        assert!(s.definitions("file:///b.c", 2).is_none(), "per document, not global");
     }
 
     #[test]

@@ -108,6 +108,15 @@ So a client-resolved scope is visible, not hidden: the answer says which side re
 listing in `nvim/lua/meta/init.lua` (`TS_SCOPE_NODES`) is deliberately short, and a language
 missing from it is not a failure.
 
+The same division now covers *definitions* — the list of declarations a lens or a hint hangs
+on. The server's structural scan declares a function by keyword, which works for Python or Lua
+and finds **nothing** in C, C++, Java or C#, where a function is declared by shape. The plugin
+walks the tree's top level with its parser and sends what it found, version-stamped
+(`PROTOCOL.md` §3.4.3); the server uses that set while it describes the version being edited,
+and its own scan otherwise. The set replaces the scan rather than merging with it, so the node
+table is a superset of what the scan covers — otherwise a lens would disappear instead of
+improve.
+
 ## 4. Scope resolution — never unavailable
 
 | Strategy | When | Result |

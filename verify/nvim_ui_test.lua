@@ -1574,6 +1574,62 @@ do
   end
 end
 
+-- 16. Declarations a keyword list cannot see ------------------------------------------------
+
+-- `pub(crate) fn` is invisible to the structural scan: the token before the keyword is
+-- `pub(crate)`, which is not a modifier, so the declaration has no lens and no hint. The
+-- plugin has a parser and the server does not (`LANGUAGE.md` §4), so what treesitter found is
+-- sent, version-stamped, and the lens is there anyway. Three functions, not two, is the proof
+-- that the client's answer was used rather than the server's guess.
+do
+  -- C because its parser ships with Neovim, and because the structural scan finds **no
+  -- functions** in it: a C function is declared by shape, not by keyword, so the profile lists
+  -- only `struct`/`enum`/`typedef`/`union`. Two functions and a struct is a file where the
+  -- client's answer and the server's guess cannot be confused.
+  local c_bufnr, c_attached = open_fixture('declarations.c', {
+    'struct thing {',
+    '    int a;',
+    '};',
+    '',
+    'static int compute(int a, int b)',
+    '{',
+    '    return a + b;',
+    '}',
+    '',
+    'int main(void)',
+    '{',
+    '    return compute(1, 2);',
+    '}',
+    '',
+  })
+  check(c_attached, 'the plugin attached a client to the c fixture')
+
+  local client = vim.lsp.get_clients({ bufnr = c_bufnr, name = 'meta' })[1]
+  if client == nil then
+    skip('parser-supplied declarations', 'no client on the c fixture')
+  else
+    -- The push happens on attach; the response is asynchronous.
+    vim.wait(2000)
+    local resp = client:request_sync('textDocument/codeLens', {
+      textDocument = { uri = vim.uri_from_bufnr(c_bufnr) },
+    }, 5000, c_bufnr)
+    local lines = {}
+    for _, lens in ipairs((resp and resp.result) or {}) do
+      lines[#lines + 1] = lens.range.start.line + 1
+    end
+    check(
+      #lines == 3,
+      'the functions in a language where no keyword declares one still get lenses',
+      ('lines %s'):format(table.concat(lines, ','))
+    )
+    check(
+      lines[1] == 1 and lines[2] == 5 and lines[3] == 10,
+      'and on the right lines, struct included',
+      ('lines %s'):format(table.concat(lines, ','))
+    )
+  end
+end
+
 -- Report ---------------------------------------------------------------------------------------
 
 -- Lens state first, and a settle before the stop. Neovim's lens provider schedules a

@@ -220,9 +220,21 @@ end
 --- nesting, strings and comments and the structural resolver has to guess.
 local TS_SCOPE_NODES = {
   bash = { 'function_definition' },
-  c = { 'function_definition' },
-  cpp = { 'function_definition', 'class_specifier' },
-  go = { 'function_declaration', 'method_declaration' },
+  -- C and its relatives declare functions by *shape* — a type, a name, parentheses — which a
+  -- keyword list cannot express, so the server's structural scan finds no functions in them at
+  -- all. That is the gap this fills, and the set has to be a superset of what the scan found or
+  -- a lens would disappear rather than improve.
+  c = { 'function_definition', 'struct_specifier', 'enum_specifier', 'union_specifier', 'type_definition' },
+  cpp = {
+    'function_definition',
+    'class_specifier',
+    'struct_specifier',
+    'namespace_definition',
+    'template_declaration',
+  },
+  csharp = { 'method_declaration', 'class_declaration', 'interface_declaration', 'struct_declaration' },
+  go = { 'function_declaration', 'method_declaration', 'type_declaration' },
+  java = { 'method_declaration', 'class_declaration', 'interface_declaration', 'enum_declaration' },
   javascript = { 'function_declaration', 'method_definition', 'class_declaration' },
   lua = { 'function_declaration', 'function_definition' },
   python = { 'function_definition', 'class_definition', 'decorated_definition' },
@@ -272,6 +284,115 @@ local function treesitter_scope(bufnr, line)
     return nil
   end
   return range
+end
+
+--- The declarations at the left margin, per the parser.
+---
+--- The converse of `treesitter_scope`: that finds the ancestor of a cursor, this walks the top
+--- level. Both exist because the server has no parser by design (`LANGUAGE.md` §4) and this is
+--- the side that has one — so what the parser found is sent, version-stamped, and the server
+--- stops guessing. Only the root's own children count: a declaration nested inside a top-level
+--- block belongs to that block, and a lens per nested function is noise.
+--- @return table?  `{ { start_line, end_line }, … }`, or nil when it cannot answer
+local function treesitter_definitions(bufnr)
+  local ok, defs = pcall(function()
+    local lang = vim.treesitter.language.get_lang(vim.bo[bufnr].filetype)
+    local types = lang and TS_SCOPE_NODES[lang]
+    if not types then
+      return nil
+    end
+    local wanted = {}
+    for _, t in ipairs(types) do
+      wanted[t] = true
+    end
+    local parser = vim.treesitter.get_parser(bufnr, lang)
+    local root = parser:parse()[1]:root()
+    local out = {}
+    local function walk(node, top)
+      for child in node:iter_children() do
+        if top and wanted[child:type()] then
+          local start_line, _, end_line = child:range()
+          out[#out + 1] = { start_line = start_line, end_line = end_line }
+        end
+        walk(child, false)
+      end
+    end
+    walk(root, true)
+    return out
+  end)
+  if not ok or type(defs) ~= 'table' or #defs == 0 then
+    return nil
+  end
+  return defs
+end
+
+--- Tell the server what this buffer's declarations are, for the version it is seeing.
+---
+--- Nothing is sent when the parser cannot answer: `nil` means the server keeps its own
+--- structural scan, which is what a client without a parser gets. A definition set the server
+--- cannot match to the current version is ignored there, so a missed push costs accuracy and
+--- never correctness.
+local function push_definitions(bufnr)
+  local client = client()
+  if client == nil or not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+  local defs = treesitter_definitions(bufnr)
+  if defs == nil then
+    return
+  end
+  local version = vim.lsp.util.buf_versions[bufnr]
+  if type(version) ~= 'number' then
+    return
+  end
+  client:request('workspace/executeCommand', {
+    command = 'meta.definitions',
+    arguments = {
+      { uri = vim.uri_from_bufnr(bufnr), version = version, definitions = defs },
+    },
+  }, function() end, bufnr)
+end
+
+--- Keep the server's view of a buffer's declarations current, without a request per keystroke.
+---
+--- The parse is incremental and only the top level is read, so a change is cheap to answer;
+--- what a change is *not* is worth a round trip each time. A short debounce keeps the lenses
+--- where the declarations are while typing, and the version stamp makes a missed one harmless.
+local push_timers = {} -- bufnr -> uv_timer_t
+
+local function schedule_push(bufnr)
+  if push_timers[bufnr] ~= nil then
+    push_timers[bufnr]:stop()
+  else
+    push_timers[bufnr] = vim.uv.new_timer()
+  end
+  local timer = push_timers[bufnr]
+  timer:start(300, 0, vim.schedule_wrap(function()
+    push_definitions(bufnr)
+  end))
+end
+
+--- Install the declaration push: on attach, on a change, and on a save.
+function M.install_definitions()
+  vim.api.nvim_create_autocmd('LspAttach', {
+    callback = function(ev)
+      local c = vim.lsp.get_client_by_id(ev.data.client_id)
+      if c ~= nil and c.name == M.name then
+        -- Deferred, not immediate: `LspAttach` fires on `BufReadPost`, before `FileType`, so at
+        -- this moment the language is not known yet and a parser cannot be chosen. That cost an
+        -- afternoon of wondering why the definitions never arrived.
+        schedule_push(ev.buf)
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd({ 'TextChanged', 'InsertLeave', 'BufWritePost', 'FileType' }, {
+    group = vim.api.nvim_create_augroup('meta.definitions', { clear = true }),
+    callback = function(ev)
+      if #vim.lsp.get_clients({ bufnr = ev.buf, name = M.name }) > 0 then
+        schedule_push(ev.buf)
+      end
+    end,
+  })
 end
 
 --- The scope argument `meta.plan`, `meta.explain` and friends take (PROTOCOL §6): where the
@@ -1304,6 +1425,7 @@ function M.setup(opts)
   attach.start()
 
   M.install_lenses()
+  M.install_definitions()
   M.install_progress_tracker()
   M.install_snapshot_hook()
   -- The picker's own surfaces: the attempt at the `window/showMessage` dedupe (PROTOCOL §4 —

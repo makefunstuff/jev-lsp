@@ -195,6 +195,31 @@ impl MetaServer {
         });
     }
 
+    /// The declarations to hang a lens or a hint on.
+    ///
+    /// The client's, when it sent them for this exact version — it has the parser and this side
+    /// does not (`LANGUAGE.md` §4). Otherwise this side's structural scan, so a client with no
+    /// parser is served exactly as before.
+    fn scopes_of(&self, doc: &meta_core::Document, cfg: &meta_core::config::Config) -> Vec<Span> {
+        if let Some(defs) = self.state.definitions(&doc.uri, doc.version) {
+            return defs
+                .into_iter()
+                .map(|d| Span {
+                    start_line: d.start_line,
+                    end_line: d.end_line,
+                })
+                .collect();
+        }
+        let profile = meta_core::lang::profile(&doc.language.name);
+        meta_core::scope::blocks(&doc.text, &profile, cfg.languages.max_scope_lines)
+            .into_iter()
+            .map(|b| Span {
+                start_line: b.range.start_line,
+                end_line: b.range.end_line,
+            })
+            .collect()
+    }
+
     /// The checks every read-only surface shares: the server is on, and this is a document the
     /// analysis would accept. A surface that offers what the analysis would then refuse is
     /// worse than one that offers nothing.
@@ -297,6 +322,7 @@ const COMMANDS: &[&str] = &[
     "meta.review",
     "meta.explain",
     "meta.followup",
+    "meta.definitions",
     "meta.session",
     "meta.plan",
     "meta.apply",
@@ -438,6 +464,12 @@ fn build_workspace_edit(
         document_changes: Some(DocumentChanges::Operations(operations)),
         change_annotations: None,
     }
+}
+
+/// A declaration's extent, whichever side found it: the client's parser or this side's scan.
+struct Span {
+    start_line: u32,
+    end_line: u32,
 }
 
 /// A value from the first argument, or from `scope` inside it.
@@ -975,26 +1007,26 @@ impl LanguageServer for MetaServer {
             return Ok(None);
         }
 
-        let profile = meta_core::lang::profile(&doc.language.name);
         let first = params.range.start.line;
         let last = params.range.end.line;
         let lines: Vec<&str> = doc.text.lines().collect();
-        let hints = meta_core::scope::blocks(&doc.text, &profile, cfg.languages.max_scope_lines)
+        let hints = self
+            .scopes_of(&doc, &cfg)
             .into_iter()
-            .filter(|block| block.range.start_line >= first && block.range.start_line <= last)
+            .filter(|block| block.start_line >= first && block.start_line <= last)
             .filter_map(|block| {
                 let here: Vec<&Finding> = findings
                     .iter()
-                    .filter(|f| f.line >= block.range.start_line && f.line <= block.range.end_line)
+                    .filter(|f| f.line >= block.start_line && f.line <= block.end_line)
                     .collect();
                 if here.is_empty() {
                     return None;
                 }
                 // Byte offset, because this server speaks utf-8 (N1).
-                let head = lines.get(block.range.start_line as usize)?;
+                let head = lines.get(block.start_line as usize)?;
                 Some(InlayHint {
                     position: Position {
-                        line: block.range.start_line,
+                        line: block.start_line,
                         character: head.len() as u32,
                     },
                     label: InlayHintLabel::String(format!(
@@ -1031,15 +1063,15 @@ impl LanguageServer for MetaServer {
             return Ok(None);
         };
 
-        let profile = meta_core::lang::profile(&doc.language.name);
         let (findings, _) = self.findings_for(&doc);
-        let lenses = meta_core::scope::blocks(&doc.text, &profile, cfg.languages.max_scope_lines)
+        let lenses = self
+            .scopes_of(&doc, &cfg)
             .into_iter()
             .map(|block| {
-                let line = block.range.start_line;
+                let line = block.start_line;
                 let in_scope = findings
                     .iter()
-                    .filter(|f| f.line >= block.range.start_line && f.line <= block.range.end_line)
+                    .filter(|f| f.line >= block.start_line && f.line <= block.end_line)
                     .count();
                 let (title, command) = if in_scope > 0 {
                     (
@@ -1099,6 +1131,11 @@ impl LanguageServer for MetaServer {
         // One line per command, written where every command passes so none can be missed. The
         // record is never read back to decide anything (N9); a read-only checkout that cannot
         // be written to is not a reason to fail a request over a convenience.
+        //
+        // `meta.definitions` is left out on purpose: it is the client telling the server what
+        // it already knows, sent on every change, and recording it would bury the work the
+        // record exists to show.
+        if command != "meta.definitions" {
         if let Some(root) = self.state.root() {
             let _ = crate::trace::append(
                 &root,
@@ -1125,6 +1162,7 @@ impl LanguageServer for MetaServer {
                     "line": anchored(&params.arguments, "line"),
                 }),
             );
+        }
         }
 
         if let Some(t) = &token {
@@ -1506,6 +1544,23 @@ impl MetaServer {
                     })),
                     Err(f) => result_err(f.code(), &f.message()),
                 }
+            }
+            "meta.definitions" => {
+                let Some(arg) = params.arguments.first() else {
+                    return result_err(
+                        "bad_arguments",
+                        "meta.definitions needs {uri, version, definitions:[{start_line, end_line}]}",
+                    );
+                };
+                let uri = arg.get("uri").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                let version = arg.get("version").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+                let defs: Vec<crate::state::ClientDefinition> = arg
+                    .get("definitions")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or_default();
+                let stored = defs.len();
+                self.state.put_definitions(&uri, version, defs);
+                result_ok(json!({ "stored": stored, "uri": uri, "version": version }))
             }
             "meta.session" => {
                 let limit = params
