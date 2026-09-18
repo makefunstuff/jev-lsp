@@ -1106,7 +1106,13 @@ impl LanguageServer for MetaServer {
                 &json!({
                     "kind": "command",
                     "command": command,
-                    "ok": value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
+                    // An artifact result carries no `ok` at all — it is the artifact — so
+                    // "not an error" is the honest reading, and only a Result envelope's own
+                    // `ok` overrides it.
+                    "ok": value
+                        .get("ok")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or_else(|| value.get("error").is_none()),
                     "error": value
                         .get("error")
                         .and_then(|e| e.get("code"))

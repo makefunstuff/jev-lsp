@@ -43,7 +43,10 @@ pub struct AppState {
     analysis: Mutex<HashMap<String, AnalysisSlot>>,
     /// Plans the user is looking at. Session state, deliberately not persisted: a plan is a
     /// continuation handle, not a source of truth (PROTOCOL.md N9).
-    plans: Mutex<HashMap<String, meta_core::types::Plan>>,
+    /// Plans, oldest first. A `Vec` rather than a map because the bound is 32 and eviction has
+    /// to take the *oldest*: a plan a user is reading should not disappear while a newer one
+    /// arrives, and a map's iteration order cannot promise that.
+    plans: Mutex<Vec<meta_core::types::Plan>>,
     /// What each applied edit replaced, for `meta.revert`.
     applied: Mutex<HashMap<String, AppliedEdit>>,
     /// The text each server-applied edit was predicted to produce, checked against what
@@ -73,7 +76,7 @@ impl AppState {
             docs: RwLock::new(HashMap::new()),
             generations: Mutex::new(HashMap::new()),
             analysis: Mutex::new(HashMap::new()),
-            plans: Mutex::new(HashMap::new()),
+            plans: Mutex::new(Vec::new()),
             applied: Mutex::new(HashMap::new()),
             predictions: Mutex::new(HashMap::new()),
             fim: crate::inline::FimLimiter::new(),
@@ -172,21 +175,29 @@ impl AppState {
     /// Remember a plan for the session, keyed by its id.
     pub fn put_plan(&self, plan: meta_core::types::Plan) {
         let mut plans = self.plans.lock();
-        // Keep the map from growing without bound over a long session.
-        if plans.len() >= 32 {
-            if let Some(oldest) = plans.keys().next().cloned() {
-                plans.remove(&oldest);
-            }
+        // Keep the list from growing without bound over a long session, dropping the oldest:
+        // what a user is still reading is the newest.
+        while plans.len() >= 32 {
+            plans.remove(0);
         }
-        plans.insert(plan.id.clone(), plan);
+        plans.push(plan);
     }
 
     pub fn plan(&self, id: &str) -> Option<meta_core::types::Plan> {
-        self.plans.lock().get(id).cloned()
+        self.plans
+            .lock()
+            .iter()
+            .find(|p| p.id == id)
+            .cloned()
     }
 
     pub fn mark_step(&self, plan_id: &str, n: u32, status: meta_core::types::StepStatus) {
-        if let Some(plan) = self.plans.lock().get_mut(plan_id) {
+        if let Some(plan) = self
+            .plans
+            .lock()
+            .iter_mut()
+            .find(|p| p.id == plan_id)
+        {
             if let Some(step) = plan.steps.iter_mut().find(|s| s.n == n) {
                 step.status = status;
             }
@@ -278,6 +289,42 @@ mod tests {
 
     fn state() -> Arc<AppState> {
         AppState::new(Arc::new(Null), Config::default())
+    }
+
+    /// A plan with nothing in it: the store keys, counts and evicts by identity alone.
+    fn plan_with(id: &str) -> meta_core::types::Plan {
+        meta_core::types::Plan {
+            id: id.to_string(),
+            goal: "g".into(),
+            language: "rust".into(),
+            steps: Vec::new(),
+            usage: meta_core::types::Usage {
+                model: "m".into(),
+                tier: "reason".into(),
+                tokens_in: 0,
+                tokens_out: 0,
+                ms: 0,
+                changes: None,
+                files: None,
+            },
+        }
+    }
+
+    #[test]
+    fn the_oldest_plan_is_the_one_evicted() {
+        let s = AppState::new(Arc::new(Null), Config::default());
+        for i in 0..40 {
+            s.put_plan(plan_with(&format!("plan-{i}")));
+        }
+        assert!(
+            s.plan("plan-0").is_none(),
+            "the first plan put in is gone once the bound is reached"
+        );
+        assert!(
+            s.plan("plan-39").is_some(),
+            "and the newest is the one still there"
+        );
+        assert!(s.plan("plan-8").is_some(), "nothing newer than the bound was evicted");
     }
 
     #[test]
