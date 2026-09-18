@@ -136,6 +136,20 @@ impl MetaServer {
                 let superseded = state.generation(&uri) != generation;
                 if let Ok(Some(outcome)) = outcome {
                     if !superseded {
+                        // `outcome` here is what `report` takes: a Result, because a run can
+                        // fail as well as find nothing, and only a completed run is recorded.
+                        if let (Ok(out), Some(root)) = (&outcome, state.root()) {
+                            let _ = crate::trace::append(
+                                &root,
+                                &json!({
+                                    "kind": "analysis",
+                                    "uri": uri,
+                                    "findings": out.findings.len(),
+                                    "discarded": out.rejected,
+                                    "from_cache": out.from_cache,
+                                }),
+                            );
+                        }
                         report(&client, &uri, outcome).await;
                     }
                 }
@@ -281,6 +295,7 @@ const COMMANDS: &[&str] = &[
     "meta.review",
     "meta.explain",
     "meta.followup",
+    "meta.session",
     "meta.plan",
     "meta.apply",
     "meta.revert",
@@ -1050,6 +1065,7 @@ impl LanguageServer for MetaServer {
     ) -> RpcResult<Option<serde_json::Value>> {
         let token = params.work_done_progress_params.work_done_token.clone();
         let command = params.command.clone();
+        let started = std::time::Instant::now();
         if let Some(t) = &token {
             progress(
                 &self.client,
@@ -1065,6 +1081,25 @@ impl LanguageServer for MetaServer {
         }
 
         let value = self.run_command(&params).await;
+
+        // One line per command, written where every command passes so none can be missed. The
+        // record is never read back to decide anything (N9); a read-only checkout that cannot
+        // be written to is not a reason to fail a request over a convenience.
+        if let Some(root) = self.state.root() {
+            let _ = crate::trace::append(
+                &root,
+                &json!({
+                    "kind": "command",
+                    "command": command,
+                    "ok": value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
+                    "error": value
+                        .get("error")
+                        .and_then(|e| e.get("code"))
+                        .and_then(|v| v.as_str()),
+                    "ms": started.elapsed().as_millis() as u64,
+                }),
+            );
+        }
 
         if let Some(t) = &token {
             progress(
@@ -1445,6 +1480,28 @@ impl MetaServer {
                     })),
                     Err(f) => result_err(f.code(), &f.message()),
                 }
+            }
+            "meta.session" => {
+                let limit = params
+                    .arguments
+                    .first()
+                    .and_then(|a| a.get("limit"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(50) as usize;
+                let root = self.state.root();
+                let entries = root
+                    .as_deref()
+                    .map(|r| crate::trace::tail(r, limit))
+                    .unwrap_or_default();
+                result_ok(json!({
+                    "entries": entries,
+                    "count": entries.len(),
+                    // Where the record is, so a user can read it directly and the plugin can
+                    // tell "nothing happened yet" from "everything happened elsewhere".
+                    "path": root
+                        .as_deref()
+                        .map(|r| crate::trace::path_for(r).to_string_lossy().to_string()),
+                }))
             }
             "meta.followup" => {
                 let Some(arg) = params.arguments.first() else {

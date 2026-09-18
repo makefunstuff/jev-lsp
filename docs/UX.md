@@ -59,7 +59,10 @@ complete answer, the first 3 of which are prefill and reasoning.
 <leader>mu   undo the last applied edit
 ```
 
-Commands: `:Meta plan|explain|review|status|stop|start|undo|dismiss|log|recompute`.
+Commands: `:Meta plan|explain|followup|review|session|hints|status|stop|start|undo|dismiss|log|recompute`.
+
+`:Meta session` opens what this server has done at this root — every command and every
+analysis, newest first, with a pointer to the log itself (`<root>/.git/meta/session.jsonl`).
 
 `stop` is the kill switch from PROTOCOL §5 and must be reachable in one mapping without
 opening anything.

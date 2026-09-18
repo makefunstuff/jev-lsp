@@ -9,6 +9,7 @@ mod engine;
 mod inline;
 mod server;
 mod state;
+mod trace;
 
 use meta_core::config::Config;
 use meta_core::model::OpenAiCompat;

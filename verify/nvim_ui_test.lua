@@ -1360,6 +1360,80 @@ do
   end
 end
 
+-- 14. The session record ---------------------------------------------------------------------
+
+-- An append-only log the user can read back, written where dismissals are written — under the
+-- repository root's `.git/`, so it survives a restart and never shows up in `git status`. It is
+-- a record, not memory: nothing consults it to decide anything.
+do
+  local session_dir = root .. '/.git/meta'
+  require('meta').session()
+  local opened = vim.wait(10000, function()
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_valid(b)
+        and vim.api.nvim_buf_get_name(b):find('meta://session/', 1, true)
+      then
+        return true
+      end
+    end
+    return false
+  end, 50)
+  check(opened, 'the session opens in a buffer')
+
+  local text = ''
+  for _, b in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(b)
+      and vim.api.nvim_buf_get_name(b):find('meta://session/', 1, true)
+    then
+      text = table.concat(vim.api.nvim_buf_get_lines(b, 0, -1, false), '\n')
+    end
+  end
+  check(
+    text:find('- `', 1, true) ~= nil or text:find('nothing recorded', 1, true) ~= nil,
+    'and shows the commands this session ran',
+    text:sub(1, 120):gsub('\n', ' ')
+  )
+  check(
+    text:find('session.jsonl', 1, true) ~= nil,
+    'and says where the record is kept',
+    text:sub(-120):gsub('\n', ' ')
+  )
+
+  -- The count the server reports and the lines the buffer shows are two views of one record.
+  local reported = nil
+  require('meta').command('meta.session', { { limit = 200 } }, function(_, r)
+    reported = r
+  end)
+  vim.wait(5000, function()
+    return reported ~= nil
+  end, 25)
+  check(
+    type(reported) == 'table' and type(reported.count) == 'number' and reported.count >= 1,
+    'and the server reports at least one entry',
+    vim.inspect(reported and reported.count)
+  )
+
+  local on_disk = session_dir .. '/session.jsonl'
+  check(vim.fn.filereadable(on_disk) == 1, 'the record is on disk, under the root', on_disk)
+  if vim.fn.filereadable(on_disk) == 1 then
+    local lines = vim.fn.readfile(on_disk)
+    local parsed = 0
+    for _, l in ipairs(lines) do
+      if pcall(vim.json.decode, l) then
+        parsed = parsed + 1
+      end
+    end
+    check(parsed == #lines and parsed > 0, 'every line is one JSON entry', ('%d/%d'):format(parsed, #lines))
+    check(#lines > 0, 'and it has entries', ('%d line(s)'):format(#lines))
+  end
+
+  for _, b in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find('meta://', 1, true) then
+      vim.api.nvim_buf_delete(b, { force = true })
+    end
+  end
+end
+
 -- Report ---------------------------------------------------------------------------------------
 
 -- Lens state first, and a settle before the stop. Neovim's lens provider schedules a

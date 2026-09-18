@@ -345,6 +345,53 @@ function M.explain(cb)
   end, { stream = true })
 end
 
+--- `:Meta session` — what this server has done here.
+---
+--- The record is an append-only log under the repository root's `.git/meta/`, beside the
+--- dismissals, so it survives a restart and never appears in `git status`. It is something to
+--- read, not state the plugin acts on: nothing in this file consults it.
+function M.session()
+  M.command('meta.session', { { limit = 200 } }, function(err, result)
+    if err or (type(result) == 'table' and result.ok == false) then
+      M.report('meta.session', err, result)
+      return
+    end
+    local entries = (type(result) == 'table' and result.entries) or {}
+    local lines = { '# meta session', '' }
+    for i = #entries, 1, -1 do
+      local e = entries[i]
+      -- A field the server sent as null arrives as `vim.NIL`, which is userdata: it has to be
+      -- checked rather than used, or a renderer turns a missing value into an error.
+      if e.kind == 'command' then
+        local verdict = 'ok'
+        if e.ok ~= true then
+          verdict = type(e.error) == 'string' and ('failed · ' .. e.error) or 'failed'
+        end
+        lines[#lines + 1] = ('- `%s` — %s%s'):format(
+          type(e.command) == 'string' and e.command or '?',
+          verdict,
+          type(e.ms) == 'number' and (' · ' .. e.ms .. ' ms') or ''
+        )
+      elseif e.kind == 'analysis' then
+        lines[#lines + 1] = ('- analysis — %d finding(s)%s'):format(
+          type(e.findings) == 'number' and e.findings or 0,
+          e.from_cache == true and ' · cache' or ''
+        )
+      else
+        lines[#lines + 1] = '- ' .. vim.inspect(e):gsub('%s+', ' ')
+      end
+    end
+    if #entries == 0 then
+      lines[#lines + 1] = '_nothing recorded for this root yet_'
+    end
+    if type(result.path) == 'string' then
+      lines[#lines + 1] = ''
+      lines[#lines + 1] = ('_record: %s_'):format(result.path)
+    end
+    M.open_artifact({ kind = 'session', id = 'session', markdown = table.concat(lines, '\n') })
+  end)
+end
+
 --- `:Meta followup [question]` / `<leader>Mf` — ask about what is under the cursor.
 ---
 --- The question is the second and last place free text enters, after `plan`, and for the same
@@ -975,6 +1022,9 @@ M.subcommands = {
   end,
   review = function()
     M.review()
+  end,
+  session = function()
+    M.session()
   end,
   start = function()
     M.start()

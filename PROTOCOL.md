@@ -245,6 +245,22 @@ Rules:
 The client must tolerate `data` being absent: a report without it is ordinary progress and is
 rendered as a message.
 
+### 3.6 The session record, and why it is not memory
+
+Every command and every analysis appends one line to `<root>/.git/meta/session.jsonl`, and
+`meta.session` reads the tail back. It sits where dismissals sit, so it survives a restart,
+survives a buffer being closed, and never appears in `git status`.
+
+**N9 still holds, and this is the reason it can.** The record is written and never read to
+decide anything: no request consults it, the cache is still keyed by content hash, and the same
+question about the same document still gets the same answer with or without it. What it gives
+the user is the thing an editor usually loses — a record of what happened, in order, that can
+be read after the fact. A log that fed back into behaviour would be memory, and memory here
+would make the cache a lie.
+
+A line that cannot be parsed is skipped when read, and a root that cannot be written to is not
+an error: a read-only checkout should not fail a request over a convenience.
+
 ---
 
 ## 4. Code action taxonomy
@@ -327,6 +343,7 @@ Ordered, all mandatory, all evaluated before any model call:
 | `meta.recompute` | `{}` | `Result` | yes |
 | `meta.explain` | `{uri, line, range?}` | `Artifact` (§7, `kind: "explanation"`) | yes |
 | `meta.followup` | `{uri, line, question, finding_id?, range?}` | `Artifact` (§7, `kind: "answer"`) | yes |
+| `meta.session` | `{limit?}` | `Result` with `{entries, count, path}` | no |
 | `meta.cancel` | `{progress_token}` | `Result` | yes |
 | `meta.plan` | `{goal, scope}` | `Artifact` | yes |
 | `meta.apply` | `{plan_id, steps: [n]}` | `Result` | yes |
