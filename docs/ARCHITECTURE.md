@@ -85,8 +85,10 @@ was computed against. It is discarded on delivery if the live version differs â€
 
 ## 3. Scheduler
 
-One worker task per analysis kind, each with its own queue and concurrency limit. Nothing
-is unbounded.
+One run per document at a time, and a queued request coalesces into a single follow-up pass
+rather than a queue of its own: a save that lands mid-analysis asks for one more run, not
+twenty. Nothing is unbounded â€” the state is a per-document slot with `running`/`pending`
+(`state.rs`), and `verify/queue_test.py` pins both halves of that.
 
 ```mermaid
 graph TB

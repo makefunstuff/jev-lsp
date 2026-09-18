@@ -167,16 +167,21 @@ classification.
 
 ```jsonc
 "languages": {
-  "overrides": {                      // per resolved language
-    "rust":  { "model": "reason", "prompt": "rust", "verbs": ["harden", "types", "test"] },
+  "overrides": {                      // per resolved language, not per filetype
+    "rust":  { "tier": "reason", "prompt": "rust", "verbs": ["harden", "types", "test"] },
     "python": { "prompt": "python" },
-    "markdown": { "verbs": ["review"], "model": "review" }
+    "markdown": { "verbs": ["review"], "tier": "review" }
   },
-  "generic": { "prompt": "generic_text", "model": "reason" },
-  "max_file_bytes": 1048576,
+  "max_file_bytes": 1048576,          // above this a buffer is skipped, and says so
+  "max_scope_lines": 400,             // a declaration longer than this gets no lens
   "ignore": ["**/node_modules/**", "**/*.min.js", "**/vendor/**"]
 }
 ```
+
+There is no per-filetype or "generic" key: an override is keyed by the language the buffer
+*resolves* to (`unknown` included), and the persona for a language with no override comes from
+`prompt`'s default for that language (`meta-core/src/lang.rs`). `tier` picks which endpoint
+serves it — `reason` or `review`.
 
 An override may narrow the verb set for a language (Markdown has no meaningful "add types");
 absence of an override means the full set. Nothing here can *disable* a language — only

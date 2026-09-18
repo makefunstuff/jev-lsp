@@ -4,7 +4,15 @@ Each unit is independently verifiable and ends with its own acceptance check. No
 starts before the previous one passes. Order is chosen so the two hard problems —
 staleness and latency — are exercised by unit 1, not discovered in unit 6.
 
-**Progress**: every unit built, with two parts of U9 open. U0–U8 done, including U5's plugin
+**Progress**: every unit built, with two parts of U9 open. U9's documentation criterion was
+met on 2026-09-19: `PROTOCOL.md`, `README.md`, `docs/{UX,MODEL,ARCHITECTURE,LANGUAGE,VERIFICATION}.md`,
+`test/visual/README.md` and this file were each read against the implementation, and the
+contradictions found were fixed — the §2 capability block was missing two advertised providers,
+§3.2 and §3.4 listed designed-but-unserved methods without saying so, §6 was missing two
+commands and marked two served ones "no", §10's settings example had keys that do not exist
+(`verbs`, `languages.generic`) and the wrong name for one that does (`model` → `tier`), §3's
+scheduler description contradicted `state.rs`, and the README called code lens and inlay hints
+"not built" while the server serves both. U0–U8 done, including U5's plugin
 half — the plan buffer renders the verified plan as steps, applies one at a time and takes them
 back (`nvim/lua/meta/init.lua`, `M.open_plan`). U9 partly: cancellation is cooperative only,
 backpressure is the per-document queue, and the daemon is not built. Two scoped gaps remain and are noted in their

@@ -32,6 +32,7 @@ removes all four:
 | `docs/ARCHITECTURE.md` | living | Components, process topology, document store, scheduler |
 | `docs/LANGUAGE.md` | living | Unconditional support, attachment ladder, language resolution, scope strategies |
 | `docs/UX.md` | living | The experience: scenarios, keymaps, plan buffer, approval, noise policy |
+| `docs/TUTORIAL.md` | living | **Start here** — install it, the four keys, the five workflows, the settings that matter, troubleshooting |
 | `docs/MODEL.md` | living | Model tiers, routing, context builder, output contracts, budgets |
 | `docs/VERIFICATION.md` | living | How each claim gets proven; independent client, live Nvim, defect injection |
 | `docs/ROADMAP.md` | living | Units with acceptance criteria |
@@ -112,14 +113,14 @@ at a local llama.cpp OpenAI-compatible server, or set `api_key_env` for a remote
 |---|---|
 | `cargo test` | 219 passing, warning-clean |
 | `cargo build --release` | no warnings |
-| `python3 verify/smoke.py` | 35/35 against the real binary |
+| `python3 verify/smoke.py` | 44/44 against the real binary |
 | `python3 verify/plan_test.py` | 35/35 — plan, apply, revert, staleness, divergence, multi-file |
 | `python3 verify/cli_parity.py` | 12/12 — the CLI and the LSP agree exactly |
-| `python3 verify/lsp_client.py --server …` | 28 ok, 0 FAIL (independent, spec-derived client) |
+| `python3 verify/lsp_client.py --server … --stub-model-url …` | 28 ok, 0 FAIL (independent, spec-derived client) |
 | `nvim --headless -l verify/nvim_live.lua` | 0 failures, 0 skips (real plugin, real server) |
 | `nvim --headless -l verify/nvim_ui_test.lua` | 0 failures, 0 skips (picker, diff preview, lenses, hints, streaming, plan, session) |
 | `python3 verify/quality_eval.py --base-url … --model …` | recall, precision and noise on a labelled defect set — the only harness that answers "is the review right", and it needs a real model |
-| `python3 verify/latency.py` | 8/8 — every editor-driven path under 1 ms against a model made **2 s** slow, which is how the bench tells "fast" from "cached" |
+| `python3 verify/latency.py` | 7/7 — every editor-driven path under 1 ms against a model made **2 s** slow, which is how the bench tells "fast" from "cached" |
 | `python3 verify/queue_test.py` | 5/5 — the mid-flight-edit race, with a stalled model |
 | `python3 verify/config_race_test.py` | 3/3 — a save during startup is not analysed against the defaults |
 | `python3 verify/supersede_probe.py` | 7 ok, 0 FAIL — supersession, independently probed, with a control |
@@ -139,18 +140,22 @@ pinned by tests; `docs/VERIFICATION.md` §8 records them.
 Served today: universal attachment, document sync, ambient findings via pull diagnostics
 with `workspace/diagnostic/refresh`, a code-action menu with lazy `codeAction/resolve`,
 version-stamped `WorkspaceEdit`s, plans with per-step approval and revert, multi-file edits,
-`$/progress` streaming, and the `meta.status`,
-`meta.recompute`, `meta.explain`, `meta.plan`, `meta.apply`, `meta.revert`, `meta.cancel`
-commands. Capabilities and commands not yet
-implemented are **not advertised** (PROTOCOL §2).
+code lens, inlay hints, hover, `$/progress` streaming, and fourteen `workspace/executeCommand`
+commands — `meta.status`, `recompute`, `review`, `explain`, `ask`, `followup`, `document`,
+`session`, `usage`, `outcome`, `plan`, `apply`, `revert`, `cancel` (PROTOCOL §6). Capabilities
+and commands not implemented are **not advertised** (PROTOCOL §2), and the independent client
+asserts both directions.
 
 Measured on a real model: ambient 1.5–7 s, resolve 1.5–31 s, and the menu itself instant.
 One recurring failure remains and is by design: when the model answers with a replacement that
 spans more than the anchor it named, the edit is *refused* rather than applied, because
 applying it would duplicate the lines it did not consume.
 
-Not built: code lens, inlay hints, and treesitter-backed scope. `docs/ROADMAP.md` tracks
-each, and `docs/VERIFICATION.md` §9 records what is served but not yet proven here.
+Built and advertised: code lens (per-declaration affordances that refresh after an analysis)
+and inlay hints (a finding-count badge, off by default because Neovim switches hints per
+buffer). Not built: treesitter-backed scope — resolution is structural with a whole-file
+fallback, and `scope_source` says which was used. `docs/ROADMAP.md` tracks the rest, and
+`docs/VERIFICATION.md` §10 lists what is deliberately unverified.
 
 ```sh
 cargo build --release

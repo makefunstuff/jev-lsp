@@ -1419,7 +1419,15 @@ end
 --- @type table<string, fun(arg: string|nil)>
 M.subcommands = {
   ask = function(arg)
-    M.ask(arg ~= '' and arg or nil)
+    -- `--web` is the fetch-enabled form: the answer may ask for one https page to be read.
+    -- It used to be a keymap of its own (<leader>mW) and lost it when the surface was cut to
+    -- four keys, which left the capability unreachable from the editor — a keymap is an
+    -- accelerator, and nothing may exist only as one.
+    local web = false
+    if arg:sub(1, 6) == '--web ' then
+      web, arg = true, arg:sub(7)
+    end
+    M.ask(arg ~= '' and arg or nil, web and { web = true } or nil)
   end,
   cancel = function()
     M.cancel()

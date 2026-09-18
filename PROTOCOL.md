@@ -48,6 +48,8 @@ Server capabilities returned from `initialize`:
     ]
   },
   "diagnosticProvider": { "identifier": "meta", "interFileDependencies": false, "workspaceDiagnostics": false },
+  "codeLensProvider": { "resolveProvider": false },
+  "inlayHintProvider": { "resolveProvider": false },
   "executeCommandProvider": { "commands": [ /* §6 */ ], "workDoneProgress": true }
 }
 ```
@@ -95,14 +97,18 @@ be enforced before any model call.
 
 ### 3.2 Client to server, observation
 
+Two kinds of row: what the server *serves* today, and what is designed for it. The three
+marked † are not implemented and therefore **not advertised** (§2) — a client will never be
+asked for them, and the budgets are the design they will be held to.
+
 | Method | Class | Gate | Notes |
 |---|---|---|---|
-| `textDocument/diagnostic` | p99 < 30 ms | severity floor, debounce | Serves from the conclusion cache; never triggers a model call inline. `resultId` for incremental re-pull. |
-| `workspace/diagnostic` | p99 < 200 ms | same | Whole-repo pull; serves cached findings only. |
+| `textDocument/diagnostic` | p99 < 30 ms | file-size/ignore/binary gates, finding cap, cache | Serves from the conclusion cache; never triggers a model call inline. `resultId` for incremental re-pull. |
+| `workspace/diagnostic` † | p99 < 200 ms | same | Whole-repo pull; serves cached findings only. `workspaceDiagnostics: false` until it exists. |
 | `textDocument/codeLens` | p99 < 30 ms | per-symbol count cap | Affordances offered per symbol. |
-| `codeLens/resolve` | p99 < 50 ms | — | Fills the `command`. |
+| `codeLens/resolve` † | p99 < 50 ms | — | Fills the `command`. Lenses are returned complete, so `resolveProvider: false`. |
 | `textDocument/inlayHint` | p99 < 30 ms | default **off** except risk markers | Cached only. |
-| `inlayHint/resolve` | p99 < 50 ms | — | |
+| `inlayHint/resolve` † | p99 < 50 ms | — | Hints are returned complete, so `resolveProvider: false`. |
 | `textDocument/hover` | p99 < 100 ms | on-demand prefetch | Cached explanation. Miss returns the plain signature immediately and warms the cache. |
 
 ### 3.3 Client to server, control
@@ -114,17 +120,20 @@ observation, dynamically registered).
 
 Only from the verified set `[R1]`:
 
-| Method | Used for |
-|---|---|
-| `workspace/diagnostic/refresh` | Background analysis produced new findings — client re-pulls. |
-| `workspace/codeLens/refresh` | Background work changed available affordances. |
-| `$/progress` | Streaming and long-running status, under a token from §3.5. |
-| `window/workDoneProgress/create` | Only for progress the server starts with no request to attach to. |
-| `window/showMessageRequest` | Approval prompt with a pick-list `[R2]`. |
-| `workspace/applyEdit` | Applying an approved plan step without a pick. |
-| `window/showDocument` | Opening a plan or explanation artifact as a buffer. |
-| `client/registerCapability` | `workspace/didChangeWatchedFiles` watchers. |
-| `textDocument/publishDiagnostics` | Only for findings the plugin has explicitly requested as push (edits made *by* the server). |
+The last three are designed and **not sent** by this implementation; they are listed so the
+design is visible, not as a claim of coverage.
+
+| Method | Used for | Sent |
+|---|---|---|
+| `workspace/diagnostic/refresh` | Background analysis produced new findings — client re-pulls. | yes |
+| `workspace/codeLens/refresh` | Background work changed available affordances. | yes |
+| `$/progress` | Streaming and long-running status, under a token from §3.5. | yes |
+| `workspace/applyEdit` | Applying an approved plan step without a pick. | yes |
+| `window/showDocument` | Opening a plan or explanation artifact as a buffer. | yes |
+| `textDocument/publishDiagnostics` | Only for findings the plugin has explicitly requested as push (edits made *by* the server). | yes |
+| `window/workDoneProgress/create` | Progress the server starts with no request to attach to. | no — every token comes from the client (§3.5 path 1), so none is ever created |
+| `window/showMessageRequest` | Approval prompt with a pick-list `[R2]`. | no — the decision is the client's own picker (`vim.ui.select`) |
+| `client/registerCapability` | `workspace/didChangeWatchedFiles` watchers. | no — static registration covers what is used |
 
 ### 3.4.1 `codeLens` — and who runs its command
 
@@ -434,9 +443,11 @@ Ordered, all mandatory, all evaluated before any model call:
 | `meta.status` | `{}` | `Result` with queue, budgets, cache counters, in-flight calls | yes |
 | `meta.recompute` | `{}` | `Result` | yes |
 | `meta.explain` | `{uri, line, range?}` | `Artifact` (§7, `kind: "explanation"`) | yes |
+| `meta.ask` | `{question, uri?, context?, web?}` | `Artifact` (§7, `kind: "answer"`) — or a one-line `FETCH` request | yes |
+| `meta.review` | `{uri}` | `Result` with the findings for the file as it is now | yes |
 | `meta.followup` | `{uri, line, question, finding_id?, range?}` | `Artifact` (§7, `kind: "answer"`) | yes |
-| `meta.document` | `{uri, version, definitions?, context?}` | `Result` with `{stored}` — the client's own parser answering §3.4.3 | no |
-| `meta.session` | `{limit?}` | `Result` with `{entries, count, path}` | no |
+| `meta.document` | `{uri, version, definitions?, context?}` | `Result` with `{stored}` — the client's own parser answering §3.4.3 | yes |
+| `meta.session` | `{limit?}` | `Result` with `{entries, count, path}` | yes |
 | `meta.usage` | `{}` | `Result` counting what was published and what was done with it, over the session log | yes |
 | `meta.outcome` | `{kind, id?, line?, verb?}` | `Result` with `{recorded}` — the client reporting what the user did | yes |
 | `meta.cancel` | `{progress_token}` | `Result` | yes |
@@ -586,11 +597,10 @@ environment variables beyond the model endpoints.
   "triggers": { "diagnostics": "save", "idle_ms": 1500, "severity_floor": "information" },
   "ambient": { "code_lens": true, "inlay_hints": false, "diagnostics": true },
   "auto_apply": { "fix": false, "fixAll": false },
-  "verbs": { "explain": true, "review": true, "test": true, "generate": true },
   "languages": {                    // docs/LANGUAGE.md §7 — may narrow, never disable
-    "overrides": { "rust": { "model": "reason", "prompt": "rust" } },
-    "generic": { "prompt": "generic_text", "model": "reason" },
+    "overrides": { "rust": { "tier": "reason", "prompt": "rust", "verbs": ["fix", "review"] } },
     "max_file_bytes": 1048576,
+    "max_scope_lines": 400,
     "ignore": ["**/node_modules/**", "**/*.min.js"]
   },
   "noise": { "max_visible_findings": 5, "suppress_after_dismissals": 2 },
@@ -598,6 +608,12 @@ environment variables beyond the model endpoints.
 ```
 
 Defaults are conservative: `auto_apply` off, `inlay_hints` off.
+
+**Two keys are declared and not read by this implementation**: `triggers.severity_floor` and
+`noise.suppress_after_dismissals`. They are in the schema because a client that sends them must
+not be rejected, and they are named here so a reader does not configure a silence that never
+happens — the finding cap is `noise.max_visible_findings`, which *is* read, and a dismissed
+finding stays dismissed per repository (`.git/meta/dismissed.json`).
 
 ---
 
@@ -612,6 +628,11 @@ meta action --verb <verb> <path>[:<range>]  # proposed edit, JSON (never applied
 meta plan --goal <text> <path>              # plan artifact
 meta status                                 # budget and queue
 ```
+
+Flags: `--verb <verb>` (action, required), `--goal <text>` (plan, required), `--base-url <url>`
+and `--model <name>` (override every tier; the `META_BASE_URL`/`META_MODEL` variables do the
+same), `--max-tokens <n>`; `-h`/`--help`, `-V`/`--version`. Flags may be written `--k v` or
+`--k=v`.
 
 - stdin: additional context (diff, buffer text) when the path is `-`.
 - stdout: exactly one artifact or result, JSON, one line, no decoration.

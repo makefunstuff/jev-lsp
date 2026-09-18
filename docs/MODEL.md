@@ -17,7 +17,9 @@ operators tune them independently.
 Config is configuration-layer, not code (PROTOCOL §10 `models`): `{base_url, model,
 api_key_env, timeout_ms, max_tokens, temperature, think}`. `think` mirrors the CLI's
 reasoning control — `off` sends `chat_template_kwargs.enable_thinking = false`, a level
-sends `reasoning_effort`. Tiers default to `think = "off"` except `reason`.
+sends `reasoning_effort`. Every tier defaults to `think = "off"` — `TierConfig::default()`
+is the only place a tier's defaults live, and no tier overrides it — so a thinking model is
+opted *into* per tier rather than out of.
 
 ## 2. Routing
 

@@ -15,7 +15,6 @@ inline annotation, or a key you already press.
 | Statusline segment | `$/progress` via `LspProgress` | what is running, budget remaining | never |
 | Streamed answer | `$/progress` partial results (§3.5.1) | the answer written into its buffer as it arrives, and `waiting for the model (3s)` before the first token | never |
 | Hover | `textDocument/hover` | what has already been explained about this scope, instantly and never from a model | never |
-| Pick list | `window/showMessageRequest` | a decision the server must have | once |
 | Text prompt | plugin `vim.ui.input` | the goal for `plan` | only when invoked |
 
 Free text appears exactly once, in `:Meta plan`, because the protocol cannot ask for text
@@ -65,7 +64,9 @@ cursor: inline completion was removed on 2026-09-19 (STATUS.md).
 ```
 
 Reachable by typing: `:Meta explain|review|plan|session|usage|stop|start`, alongside
-`followup|where|hints|undo|dismiss|log|recompute`.
+`ask|followup|where|hints|undo|dismiss|cancel|log|recompute` — the full subcommand set, since
+a keymap is an accelerator and not the surface. `:Meta ask --web <question>` is the
+fetch-enabled form of ask: one https page may be read to answer, and the artifact names it.
 
 `:Meta usage` is the answer to "is this working": published findings, files analysed, and
 counts of what was done with them — applied, dismissed, accepted, undone — over what the
@@ -108,11 +109,12 @@ statusline, then a plan buffer opens:
        tests/retry_cancel.rs · new file
  ──────────────────────────────────────────────────────────────────────────────────────────
  usage: reason · 8.1k in / 1.2k out · 12.4 s        budget: 118/120 calls · 412k/500k tokens
- <CR> apply  <C-v> diff  x skip  r recompute  q close  u undo last
+ <CR> apply this step   a apply every step   u take this one back   q close
 ```
 
 The buffer is a normal buffer: folds, marks, yank, search work. Step lines are extmarks,
-not a rendered TUI grid, so nothing fights your config.
+not a rendered TUI grid, so nothing fights your config. `<C-v>` (diff a step before applying
+it) is the picker's preview, not a plan-buffer key.
 
 ### 3.3 Approval with a diff
 
@@ -133,12 +135,16 @@ The failure mode of every ambient agent is crying wolf. Enforced:
 
 - **Nothing notifies during normal editing.** The only `window/showMessage` cases are a
   first budget exhaustion, model unreachability, and post-apply divergence.
-- **Display cap.** At most `noise.max_visible_findings` (default 5) findings visible per
-  buffer at once. The rest are summarized in the code lens as `+N findings` and in
-  `:Meta status`. Severity-ordered, stable across refreshes.
+- **Display cap.** At most `noise.max_visible_findings` (default 5) findings per buffer,
+  applied once where the finding set is finalised (`findings::build`) so the sign column, the
+  lens and the hint always describe the same set. Warnings take the budget before information,
+  and the order within a severity does not move between refreshes. Nothing is hidden behind a
+  summary line: the cap decides what exists.
 - **Dismissal is permanent and per-repository.** `:Meta dismiss` writes the finding's
   content-addressed key to `.git/meta/dismissed.json` (never into the repo tree).
-- **Suppression.** A verb dismissed twice in a session stops being offered until reload.
+- **Suppression.** A *finding* stays dismissed per repository — `.git/meta/dismissed.json`,
+  filtered from every pull (`filter_findings`). A verb is never suppressed: `noise.suppress_after_dismissals`
+  is in the settings schema and is not read (PROTOCOL §10).
 - **Quiet by default.** `inlay_hints` ships disabled; diagnostics do not run per
   keystroke.
 - **Cost transparency.** Every model call logs one line (model, tier, tokens, ms, trigger
