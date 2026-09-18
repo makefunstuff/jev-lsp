@@ -239,6 +239,76 @@ local function siblings_of(bufnr)
   return out
 end
 
+--- Where a question's words appear in the project, found locally.
+---
+--- The one navigation question a model answers better than an index: "where is retry handled"
+--- is not a symbol, so `textDocument/references` has nothing to say about it. The client greps
+--- — offline, in milliseconds — and the model ranks what came back. Semantic search without an
+--- embedding store and without a daemon walking the tree.
+---
+--- The words are the question's own, minus the ones that appear in every question. A grep that
+--- matched "where" would return the whole repository, which is worse than nothing.
+--- @param question string
+--- @param bufnr integer
+--- @return table[]
+function M.matches_for(question, bufnr)
+  -- Bracketed where a word is also a Lua keyword (`and`, `for`, `do`, `in`).
+  local stopwords = {
+    where = true, what = true, which = true, when = true, how = true, why = true,
+    is = true, are = true, the = true, this = true, that = true, ['and'] = true,
+    ['for'] = true, with = true, does = true, ['do'] = true, ['in'] = true, on = true,
+    to = true, of = true, a = true, an = true, it = true, be = true, handle = true,
+    handles = true, handled = true, code = true, file = true, files = true,
+    ['function'] = true, ['functions'] = true, called = true, calls = true, used = true,
+  }
+  local words = {}
+  for word in question:lower():gmatch('[%w_]+') do
+    if #word > 2 and not stopwords[word] then
+      words[#words + 1] = word
+    end
+  end
+  if #words == 0 then
+    return {}
+  end
+
+  -- The project root, or the file's own directory when nothing marks one: grepping the current
+  -- directory would search wherever Neovim happened to be started, which is not where the file
+  -- the user is looking at lives.
+  local root = vim.fs.root(bufnr, { '.git' })
+    or vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bufnr), ':h')
+    or vim.fn.getcwd()
+  local pattern = table.concat(vim.tbl_map(vim.pesc, words), '|')
+  local found = {}
+  if vim.fn.executable('rg') == 1 then
+    found = vim.fn.systemlist({
+      'rg', '--line-number', '--no-heading', '--smart-case', '--max-count', '2',
+      '--max-filesize', '1M', '--', pattern, root,
+    })
+  elseif vim.fn.executable('grep') == 1 then
+    found = vim.fn.systemlist({ 'grep', '-rnE', '--include=*', '-m', '2', pattern, root })
+  end
+
+  local out, seen = {}, {}
+  for _, line in ipairs(found) do
+    local path, number = line:match('^([^:]+):(%d+):')
+    if path ~= nil and number ~= nil and #out < 6 then
+      local key = path .. ':' .. number
+      if not seen[key] then
+        seen[key] = true
+        local text = vim.fn.readfile(path, '', tonumber(number) + 2)
+        out[#out + 1] = {
+          kind = 'match',
+          uri = 'file://' .. path,
+          start_line = tonumber(number) - 1,
+          end_line = math.max(0, #text - 1),
+          text = table.concat(text, '\n'),
+        }
+      end
+    end
+  end
+  return out
+end
+
 --- What is cheap enough to keep for every document, all the time.
 ---
 --- Imports come from a parser that has already parsed, and siblings are buffer text — neither

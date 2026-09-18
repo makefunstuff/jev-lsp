@@ -629,6 +629,45 @@ function M.open_plan(plan)
   vim.keymap.set('n', 'q', '<Cmd>close<CR>', { buffer = bufnr, desc = 'meta: close the plan' })
 end
 
+--- `:Meta where <question>` / `<leader>Mw` — where is this handled?
+---
+--- The one navigation question a model answers better than an index: *"where is retry handled"*
+--- is not a symbol, so nothing that answers `textDocument/references` has anything to say about
+--- it. The client greps — locally, offline, in milliseconds — and the model ranks what came
+--- back. Semantic search with no embedding store and nothing walking the tree per keystroke.
+---
+--- The answer rides `meta.followup`: same context, same contract, same buffer. Only who
+--- assembled the context differs — a grep here, the language servers there.
+--- @param question? string
+function M.where(question)
+  local function ask(text)
+    local bufnr = vim.api.nvim_get_current_buf()
+    local line = vim.api.nvim_win_get_cursor(0)[1] - 1
+    local arg = { uri = vim.uri_from_bufnr(bufnr), line = line, question = text }
+    local range = treesitter_scope(bufnr, line)
+    if range ~= nil then
+      arg.range = range
+    end
+    local ok, matches = pcall(context.matches_for, text, bufnr)
+    local provided = ok and matches or {}
+    if #provided > 0 then
+      arg.context = provided
+    end
+    M.command('meta.followup', { arg }, function(err, result, ctx)
+      render_artifact('meta.followup', err, result, ctx)
+    end, { stream = true })
+  end
+  if question ~= nil and vim.trim(question) ~= '' then
+    ask(vim.trim(question))
+    return
+  end
+  vim.ui.input({ prompt = 'meta: where is …: ' }, function(input)
+    if input ~= nil and vim.trim(input) ~= '' then
+      ask(vim.trim(input))
+    end
+  end)
+end
+
 --- `:Meta session` — what this server has done here.
 ---
 --- The record is an append-only log under the repository root's `.git/meta/`, beside the
@@ -1302,6 +1341,9 @@ function M.keymaps(prefix)
     { 'f', { 'n' }, 'ask about what is under the cursor', function()
       M.followup()
     end },
+    { 'w', { 'n' }, 'where is this handled in the project', function()
+      M.where()
+    end },
     { 'r', { 'n' }, 'review this file', function()
       M.review()
     end },
@@ -1365,6 +1407,9 @@ M.subcommands = {
   end,
   recompute = function()
     M.recompute()
+  end,
+  where = function(arg)
+    M.where(arg ~= '' and arg or nil)
   end,
   hints = function(arg)
     M.hints(arg == 'on' and true or (arg == 'off' and false or nil))

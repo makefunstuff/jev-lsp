@@ -1793,6 +1793,69 @@ do
   end
 end
 
+-- 19. Where is this handled ----------------------------------------------------------------
+
+-- The one navigation question a model answers better than an index: "where is retry handled" is
+-- not a symbol, so nothing that answers `textDocument/references` has anything to say about it.
+-- The client greps locally and the model ranks what came back — semantic search with no
+-- embedding store and nothing walking the tree per keystroke. The answer rides the follow-up
+-- command, because only who assembled the context differs.
+do
+  local where_dir = root
+  -- A second file in the same directory, holding a token nothing else contains.
+  local needle = 'RETRY_BACKOFF_MARKER'
+  vim.fn.writefile(
+    { '# ' .. needle, 'def backoff(attempt):', '    return 2 ** attempt' },
+    where_dir .. '/elsewhere.py'
+  )
+
+  local where_bufnr, where_attached = open_fixture('where.py', {
+    'import json',
+    '',
+    '',
+    'def load_config(path):',
+    '    f = open(path)',
+    '    return json.load(f)',
+  })
+  check(where_attached, 'the plugin attached a client to the where fixture')
+
+  local client = vim.lsp.get_clients({ bufnr = where_bufnr, name = 'meta' })[1]
+  if client == nil then
+    skip('meta.where', 'no client on the where fixture')
+  else
+    local captured = nil
+    local orig = client.request
+    client.request = function(_, method, params, ...)
+      if method == 'workspace/executeCommand' and params.command == 'meta.followup' then
+        captured = params.arguments
+      end
+      return orig(_, method, params, ...)
+    end
+    vim.api.nvim_set_current_buf(where_bufnr)
+    require('meta').where(needle)
+    vim.wait(6000, function()
+      return captured ~= nil
+    end, 50)
+    client.request = orig
+
+    local arg = (captured and captured[1]) or {}
+    check(arg.question == needle, 'the question reaches the server', vim.inspect(arg.question))
+    local kinds, matched = {}, false
+    for _, entry in ipairs(arg.context or {}) do
+      kinds[#kinds + 1] = entry.kind
+      if type(entry.text) == 'string' and entry.text:find(needle, 1, true) then
+        matched = true
+      end
+    end
+    check(matched, 'and the client grepped for it locally', vim.inspect(kinds))
+    check(
+      #(arg.context or {}) <= 6,
+      'with a bounded number of places',
+      tostring(#(arg.context or {}))
+    )
+  end
+end
+
 -- Report ---------------------------------------------------------------------------------------
 
 -- Lens state first, and a settle before the stop. Neovim's lens provider schedules a
