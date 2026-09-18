@@ -602,6 +602,7 @@ fn call(
         max_tokens: ceiling(spec.max_tokens, tier),
         json: spec.json,
         think: tier.think,
+        fim: None,
     };
     let started = Instant::now();
     let response = deps

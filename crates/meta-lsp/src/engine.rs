@@ -330,9 +330,10 @@ impl Engine {
             return Err(Failure::Skipped(skip.reason()));
         }
 
-        let key = cache::op_key_with_context(
+        let key = cache::op_key_for(
             verb.as_str(),
             PROMPT_VERSION,
+            &cfg.tier(verb.tier()).model,
             &doc.hash,
             scope.range.start_line,
             scope.range.end_line,
@@ -379,7 +380,7 @@ impl Engine {
                 let mut attempt_ctx = ctx.clone();
                 let mut repairs = 0usize;
                 loop {
-                    let attempt = self.chat_with(&cfg, verb.tier(), verbs::render(verb, &attempt_ctx), None)?;
+                    let attempt = self.chat_with(&cfg, verb.tier(), verbs::render(verb, &attempt_ctx), None, None)?;
                     let refusal = match contract::parse_edit(&attempt.text) {
                         Err(e) => e.to_string(),
                         Ok(raw) => match edit::build_proposal(&doc.text, &raw, &profile, &opts) {
@@ -479,6 +480,7 @@ impl Engine {
         cfg: &Config,
         tier_kind: Tier,
         spec: verbs::PromptSpec,
+        fim: Option<(String, String)>,
         delta: Delta<'_>,
     ) -> Result<ChatResponse, Failure> {
         let _permit = match self.state.budget.try_acquire(&cfg.budget) {
@@ -497,6 +499,7 @@ impl Engine {
             max_tokens,
             json: spec.json,
             think: tier.think,
+            fim,
         };
         let response = match delta {
             Some(cb) => self.state.backend.chat_stream(tier, &request, cb),
@@ -524,7 +527,7 @@ impl Engine {
         mut delta: Delta<'_>,
     ) -> Result<(T, Usage), Failure> {
         let started = std::time::Instant::now();
-        let response = self.chat_with(cfg, tier_kind, render(ctx), reborrow(&mut delta))?;
+        let response = self.chat_with(cfg, tier_kind, render(ctx), None, reborrow(&mut delta))?;
         let mut tokens_in = response.prompt_tokens;
         let mut tokens_out = response.completion_tokens;
 
@@ -549,7 +552,7 @@ impl Engine {
         let mut last = first_error;
         for _ in 0..MAX_REPAIR_ATTEMPTS {
             let repair = repair_context(ctx, &last.to_string(), &response.text);
-            let retry = self.chat_with(cfg, tier_kind, render(&repair), reborrow(&mut delta))?;
+            let retry = self.chat_with(cfg, tier_kind, render(&repair), None, reborrow(&mut delta))?;
             tokens_in += retry.prompt_tokens;
             tokens_out += retry.completion_tokens;
             match parse(&retry.text) {
@@ -646,9 +649,10 @@ impl Engine {
         }
 
         // The same cursor in the same content is the same question.
-        let key = cache::op_key_with_context(
+        let key = cache::op_key_for(
             "completion",
             PROMPT_VERSION,
+            &cfg.models.fim.model,
             &doc.hash,
             line,
             character,
@@ -676,7 +680,15 @@ impl Engine {
             cfg.models.fim.fim_tokens.as_ref(),
         );
         spec.user.push_str(&context::render_provided(provided));
-        let response = self.chat_with(&cfg, Tier::Fim, spec, None)?;
+        // The two halves travel with the request: a FIM endpoint wants them as its own fields,
+        // and the prompt above is for the chat endpoints that have no such fields.
+        let response = self.chat_with(
+            &cfg,
+            Tier::Fim,
+            spec,
+            Some((tail(prefix, PREFIX_WINDOW), head(suffix, SUFFIX_WINDOW))),
+            None,
+        )?;
         let text = clean_completion(&response.text);
         self.state.cache.put(
             &key,

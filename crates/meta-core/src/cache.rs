@@ -96,8 +96,26 @@ pub fn findings_key(content_hash: &str) -> String {
 
 /// A generated edit or artifact is per verb, per scope, and per prompt revision — a
 /// change to the wording must not serve stale conclusions (PROTOCOL.md §5 gate 1).
+/// The same, naming which model answered.
+///
+/// Without it the cache serves one model's answer for another's question, which is not
+/// hypothetical: switching the fim tier from one endpoint to another mid-session returned a
+/// cached empty completion from the previous model, in 261 ms, and looked exactly like the new
+/// endpoint failing.
+pub fn op_key_for(
+    verb: &str,
+    prompt_version: &str,
+    model: &str,
+    content_hash: &str,
+    start_line: u32,
+    end_line: u32,
+    context_digest: &str,
+) -> String {
+    format!("op|{verb}|{prompt_version}|{model}|{content_hash}|{start_line}|{end_line}|{context_digest}")
+}
+
 pub fn op_key(verb: &str, prompt_version: &str, content_hash: &str, start_line: u32, end_line: u32) -> String {
-    op_key_with_context(verb, prompt_version, content_hash, start_line, end_line, "")
+    op_key_for(verb, prompt_version, "", content_hash, start_line, end_line, "")
 }
 
 /// The same, with the context the client sent folded in.
@@ -114,7 +132,7 @@ pub fn op_key_with_context(
     end_line: u32,
     context_digest: &str,
 ) -> String {
-    format!("op|{verb}|{prompt_version}|{content_hash}|{start_line}|{end_line}|{context_digest}")
+    op_key_for(verb, prompt_version, "", content_hash, start_line, end_line, context_digest)
 }
 
 #[cfg(test)]
@@ -139,6 +157,16 @@ mod tests {
             "a prompt revision must not hit an older conclusion"
         );
         assert_eq!(op_key("harden", "1", "h", 1, 2), op_key("harden", "1", "h", 1, 2));
+    }
+
+    #[test]
+    fn the_model_is_part_of_the_key() {
+        let a = op_key_for("completion", "v1", "model-a", "hash", 1, 2, "");
+        let b = op_key_for("completion", "v1", "model-b", "hash", 1, 2, "");
+        assert_ne!(
+            a, b,
+            "two models asked the same question must not share an answer"
+        );
     }
 
     #[test]

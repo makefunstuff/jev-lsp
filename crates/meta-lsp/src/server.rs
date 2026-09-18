@@ -1711,12 +1711,14 @@ impl MetaServer {
                 // different answers, and the cache is content-addressed or it is wrong.
                 let key = format!(
                     "{}:{}",
-                    meta_core::cache::op_key(
+                    meta_core::cache::op_key_for(
                         "follow-up",
                         meta_core::types::PROMPT_VERSION,
+                        &self.state.config().models.reason.model,
                         &doc.hash,
                         scope.range.start_line,
                         scope.range.end_line,
+                        "",
                     ),
                     question
                 );

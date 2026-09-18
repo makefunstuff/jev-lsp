@@ -15,6 +15,12 @@ pub struct ChatRequest {
     /// Ask the server for a JSON object rather than prose.
     pub json: bool,
     pub think: Think,
+    /// Prefix and suffix for a fill-in-the-middle call, when the tier's endpoint is one.
+    ///
+    /// Carried separately from the prompt rather than parsed back out of it: a FIM endpoint
+    /// wants the two halves as its own fields, and reading them back out of a rendered prompt
+    /// would be this client undoing its own work.
+    pub fim: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,6 +149,37 @@ impl OpenAiCompat {
     }
 
     /// Join `base_url` and `/chat/completions` without doubling or dropping a slash.
+    /// One fill-in-the-middle call. Never streamed: a completion has no prose to stream and
+    /// the client shows it all at once.
+    fn infill(&self, cfg: &TierConfig, req: &ChatRequest) -> Result<ChatResponse> {
+        let url = cfg.base_url.trim_end_matches('/').to_string();
+        let body = Self::build_infill_body(cfg, req).ok_or_else(|| {
+            anyhow!("the fim tier points at a fill-in-the-middle endpoint but the request carries no prefix and suffix")
+        })?;
+        let mut call = self
+            .agent
+            .post(&url)
+            .config()
+            .timeout_global(Some(Duration::from_millis(cfg.timeout_ms.max(1))))
+            .build()
+            .header("content-type", "application/json");
+        if let Some(env) = &cfg.api_key_env {
+            if let Ok(key) = std::env::var(env) {
+                if !key.is_empty() {
+                    call = call.header("authorization", &format!("Bearer {key}"));
+                }
+            }
+        }
+        let mut response = call
+            .send_json(&body)
+            .with_context(|| format!("POST {url}"))?;
+        let raw: serde_json::Value = response
+            .body_mut()
+            .read_json()
+            .with_context(|| format!("decoding the response from {url}"))?;
+        Self::parse_infill_response(&raw)
+    }
+
     pub fn endpoint(base_url: &str) -> String {
         let base = base_url.trim_end_matches('/');
         if base.ends_with("/chat/completions") {
@@ -150,6 +187,55 @@ impl OpenAiCompat {
         } else {
             format!("{base}/chat/completions")
         }
+    }
+
+    /// Is this tier's endpoint a fill-in-the-middle endpoint rather than a chat one?
+    ///
+    /// The URL is the switch. `llama.cpp` serves FIM at `/infill` and chat at
+    /// `/v1/chat/completions`, and a client that has to be told which one it is talking to will
+    /// eventually be told wrong; the path already says it.
+    pub fn is_infill(base_url: &str) -> bool {
+        base_url.trim_end_matches('/').ends_with("/infill")
+    }
+
+    /// The body a fill-in-the-middle endpoint expects.
+    ///
+    /// Not OpenAI-compatible and not pretending to be: `llama.cpp` takes the two halves as
+    /// `input_prefix` and `input_suffix` and answers with `content`. Measured against the local
+    /// server: the model's own template applies, so the answer is 7 tokens where the chat shape
+    /// spends a persona and a paragraph of instructions first.
+    pub fn build_infill_body(cfg: &TierConfig, req: &ChatRequest) -> Option<serde_json::Value> {
+        let (prefix, suffix) = req.fim.as_ref()?;
+        Some(json!({
+            // Named even though a single-model server ignores it: a *router* — one llama.cpp
+            // serving several presets, which is how this project's own machines run — needs it
+            // to know which one to fill with. Verified tolerant on the single-model server and
+            // required by the router.
+            "model": cfg.model,
+            "input_prefix": prefix,
+            "input_suffix": suffix,
+            "n_predict": req.max_tokens,
+            "temperature": req.temperature,
+        }))
+    }
+
+    /// `llama.cpp`'s answer to a FIM request.
+    pub fn parse_infill_response(raw: &serde_json::Value) -> Result<ChatResponse> {
+        let text = raw
+            .get("content")
+            .and_then(|c| c.as_str())
+            .ok_or_else(|| anyhow!("a fill-in-the-middle response has no content"))?
+            .to_string();
+        let n = |k: &str| raw.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+        Ok(ChatResponse {
+            text,
+            prompt_tokens: n("tokens_evaluated"),
+            completion_tokens: n("tokens_predicted"),
+            finish_reason: raw.get("stop").and_then(|s| s.as_bool()).map(|s| {
+                if s { "stop".to_string() } else { "length".to_string() }
+            }),
+            had_reasoning: false,
+        })
     }
 
     pub fn build_body(cfg: &TierConfig, req: &ChatRequest) -> serde_json::Value {
@@ -256,6 +342,9 @@ impl OpenAiCompat {
 
 impl Backend for OpenAiCompat {
     fn chat(&self, cfg: &TierConfig, req: &ChatRequest) -> Result<ChatResponse> {
+        if Self::is_infill(&cfg.base_url) {
+            return self.infill(cfg, req);
+        }
         let url = Self::endpoint(&cfg.base_url);
         let body = Self::build_body(cfg, req);
 
@@ -290,6 +379,12 @@ impl Backend for OpenAiCompat {
         req: &ChatRequest,
         on_delta: &mut dyn FnMut(&str),
     ) -> Result<ChatResponse> {
+        if Self::is_infill(&cfg.base_url) {
+            // A FIM endpoint has nothing to stream; ask it once and report the answer whole.
+            let answer = self.infill(cfg, req)?;
+            on_delta(&answer.text);
+            return Ok(answer);
+        }
         let url = Self::endpoint(&cfg.base_url);
         let body = Self::build_stream_body(cfg, req);
 
@@ -381,6 +476,7 @@ mod tests {
             max_tokens: 64,
             json: true,
             think: Think::Off,
+            fim: None,
         };
         let body = OpenAiCompat::build_body(&tier(), &req);
         assert_eq!(body["model"], "m");
@@ -402,6 +498,7 @@ mod tests {
             max_tokens: 8,
             json: false,
             think: Think::Medium,
+            fim: None,
         };
         let body = OpenAiCompat::build_body(&tier(), &req);
         assert_eq!(body["reasoning_effort"], "medium");
@@ -548,6 +645,67 @@ mod tests {
     }
 
     #[test]
+    fn an_infill_endpoint_is_recognised_by_its_path() {
+        assert!(OpenAiCompat::is_infill("http://127.0.0.1:37313/infill"));
+        assert!(OpenAiCompat::is_infill("http://127.0.0.1:37313/infill/"));
+        assert!(!OpenAiCompat::is_infill("http://127.0.0.1:37313/v1"));
+        assert!(!OpenAiCompat::is_infill("http://127.0.0.1:37313/v1/chat/completions"));
+    }
+
+    #[test]
+    fn a_fim_request_is_the_two_halves_and_no_persona() {
+        let req = ChatRequest {
+            system: "unused by a FIM endpoint".into(),
+            user: "also unused".into(),
+            temperature: 0.0,
+            max_tokens: 64,
+            json: false,
+            think: Think::Off,
+            fim: Some(("def add(a, b):\n    return ".into(), "\n\ndef sub(a, b):".into())),
+        };
+        let body = OpenAiCompat::build_infill_body(&tier(), &req).expect("a FIM body");
+        assert_eq!(
+            body["model"], "m",
+            "a router needs to be told which preset to fill with"
+        );
+        assert_eq!(body["input_prefix"], "def add(a, b):\n    return ");
+        assert_eq!(body["input_suffix"], "\n\ndef sub(a, b):");
+        assert_eq!(body["n_predict"], 64);
+        assert!(
+            body.get("messages").is_none(),
+            "a fill-in-the-middle endpoint takes no chat messages: {body}"
+        );
+    }
+
+    #[test]
+    fn a_chat_request_has_no_fim_body() {
+        let req = ChatRequest {
+            system: "s".into(),
+            user: "u".into(),
+            temperature: 0.0,
+            max_tokens: 8,
+            json: false,
+            think: Think::Off,
+            fim: None,
+        };
+        assert!(OpenAiCompat::build_infill_body(&tier(), &req).is_none());
+    }
+
+    #[test]
+    fn an_infill_answer_is_content_and_its_token_counts() {
+        let raw = json!({"content": " a + b", "tokens_predicted": 7, "tokens_evaluated": 27, "stop": true});
+        let out = OpenAiCompat::parse_infill_response(&raw).expect("an answer");
+        assert_eq!(out.text, " a + b");
+        assert_eq!(out.prompt_tokens, 27);
+        assert_eq!(out.completion_tokens, 7);
+        assert_eq!(out.finish_reason.as_deref(), Some("stop"));
+        assert!(
+            OpenAiCompat::parse_infill_response(&json!({"tokens_predicted": 1})).is_err(),
+            "an answer with no content is an error, not an empty completion"
+        );
+    }
+
+    #[test]
     fn the_stream_body_asks_for_streaming_and_usage() {
         let req = ChatRequest {
             system: "s".into(),
@@ -556,6 +714,7 @@ mod tests {
             max_tokens: 8,
             json: false,
             think: Think::Off,
+            fim: None,
         };
         let body = OpenAiCompat::build_stream_body(&tier(), &req);
         assert_eq!(body["stream"], true);
@@ -575,6 +734,7 @@ mod tests {
             max_tokens: 8,
             json: false,
             think: Think::Off,
+            fim: None,
         };
         let cfg = TierConfig {
             timeout_ms: 200,
