@@ -76,17 +76,45 @@ call from `rc.lua` into your config:
 ln -s /data/jpl/Work/meta-lsp/nvim ~/.local/share/nvim/site/pack/meta/start/meta
 ```
 
+With lazy.nvim, a local directory spec does the same and is what was used against a real
+config (`~/.config/nvim/lua/plugins/init.lua`, which requires each spec file explicitly, so a
+new file alone would have been inert):
+
 ```lua
-require('meta').setup({
-  cmd = { '/data/jpl/Work/meta-lsp/target/release/meta-lsp' },
-  settings = {
-    models = {   -- PROTOCOL.md §10; the same table works under a top-level `meta` key
-      reason = { base_url = 'http://127.0.0.1:37313/v1', model = 'qwen3.6-35b-a3b-iq3xxs' },
-      review = { base_url = 'http://127.0.0.1:37313/v1', model = 'qwen3.6-35b-a3b-iq3xxs' },
-    },
-  },
-})
+{
+  dir = '/data/jpl/Work/meta-lsp/nvim',
+  name = 'meta',
+  lazy = false,          -- must be attached before the first buffer, not on an event
+  config = function()
+    local bin = '/data/jpl/Work/meta-lsp/target/release/meta-lsp'
+    if vim.fn.executable(bin) ~= 1 then
+      vim.notify('meta-lsp binary not built: ' .. bin, vim.log.levels.WARN)
+      return               -- a missing binary must not break startup
+    end
+    require('meta').setup({
+      prefix = '<leader>M',
+      cmd = { bin },
+      settings = {
+        inline_completion = { enabled = false },
+        models = {
+          reason = { base_url = 'http://127.0.0.1:37313/v1', model = 'qwen3.6-35b-a3b-iq3xxs' },
+          review = { base_url = 'http://127.0.0.1:37313/v1', model = 'qwen3.6-35b-a3b-iq3xxs' },
+        },
+      },
+    })
+  end,
+}
 ```
+
+Two deviations from the defaults there, both because of what the surrounding config already
+does, and both worth checking for in any config:
+
+- **`prefix`.** The plugin's default is `<leader>m`. A config that already maps `<leader>ma`
+  and `<leader>mb` — Telescope marks and `make` in the sample config — will have one of the
+  two silently win. `<leader>M` keeps every meta key in one namespace and collides with
+  nothing. Check `<leader>m*` before installing.
+- **`inline completion off`.** The sample config runs llama.vim, which owns ghost text. Two
+  providers driving the same surface is worse than one.
 
 `META_BASE_URL` / `META_MODEL` / `META_REVIEW_MODEL` are applied last and override the settings.
 
@@ -115,7 +143,24 @@ replacement is the colon form, `client:supports_method(...)`. The plugin uses th
    (`triggers.diagnostics = "save"`); check `:Meta status` for `calls_last_minute`. Zero after
    a save means the model call was not made or failed, and the reason is in `:LspLog`.
 
-## 6. What is not built
+## 6. Driving a Neovim that is already open
+
+To try this in a long-running Neovim without restarting it, load the setup into it:
+
+```
+:luafile /data/jpl/Work/meta-lsp/test/visual/rc.lua
+```
+
+The attach pass sweeps the open buffers, so a client appears for each distinct workspace root
+among them — six buffers in six projects is six servers, which is ordinary LSP behaviour and
+worth knowing before it surprises you.
+
+Over Herdr, drive it with `pane send-text` and then `pane send-keys <pane> enter`. **Do not use
+`pane run`**: it wraps the text in a bracketed paste, and Neovim inserts pasted text into the
+buffer whatever mode it is in — two accidental edits to a real file before that was clear. Send
+`esc` first in any case.
+
+## 7. What is not built
 
 Stated so nothing here promises a surface that does not exist:
 
