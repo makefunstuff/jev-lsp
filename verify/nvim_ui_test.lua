@@ -799,6 +799,95 @@ do
   check(statusline.component() == '', 'the segment is empty again with nothing in flight', vim.inspect(statusline.component()))
 end
 
+-- 7. A chooser that switches on `kind` ----------------------------------------------------
+
+-- snacks' `vim.ui.select` branches on `opts.kind == 'codeaction'` and then treats every item
+-- as Neovim's `{ action, ctx }` pair, dereferencing `item.ctx.client_id`
+-- (`snacks/picker/format.lua:350`). Our items carry `action` and no `ctx`, so asking for that
+-- kind crashed the picker in a real config before it drew anything. The stub below does what
+-- snacks does, so the same mistake fails here.
+do
+  local items = {
+    {
+      action = {
+        title = 'Fix: file handle is never closed',
+        kind = 'quickfix',
+        data = { summary = 'line 5 · 1 file' },
+      },
+    },
+  }
+  local asked, rendered, chosen
+  local stock = vim.ui.select
+  vim.ui.select = function(list, opts, cb)
+    asked = true
+    if opts.kind == 'codeaction' then
+      for _, item in ipairs(list) do
+        -- exactly what snacks does with an item it believes came from vim.lsp.buf.code_action
+        local _ = vim.lsp.get_client_by_id(item.ctx.client_id)
+      end
+    end
+    rendered = opts.format_item and opts.format_item(list[1]) or nil
+    cb(list[1], 1)
+  end
+  local ok = require('meta.picker').select(items, function(choice)
+    chosen = choice
+  end)
+  vim.ui.select = stock
+
+  check(ok, 'a chooser that switches on `kind` does not break the picker')
+  check(asked, 'the items reach the chooser')
+  check(
+    type(rendered) == 'string' and rendered:find('file handle is never closed', 1, true) ~= nil,
+    'the chooser renders our own text through format_item',
+    vim.inspect(rendered)
+  )
+  check(chosen == items[1], 'the choice comes back to the caller')
+end
+
+-- 8. Command arguments are arrays ----------------------------------------------------------
+
+-- `ExecuteCommandParams.arguments` is `LSPAny[]`, and the server reads `arguments.first()`.
+-- `meta.plan` sent a map, so the transport rejected it before the command ran: every press of
+-- `:Meta plan` answered `invalid type: map, expected a sequence`. The entry points are driven
+-- here with the request captured, so the shape is checked without spending a model call.
+do
+  local client = vim.lsp.get_clients({ name = 'meta' })[1]
+  if client == nil then
+    skip('command argument shapes', 'no meta client attached')
+  else
+    local captured = {}
+    local orig = client.request
+    client.request = function(_, method, params)
+      if method == 'workspace/executeCommand' then
+        captured[#captured + 1] = params
+      end
+      return true
+    end
+    local plugin = require('meta')
+    plugin.plan('uitest goal')
+    plugin.review()
+    plugin.explain()
+    plugin.status()
+    client.request = orig
+
+    check(#captured >= 4, 'every command entry point sends a request', ('%d captured'):format(#captured))
+    local offenders = {}
+    for _, params in ipairs(captured) do
+      local args = params.arguments
+      -- a sequence: empty, or its first slot is filled. A map has keys and no slot 1.
+      local is_array = type(args) == 'table' and (next(args) == nil or args[1] ~= nil)
+      if not is_array then
+        offenders[#offenders + 1] = ('%s -> %s'):format(params.command, vim.inspect(args))
+      end
+    end
+    check(
+      #offenders == 0,
+      'arguments reach the server as an array, not a map',
+      table.concat(offenders, '; ')
+    )
+  end
+end
+
 -- Report ---------------------------------------------------------------------------------------
 
 for _, c in ipairs(vim.lsp.get_clients({ name = 'meta' })) do

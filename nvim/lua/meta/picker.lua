@@ -317,7 +317,12 @@ function M.select(items, on_choice)
   local preview = chooser ~= stock_select
   local ok, err = pcall(chooser, items, {
     prompt = 'Code actions:',
-    kind = 'codeaction',
+    -- No `kind = 'codeaction'` here. snacks' `vim.ui.select` switches on it and takes a branch
+    -- written for Neovim's own code-action flow, where each item carries `{ action, ctx }` from
+    -- `vim.lsp.buf.code_action`. Our items carry `{ action }`, so that branch indexes a nil
+    -- `ctx` and the picker dies before it draws anything — which is exactly what it did in a
+    -- real config with snacks installed. `format_item` alone is the documented contract, and
+    -- it is enough: every chooser that honours it renders our own two-line text.
     format_item = function(item)
       return format_item(item, preview)
     end,

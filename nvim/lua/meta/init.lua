@@ -220,12 +220,14 @@ end
 --- @param goal? string
 function M.plan(goal)
   if goal ~= nil and vim.trim(goal) ~= '' then
-    M.command('meta.plan', { goal = vim.trim(goal), scope = cursor_scope() })
+    -- `arguments` is an LSP array, not a map: the server reads `arguments.first()`, and a
+    -- map is rejected in transport before the command runs.
+    M.command('meta.plan', { { goal = vim.trim(goal), scope = cursor_scope() } })
     return
   end
   vim.ui.input({ prompt = 'meta goal: ' }, function(input)
     if input ~= nil and vim.trim(input) ~= '' then
-      M.command('meta.plan', { goal = vim.trim(input), scope = cursor_scope() })
+      M.command('meta.plan', { { goal = vim.trim(input), scope = cursor_scope() } })
     end
   end)
 end
