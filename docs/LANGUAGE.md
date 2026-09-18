@@ -192,6 +192,6 @@ whole server.
   be excluded from.
 - **Silent skips.** Every buffer that is attached but not analysed reports why.
 - **Mutating buffer state from the language hook.** Asserted by the probe.
-- **Adding non-standard fields to `inlineCompletion` params** (Copilot ships
-  `textDocument.version` and `formattingOptions`). N6; staleness is handled server-side by
-  content hash and position.
+- **Adding non-standard fields to a standard method's params.** N6: staleness is handled
+  server-side by content hash and position, so a method never needs a field the spec does not
+  define.

@@ -40,7 +40,6 @@ require('meta').setup({
     models = {
       reason = { base_url = BASE, model = MODEL, timeout_ms = 120000 },
       review = { base_url = BASE, model = REVIEW, timeout_ms = 120000 },
-      fim = { base_url = BASE, model = MODEL, timeout_ms = 30000 },
     },
   },
 })

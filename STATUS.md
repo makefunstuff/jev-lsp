@@ -6,15 +6,25 @@ the background and proposing work through native surfaces — rather than a prom
 **State**: working and verified end to end. Design frozen in `PROTOCOL.md`; implementation
 in `crates/` and `nvim/`; verification in `verify/`.
 
-**Next action**: nothing is open. The last question was whether the defect classes added to the
-prompt this session were *why* the review catches its defects; the A/B says no — both arms catch
-4/4, and the control arm is marginally cleaner (no finding on the file with nothing wrong). The
-classes were reverted, since a change that does not move a measured number is prompt noise. The
-review's quality is the model's, on this prompt shape, with the harness finally measuring it:
-4/4 planted defects, 4/4 precision, zero discards, zero noise: inline-completion ghost text *was* driven live in a
-PTY when it was built — Neovim fires the insert-mode events headless withholds, and that run also
-caught a defect the headless tests had missed — so every surface has been exercised live at least
-once, and the suite covers all of them on every change.
+**Next action**: nothing is open. **Inline completion is gone** (2026-09-19, at the user's
+decision): the `fim` tier, the `textDocument/inlineCompletion` method, the
+`inlineCompletionProvider` injection, the gate stack, the `<Tab>` acceptance and their
+harnesses are removed from the server, the plugin, the contract and the docs. Generated code is
+asked for — an action, `:Meta ask` — rather than offered under the cursor; the staged
+`qwen2.5-coder-7b` preset was reverted with it.
+
+**Retracted (2026-09-19).** The two `verify/nvim_ui_test.lua` failures recorded here on
+2026-09-18 (the sibling buffer's `MARKER_SIBLING_A` never reaching the prompt) do not
+reproduce: three consecutive runs are **0 failures, 0 skips**. The root cause given for them —
+`push_definitions` returning early because a stock Neovim 0.12 ships no Python parser, which is
+still true (`vim.treesitter.language.add('python')` answers `No parser for language "python"`) —
+was never established as the cause of those failures, and the checks that failed do not read the
+pushed context at all. The likeliest explanation is the one `docs/VERIFICATION.md` warns about:
+a stale stub process bound to the port, since a fresh stub on a free port makes every one of
+those checks pass. What is verified now: 28/28 on the independent client (including the
+assertion that no draft capability is advertised), smoke 44/44, plan 35/35, parity 12/12,
+queue 5/5, config race 3/3, supersede 7/7, dismiss 9/9, nvim_live and nvim_ui_test 0/0,
+latency 7/7 paths, quality_eval 4/4 with zero findings on the clean files.
 
 **Previously**: everything in the roadmap is built. The next useful step is a longer
 real-model soak — the six runs so far are one language on one model, and the last three
@@ -40,9 +50,10 @@ which a headless harness cannot drive.
 - UTF-8 position encoding, frozen (PROTOCOL N1).
 - No custom `meta/…` LSP methods (N6). `workspace/executeCommand` plus `$/progress` is the
   whole back-channel.
-- **Advertise only what is served** (PROTOCOL §2). `codeLensProvider`, `inlayHintProvider`,
-  `inlineCompletionProvider` are designed but not advertised; `meta.plan`/`apply`/`revert`
-  are specified but not advertised.
+- **Advertise only what is served** (PROTOCOL §2). A capability nothing answers for is a lie
+  the client acts on, and `verify/lsp_client.py` asserts the absence as well as the presence.
+- **No ghost text.** Inline completion was removed on 2026-09-19 (see the log). The cursor is
+  not a place this server writes to; generated code arrives as an action or an answer.
 - **`explain` is a command, not a code action**, because a resolved action's `command` is
   executed by the client by sending it back to the server, so it cannot open a buffer.
 - The plugin, not the server, owns UI that LSP cannot express: text input, scratch buffers,
@@ -54,15 +65,20 @@ which a headless harness cannot drive.
 
 | Check | Result |
 |---|---|
-| `cargo test` | 200 passing, no warnings |
-| `cargo build --release` | 4.9 MB, no warnings |
+| `cargo test` | 219 passing, no warnings |
+| `cargo build --release` | no warnings, no errors |
 | `verify/probes/run.sh` | 7 probes green |
-| `python3 verify/smoke.py` | 32/32 against the real binary |
-| `python3 verify/lsp_client.py --server …` | 27 ok, 0 FAIL, 0 skip (independent client) |
-| `nvim --headless -l verify/nvim_live.lua` | 0 failures, 0 skips |
+| `python3 verify/latency.py` | 7/7 paths within budget against a model made 2 s slow |
+| `python3 verify/queue_test.py` / `config_race_test.py` / `supersede_probe.py` | 5/5, 3/3, 7 ok 0 FAIL |
+| `python3 verify/smoke.py` | 44/44 against the real binary |
+| `python3 verify/lsp_client.py --server … --stub-model-url …` | 28 ok, 0 FAIL, 0 skip (independent client, including the assertion that no draft capability is advertised) |
+| `nvim --headless -l verify/nvim_live.lua` | 0 failures, 0 skips with a stub endpoint (1 skip without one: the resolve step has no model) |
 | `python3 verify/plan_test.py` | 35/35 |
 | `python3 verify/cli_parity.py` | 12/12 |
-| `nvim --headless -l verify/nvim_ui_test.lua` | 0 failures, 0 skips, 48 ok |
+| `python3 verify/outcome_test.py` | 18/18 — the `meta.outcome` record and the `meta.usage` counts |
+| `python3 verify/quality_eval.py --base-url … --model deepseek/deepseek-v4-flash` | 4/4 recall, 4/4 precision, 0 findings on 2 clean files |
+| `python3 verify/repo_bench.py --repo . --limit 40` | 40 files, 33 analysed, 62 findings, **3.21 per 1000 lines** (three runs: 3.21 / 3.48 / 3.71; 7 files per run outran the 60 s per-file bound and are reported as such). Measured 2026-09-18, before the inline-completion removal, which touches no findings path |
+| `nvim --headless -l verify/nvim_ui_test.lua` | 0 failures, 0 skips — three consecutive runs with a fresh stub (`--stub-model-url`-style endpoints matter: a stale stub on the port is what VERIFICATION.md §"red run" warns about) |
 
 The independent client is written from the specification and shares no code with the server;
 it caught two things the unit tests could not, both now resolved and one of them documented
@@ -72,6 +88,8 @@ as a deliberate boundary in `docs/VERIFICATION.md` §10.
 
 | Date | Event |
 |---|---|
+| 2026-09-19 | **Inline completion removed, at the user's decision.** Not just the local coder model: `fim` at all — the tier, `textDocument/inlineCompletion`, the `inlineCompletionProvider` injection, the `<Tab>` acceptance, the prompt and schema, the per-minute window and the prefix floor, and the three harnesses that covered them. `crates/meta-lsp/src/inline.rs` and `advertised.rs` are deleted, so the transport boundary is untouched again and `Server::new(...).serve(service)` is a plain tower-lsp service; the `meta.status` line no longer reports a FIM window and `meta.usage` no longer counts accepted completions (the `meta.outcome` event is still recorded if a stale client sends one). The staged `qwen2.5-coder-7b` preset was reverted from the homelab IaC source, and the live `models.ini` was never touched. Reason given: generated code is asked for, not suggested under the cursor. 219 unit tests, warning-free build; smoke, lsp_client, plan, parity, dismiss, outcome and repo_bench all green. |
+| 2026-09-18 | **Three surfaces, quiet, measured — and an outcome the server finally hears.** The plugin's own user could not say what it was for, so six products behind eighteen keymaps are cut to four (`a` act, `u` take it back, `q` ask, `s` status); everything else still works through `:Meta …`. Findings are quieted in exactly one place — `findings::build`, the set every surface reads — and the prompt now asks for less (`PROMPT_VERSION` 3→4): `verify/quality_eval.py` holds 4/4 planted defects with **0 findings on the two clean files**. Every outcome the user makes is recorded (`meta.outcome` from the picker, `:Meta dismiss`, undo, and `<Tab>` accepting a completion; accepts only, since a dismissed overlay is indistinguishable from a cursor move) and counted by `:Meta usage` — the client was the only witness and never said anything, which is why "is this working" had no answer; `verify/outcome_test.py` proves the counting and fails on the binary without it. Completions get one shape: an answer that continues a line which already has code is the rest of *that* line. And the volume is measured on real code at last — `verify/repo_bench.py`, 40 files of this repository, 34 analysed, **62 findings, 3.21 per 1000 lines**. The `qwen2.5-coder-7b` preset for the `fim` tier is staged in the homelab IaC source but deliberately not deployed: CUDA1 has 1.7 GiB free against its 7.5 GiB of weights, and the router reads presets only at startup. |
 | 2026-09-18 | Probe pass over the Neovim 0.12.5 LSP runtime; two surprises recorded (absent-version crash, arbitrary-token progress) |
 | 2026-09-18 | Design frozen: `PROTOCOL.md` plus `docs/{ARCHITECTURE,UX,MODEL,VERIFICATION,ROADMAP}.md` |
 | 2026-09-18 | Audit found the streaming design smuggled a bare progress token; fixed and verified by `verify/probes/streaming.lua` |

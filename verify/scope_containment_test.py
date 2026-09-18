@@ -91,8 +91,7 @@ def main():
         server.settings = {
             "budget": {"max_calls_per_min": 30, "max_calls_per_hour": 100},
             "models": {"reason": {"base_url": f"http://127.0.0.1:{port}/v1", "model": "stub-model"},
-                       "review": {"base_url": f"http://127.0.0.1:{port}/v1", "model": "stub-model"},
-                       "fim": {"base_url": f"http://127.0.0.1:{port}/v1", "model": "stub-model"}},
+                       "review": {"base_url": f"http://127.0.0.1:{port}/v1", "model": "stub-model"}},
         }
         server.request("initialize", {"processId": os.getpid(), "rootUri": "file:///tmp",
                                       "capabilities": {"workspace": {"configuration": True}}})

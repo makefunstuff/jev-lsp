@@ -10,7 +10,7 @@
 --
 -- It is kept because it documents the failure and prints the shape of the question. The
 -- design does not depend on the answer: the plugin snapshots buffer content around every
--- applied edit and provides `:Meta undo` (docs/UX.md §3.5).
+-- applied edit and provides `:Meta undo` (docs/UX.md §3.4).
 --
 -- To settle it, run interactively:
 --   1. start nvim, open a file, set undolevels to a sane value

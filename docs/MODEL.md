@@ -2,12 +2,11 @@
 
 ## 1. Tiers
 
-Three tiers, each an independently configured endpoint. Any tier may be local
+Two tiers, each an independently configured endpoint. Any tier may be local
 (llama.cpp OpenAI-compatible) or remote; the router does not care.
 
 | Tier | Purpose | Model shape | Latency target | Called from |
 |---|---|---|---|---|
-| `fim` | Fill-in-the-middle ghost text | small, 1–4B, FIM-trained | p50 < 150 ms | `inlineCompletion` only |
 | `reason` | Actions, plans, explanations | 7–32B instruct | p50 < 2 s (resolve) | `codeAction/resolve`, `meta.plan` |
 | `review` | Findings, post-apply verification | 7–32B instruct, different prompt | background, no user wait | worker, `meta.review` |
 
@@ -28,7 +27,6 @@ trigger -> verb -> tier
 
 | Trigger | Verb | Tier |
 |---|---|---|
-| `inlineCompletion` | — | `fim` |
 | save / idle analysis | — | `review` |
 | `codeAction/resolve` | fix, harden, types, docs, rewrite, test, generate | `reason` |
 | `codeAction/resolve` | explain, review | `reason` |
@@ -178,7 +176,6 @@ Required for a harness to be learnable:
 Accounted in `budget.rs`, checked before the call, incremented after:
 
 - per-minute and per-hour call caps, per-session token cap (PROTOCOL §5)
-- per-buffer inline-completion cap, so one file cannot consume the session
 - a cost line per call: `model tier tokens_in tokens_out ms trigger` at debug level, and
   the same numbers surfaced by `:Meta status`
 

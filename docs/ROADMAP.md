@@ -12,8 +12,8 @@ units: U2's treesitter scope is still structural-only — grammars are a depende
 not an oversight, and `scope_source` reports the fallback honestly — and its dismissal file
 *is* implemented, in the plugin (`nvim/lua/meta/init.lua`: `:Meta dismiss` writes
 `<repo>/.git/meta/dismissed.json` and `filter_findings` drops dismissed ids from the pull).
-Inline completion's ghost text is unverified in a headless harness
-(`docs/VERIFICATION.md` §9).
+Inline completion (U7) was removed on 2026-09-19, at the user's decision: generated code is
+asked for rather than suggested under the cursor.
 
 ## U0 — Scaffold ✅
 
@@ -81,13 +81,12 @@ via the `review` tier, divergence diagnostics.
 **Accept**: golden test creates a test file and edits the source in one `WorkspaceEdit`;
 injected post-apply divergence produces an `ERROR` diagnostic naming the mismatch.
 
-## U7 — Inline completion
+## U7 — Inline completion ✗ withdrawn
 
-`inlineCompletion` handler, FIM tier, the server-side gate stack (idle floor, prefix
-floor, dedupe, per-buffer cap), ghost-text acceptance.
-
-**Accept**: p50 within budget against the stub; the defect-injection "unbounded FIM calls"
-test passes; with `enabled = false` the server issues zero FIM calls.
+Built, then removed on 2026-09-19 at the user's decision: the ghost-text path (`fim` tier,
+`inlineCompletion` handler, gate stack, `<Tab>` acceptance) is gone from the server, the
+plugin, the contract and the harnesses. Generated code is asked for — an action, `:Meta ask` —
+rather than offered under the cursor. `STATUS.md` records the decision.
 
 ## U8 — CLI parity
 

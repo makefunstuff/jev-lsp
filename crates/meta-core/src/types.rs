@@ -13,7 +13,7 @@ pub const RESULT_SCHEMA: &str = "meta.result/1";
 ///
 /// Bumped whenever the wording or the schema changes, so a conclusion produced by an older
 /// prompt can never be served as if it came from the current one.
-pub const PROMPT_VERSION: &str = "3";
+pub const PROMPT_VERSION: &str = "4";
 
 /// What a verb does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -119,7 +119,6 @@ impl Verb {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Tier {
-    Fim,
     Reason,
     Review,
 }

@@ -340,6 +340,7 @@ fn review(config: &Config, target: &Target, deps: &Deps, log: &mut Vec<String>) 
                 &prepared.doc.text,
                 &answer,
                 &lang::profile(&prepared.doc.language.name),
+                config.noise.max_visible_findings,
             );
             deps.cache.put(
                 &key,
@@ -603,7 +604,6 @@ fn call(
         max_tokens: ceiling(spec.max_tokens, tier),
         json: spec.json,
         think: tier.think,
-        fim: None,
     };
     let started = Instant::now();
     let response = deps
@@ -651,7 +651,6 @@ fn ceiling(spec_max: u32, tier: &TierConfig) -> u32 {
 
 fn tier_name(tier: Tier) -> &'static str {
     match tier {
-        Tier::Fim => "fim",
         Tier::Reason => "reason",
         Tier::Review => "review",
     }

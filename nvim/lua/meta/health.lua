@@ -11,8 +11,8 @@
 
 local M = {}
 
---- The oldest Neovim the ambient surface is verified against: pull diagnostics, inline
---- completion, and arbitrary-token `$/progress` (`docs/research/nvim-lsp-surface.md`).
+--- The oldest Neovim the ambient surface is verified against: pull diagnostics and
+--- arbitrary-token `$/progress` (`docs/research/nvim-lsp-surface.md`).
 local MIN_VERSION = { 0, 12 }
 
 function M.check()

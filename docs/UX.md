@@ -10,7 +10,6 @@ inline annotation, or a key you already press.
 | Sign column + virtual text | `publishDiagnostics` / pull diagnostics | findings while you work | never — no notifications |
 | Lightbulb / code action menu | `textDocument/codeAction` | all explicit intents | only when invoked |
 | Inline annotation | `textDocument/codeLens` | per-symbol affordances: "explain", "test", "+2 findings" | never |
-| Ghost text | `textDocument/inlineCompletion` | FIM completion, with the imports and open buffers the client pushed for this document | never |
 | Inline hint | `textDocument/inlayHint` | a `meta: N finding(s)` badge on a declaration that has findings, and nothing elsewhere | never |
 | Plan buffer | plugin + `window/showDocument` | multi-step work: a line per step, `<CR>` applies one, `a` the rest, `u` takes one back | once, on completion |
 | Statusline segment | `$/progress` via `LspProgress` | what is running, budget remaining | never |
@@ -35,15 +34,14 @@ the rest, `u` takes the last one on that line back, and each line says what happ
 Nothing is applied until asked (N8), which is why it is a buffer with keystrokes rather than a
 progress bar.
 
-The inline hint is built too (`textDocument/inlayHint`, §1 row 5): a `meta: N finding(s)`
+The inline hint is built too (`textDocument/inlayHint`, §1 row 4): a `meta: N finding(s)`
 badge on a declaration that has findings, and silence everywhere else. It stays **off** by
 default — Neovim switches inlay hints on per *buffer*, not per client, so enabling it for this
-badge also enables every other server's hints in that buffer. `<leader>mh` toggles it, and `:Meta hints on|off`
-does the same.
+badge also enables every other server's hints in that buffer. `:Meta hints on|off` toggles it.
 
 The inline annotation is built (`textDocument/codeLens`, §1 row 3): a clean declaration shows
 `meta: explain`, one with cached findings shows `meta: N finding(s) · fix`, and running it is
-`<leader>ml` at the cursor or `:lua vim.lsp.codelens.run()`. The command never reaches the
+`:lua vim.lsp.codelens.run()` at the cursor or the lens click. The command never reaches the
 server — the plugin handles its own `meta.plugin.` namespace, because opening a buffer is the
 client's decision (PROTOCOL §3.4.1).
 
@@ -54,31 +52,30 @@ complete answer, the first 3 of which are prefill and reasoning.
 
 ## 2. Keymaps and commands
 
+Two products, four keys. Findings → actions, and ask, are what this server is for;
+everything else is reachable by typing. Generated code is asked for, not suggested under the
+cursor: inline completion was removed on 2026-09-19 (STATUS.md).
+
 ```lua
 -- default; all overridable
-<leader>ma   code action (native menu, always available)
-<leader>mp   plan for a goal              -- :Meta plan
-<leader>me   explain scope                -- :Meta explain
-<leader>ml   run the lens on this line     -- vim.lsp.codelens.run()
-<leader>mf   ask about what is under the cursor -- :Meta followup
-<leader>mw   where is this handled in the project -- :Meta where
-<leader>mr   review this file
-<leader>mt   add tests for scope
-<leader>md   dismiss finding at cursor
-<leader>ms   status: queue, budgets, cache hit rate
-<leader>mx   cancel all in-flight work
+<leader>ma   code action (picker, summary in the preview pane)
 <leader>mu   undo the last applied edit
+<leader>mq   ask a question
+<leader>ms   status: queue, budgets, cache hit rate
 ```
 
-Commands: `:Meta plan|explain|followup|review|session|hints|status|stop|start|undo|dismiss|log|recompute`.
+Reachable by typing: `:Meta explain|review|plan|session|usage|stop|start`, alongside
+`followup|where|hints|undo|dismiss|log|recompute`.
 
-`:Meta session` opens what this server has done at this root — every command and every
-analysis, newest first, with a pointer to the log itself (`<root>/.git/meta/session.jsonl`).
-An entry that names a place says so (`review_me.py:5`), and `<CR>` on it opens that file at
-that line: the record is a history you can walk, not only read.
+`:Meta usage` is the answer to "is this working": published findings, files analysed, and
+counts of what was done with them — applied, dismissed, accepted, undone — over what the
+session log still holds. `:Meta session` opens the log itself at this root (`<root>/.git/meta/session.jsonl`),
+newest first, with a pointer to the file. An entry that names a place says so
+(`review_me.py:5`), and `<CR>` on it opens that file at that line: the record is a history you
+can walk, not only read.
 
-`stop` is the kill switch from PROTOCOL §5 and must be reachable in one mapping without
-opening anything.
+`stop` is the kill switch from PROTOCOL §5 and must be reachable without opening anything —
+it is one `:Meta stop` away, and the status line it silences says so.
 
 ## 3. Scenarios
 
@@ -123,14 +120,7 @@ not a rendered TUI grid, so nothing fights your config.
 computed from the returned `TextEdit` applied to a scratch copy. Nothing touches the
 buffer until `<CR>`. Approve or reject per step; `q` leaves everything untouched.
 
-### 3.4 Inline completion
-
-Off by default. When enabled: after 400 ms of idle in insert mode with ≥ 8 non-space
-characters before the cursor, a FIM call returns ghost text. `<Tab>` accepts, `<C-e>`
-dismisses, moving on clears it. The statusline shows the FIM call count when it exceeds
-half the per-minute budget, so the cost is never invisible.
-
-### 3.5 Undo
+### 3.4 Undo
 
 `:Meta undo` (`<leader>mu`) restores the buffer snapshot taken before the last applied
 edit. This does not rely on Neovim's undo-block behaviour, which is unverified for
@@ -146,11 +136,11 @@ The failure mode of every ambient agent is crying wolf. Enforced:
 - **Display cap.** At most `noise.max_visible_findings` (default 5) findings visible per
   buffer at once. The rest are summarized in the code lens as `+N findings` and in
   `:Meta status`. Severity-ordered, stable across refreshes.
-- **Dismissal is permanent and per-repository.** `<leader>md` writes the finding's
+- **Dismissal is permanent and per-repository.** `:Meta dismiss` writes the finding's
   content-addressed key to `.git/meta/dismissed.json` (never into the repo tree).
 - **Suppression.** A verb dismissed twice in a session stops being offered until reload.
-- **Quiet by default.** `inlay_hints` and `inline_completion` ship disabled; diagnostics
-  do not run per keystroke.
+- **Quiet by default.** `inlay_hints` ships disabled; diagnostics do not run per
+  keystroke.
 - **Cost transparency.** Every model call logs one line (model, tier, tokens, ms, trigger
   reason) at debug level, and the statusline exposes the counters. Nothing hidden.
 

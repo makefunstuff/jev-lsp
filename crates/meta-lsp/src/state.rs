@@ -95,9 +95,6 @@ pub struct AppState {
     /// The text each server-applied edit was predicted to produce, checked against what
     /// actually arrives on the next sync (PROTOCOL.md §8).
     predictions: Mutex<HashMap<String, String>>,
-    /// A separate window for the `fim` tier: completions fire on typing and must not starve
-    /// the work the user explicitly asked for.
-    pub fim: crate::inline::FimLimiter,
     pub cache: Cache,
     pub budget: Budget,
     config: RwLock<Config>,
@@ -131,7 +128,6 @@ impl AppState {
             artifacts: Mutex::new(Vec::new()),
             applied: Mutex::new(HashMap::new()),
             predictions: Mutex::new(HashMap::new()),
-            fim: crate::inline::FimLimiter::new(),
             cache: Cache::new(512),
             budget: Budget::new(2),
             config: RwLock::new(config),
@@ -333,11 +329,6 @@ impl AppState {
 
     pub fn definitions(&self, uri: &str, version: i32) -> Option<Vec<ClientDefinition>> {
         self.known_for(uri, version).map(|k| k.definitions)
-    }
-
-    /// The standing context for a document, for paths that cannot assemble it per request.
-    pub fn standing_context(&self, uri: &str, version: i32) -> Vec<meta_core::context::Provided> {
-        self.known_for(uri, version).map(|k| k.context).unwrap_or_default()
     }
 
     pub fn plan(&self, id: &str) -> Option<meta_core::types::Plan> {

@@ -12,9 +12,10 @@
 --
 -- Checks, in order:
 --
---   0. the surfaces this unit does not own still work: every default keymap is mapped,
---      `<leader>ma`/`<leader>mv` are mapped in visual mode too, `:Meta status` dispatches, and
---      `meta.status` round-trips with the server reporting under the token the plugin issued;
+--   0. the surface: exactly the four surviving keymaps are mapped (`<leader>ma` in visual
+--      mode too, since a selection is the scope), the cut ones are gone, `:Meta status`
+--      dispatches, and `meta.status` round-trips with the server reporting under the token the
+--      plugin issued;
 --   1. the picker opens and lists actions for a file with a findable issue, asks with
 --      `triggerKind = 1` and the cursor range, resolves index 1, and the edit it resolves to
 --      reaches the buffer byte-for-byte — exactly what the returned `TextEdit`s said;
@@ -165,23 +166,15 @@ meta.setup({
 })
 vim.cmd('filetype on')
 
--- The surface this unit touched: `<leader>ma` changes implementation and `<leader>mv` is new.
--- Everything else in `docs/UX.md` §2 has to be exactly where it was, and `:Meta` has to reach
--- the same functions it always did.
+-- The surface is four keys. Everything else the plugin can do is still reachable, by typing
+-- (`:Meta …`), and the cut is the point of this unit: the plugin's own user could not say what
+-- it was for. `<leader>ma` is the picker, mapped in visual mode as well.
 do
   local expected = {
     '<leader>ma',
-    '<leader>mv',
-    '<leader>mp',
-    '<leader>me',
-    '<leader>mr',
-    '<leader>mt',
-    '<leader>md',
-    '<leader>ms',
-    '<leader>mx',
     '<leader>mu',
-    '<leader>mS',
-    '<leader>mG',
+    '<leader>mq',
+    '<leader>ms',
   }
   local missing = {}
   for _, lhs in ipairs(expected) do
@@ -189,11 +182,20 @@ do
       missing[#missing + 1] = lhs
     end
   end
-  check(#missing == 0, 'every default keymap is still mapped, and <leader>mv is new in this unit', vim.inspect(missing))
+  check(#missing == 0, 'the four surviving keymaps are mapped', vim.inspect(missing))
   check(
-    vim.fn.maparg('<leader>ma', 'x') ~= '' and vim.fn.maparg('<leader>mv', 'x') ~= '',
-    'the picker and its diff variant are mapped in visual mode'
+    vim.fn.maparg('<leader>ma', 'x') ~= '',
+    'the picker is also mapped in visual mode, where a selection is the scope'
   )
+  local cut = { '<leader>mv', '<leader>mp', '<leader>me', '<leader>mr', '<leader>mx',
+    '<leader>md', '<leader>mS', '<leader>mG', '<leader>mh', '<leader>ml' }
+  local still = {}
+  for _, lhs in ipairs(cut) do
+    if vim.fn.maparg(lhs, 'n') ~= '' then
+      still[#still + 1] = lhs
+    end
+  end
+  check(#still == 0, 'the cut keymaps are gone, not quietly kept', vim.inspect(still))
 end
 
 --- @return integer bufnr, boolean attached

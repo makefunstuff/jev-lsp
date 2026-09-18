@@ -2,7 +2,7 @@
 """The fast paths, measured against a *slow* model.
 
 Every path here is one the editor takes without being asked: rendering a buffer asks for lenses
-and hints, opening the menu asks for code actions, typing asks for a completion. A model call
+and hints, opening the menu asks for code actions. A model call
 anywhere in them is a stutter the user cannot explain, so each is timed against a budget.
 
 The stub model is started with a two-second delay, which is the point: "fast because the model
@@ -99,7 +99,6 @@ def main():
         "models": {
             "reason": {"base_url": f"http://127.0.0.1:{port}/v1", "model": "stub-model"},
             "review": {"base_url": f"http://127.0.0.1:{port}/v1", "model": "stub-model"},
-            "fim": {"base_url": f"http://127.0.0.1:{port}/v1", "model": "stub-model"},
         }
     }
 
@@ -183,20 +182,6 @@ def main():
                 timeout=30,
                 poll=0.0002,
             ),
-        )
-        timed(
-            "inlineCompletion",
-            lambda: server.request(
-                "textDocument/inlineCompletion",
-                {
-                    "textDocument": {"uri": uri},
-                    "position": {"line": 5, "character": 0},
-                    "context": {"triggerKind": 1},
-                },
-                timeout=30,
-                poll=0.0002,
-            ),
-            budget=MODEL_DELAY_MS - 500,
         )
         timed(
             "meta.status",

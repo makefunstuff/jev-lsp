@@ -1,4 +1,4 @@
---- The action picker: `<leader>ma`'s flow, and `<leader>mv`'s diff preview.
+--- The action picker: `<leader>ma`'s flow, and the diff preview behind `preview = true`.
 ---
 --- This is the plugin's own menu rather than `vim.lsp.buf.code_action`, for three things the
 --- native client cannot do (`docs/ROADMAP.md` U4):
@@ -408,6 +408,21 @@ local function spin(token, label)
   return stop
 end
 
+--- Tell the server what became of the action it offered.
+---
+--- The server never sees the buffer: the picker applies the edit itself, so without this the
+--- only witness to acceptance is the user's memory — which is why "is this working" had no
+--- answer. A command rather than a custom method (N6), fire and forget: the answer is not
+--- shown, and a bookkeeping failure must not become a failed action.
+--- @param c vim.lsp.Client?  the meta client, when one is attached
+--- @param params table  `{ kind, verb?, line? }` (`meta.outcome`)
+local function report(c, params)
+  if c == nil then
+    return
+  end
+  plugin().command('meta.outcome', { params }, function() end)
+end
+
 --- Apply an edit, and say so when it does not land.
 ---
 --- A refusal — a `TextDocumentEdit` whose version moved under it — comes back as `false` and is
@@ -438,7 +453,14 @@ local function finish(c, bufnr, action, opts)
     if opts.preview then
       diff.propose(action.edit, { bufnr = bufnr, encoding = c.offset_encoding })
     else
-      apply(c, action.edit)
+      local line = vim.api.nvim_win_get_cursor(0)[1] - 1
+      if apply(c, action.edit) then
+        report(c, {
+          kind = 'action-applied',
+          verb = type(action.data) == 'table' and action.data.verb or nil,
+          line = line,
+        })
+      end
     end
     return
   end
@@ -518,7 +540,10 @@ function M.choose(c, bufnr, actions, opts)
   end
   M.select(items, function(choice)
     if choice == nil then
-      return -- dismissed: nothing is applied and nothing is said
+      -- Dismissed: nothing is applied, but the dismissal is the answer to "was this worth
+      -- showing", and this callback is the only place that sees it.
+      report(c, { kind = 'action-dismissed' })
+      return
     end
     run(c, bufnr, choice.action, opts)
   end)
@@ -535,7 +560,8 @@ end
 --- @field preview? boolean  Open the resolved edit as a diff instead of applying it
 --- @field only? string[]    `CodeActionKind`s to offer (PROTOCOL §2: prefix-matched)
 
---- The `<leader>ma` flow. `<leader>mv` is the same flow with `preview = true`.
+--- The `<leader>ma` flow. `M.action({ preview = true })` is the same flow with the resolved
+--- edit opened as a side-by-side diff instead of applied; nothing binds it by default.
 --- @param opts? meta.PickerOpts
 function M.action(opts)
   opts = opts or {}

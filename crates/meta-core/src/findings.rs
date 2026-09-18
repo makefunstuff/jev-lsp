@@ -6,7 +6,7 @@
 use crate::contract::{parse_severity, RawFindings};
 use crate::lang::Profile;
 use crate::scope::line_len;
-use crate::types::{Finding, Verb};
+use crate::types::{Finding, Severity, Verb};
 use sha2::{Digest, Sha256};
 
 /// Findings plus a count of the ones that were discarded for being unusable.
@@ -41,7 +41,18 @@ fn finding_id(label: &str, detail: &str, line: u32, col: u32) -> String {
     d.iter().take(6).map(|b| format!("{b:02x}")).collect()
 }
 
-pub fn build(text: &str, raw: &RawFindings, _profile: &Profile) -> FindingBuild {
+/// The one place the visible finding set is finalised.
+///
+/// `max_findings` is the floor: every surface (diagnostics, code lens, inlay hints) reads the
+/// result of this function, so the same file cannot report different counts depending on where
+/// you look. Warnings outrank information for the budget; within a severity the line order the
+/// analysis produced is kept.
+pub fn build(
+    text: &str,
+    raw: &RawFindings,
+    _profile: &Profile,
+    max_findings: usize,
+) -> FindingBuild {
     let mut findings = Vec::new();
     let mut rejected = 0usize;
 
@@ -91,6 +102,11 @@ pub fn build(text: &str, raw: &RawFindings, _profile: &Profile) -> FindingBuild 
 
     findings.sort_by_key(|f| (f.line, f.start_col));
     findings.dedup_by(|a, b| a.id == b.id);
+    findings.sort_by_key(|f| match f.severity {
+        Severity::Warning => 0u8,
+        Severity::Information => 1u8,
+    });
+    findings.truncate(max_findings);
 
     FindingBuild { findings, rejected }
 }
@@ -105,7 +121,26 @@ mod tests {
     const DOC: &str = "fn a() {\n    let f = File::open(p)?;\n}\n";
 
     fn one(src: &str, text: &str) -> FindingBuild {
-        build(text, &parse_findings(src).unwrap(), &profile("rust"))
+        build(text, &parse_findings(src).unwrap(), &profile("rust"), usize::MAX)
+    }
+
+    /// The floor keeps warnings and drops the rest, and it is the only place that decides.
+    #[test]
+    fn the_cap_keeps_warnings_over_information_and_truncates() {
+        let src = r#"{"findings":[
+            {"anchor":{"match":"File::open(p)"},"label":"info","severity":"information"},
+            {"anchor":{"match":"fn a()"},"label":"warn","severity":"warning"},
+            {"anchor":{"match":"let f"},"label":"warn2","severity":"warning"}]}"#;
+        let raw = parse_findings(src).unwrap();
+        let b = build(DOC, &raw, &profile("rust"), 2);
+        assert_eq!(b.findings.len(), 2);
+        assert_eq!(b.findings[0].label, "warn");
+        assert_eq!(b.findings[1].label, "warn2");
+        assert!(b.findings.iter().all(|f| f.severity == Severity::Warning));
+        // Within a severity the analysis' line order survives the cap.
+        assert!(b.findings[0].line <= b.findings[1].line);
+        let none = build(DOC, &raw, &profile("rust"), 0);
+        assert!(none.findings.is_empty());
     }
 
     #[test]

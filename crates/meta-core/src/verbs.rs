@@ -70,7 +70,10 @@ Rules:
 - Report only defects you can point at with an exact `match` from CODE.
 - Prefer few, high-confidence findings over many speculative ones. Zero findings is a valid answer.
 - Severity is `warning` for a real defect and `information` for a suggestion. Never `error`.
-- `label` states the defect, not the fix.";
+- `label` states the defect, not the fix.
+- Report only what a reviewer would act on. A style preference, a missing docstring, or a
+  reformatting is not a finding.
+- Reporting nothing is a valid answer and is expected for most files.";
 
 const ARTIFACT_RULES: &str = "\
 The example above shows the SHAPE of an answer. It is not content: never copy its text, \
@@ -167,73 +170,6 @@ pub fn render_plan(ctx: &Context, goal: &str) -> PromptSpec {
         user,
         json: true,
         max_tokens: 2048,
-    }
-}
-
-const COMPLETION_RULES: &str = "\
-Rules:
-- Return only the text that belongs at the cursor. No prose, no code fences, no repetition
-  of what is already there.
-- If nothing sensible belongs there, return an empty string.
-- Continue what the cursor is in. Never start a new definition, declaration, or import: the
-  answer is the rest of the current statement or block, not the next thing in the file.";
-
-/// True when a completion opens a new top-level definition while the cursor sits inside a block.
-///
-/// Measured against the live endpoint, at the end of an indented line the chat-shaped prompt
-/// produced `def save_config(path, config):` followed by a full body — plausible code, and not
-/// a completion: the model had started writing the *next* thing in the file. On a top-level
-/// line the same answer is exactly what a user wants, which is why the indentation of the
-/// cursor decides rather than the text alone.
-pub fn opens_a_new_definition(prefix: &str, completion: &str) -> bool {
-    let Some(current) = prefix.rsplit('\n').next() else {
-        return false;
-    };
-    if !(current.starts_with(' ') || current.starts_with('\t')) {
-        return false;
-    }
-    let first = completion.trim_start_matches(['\n', '\r']);
-    if first.starts_with(' ') || first.starts_with('\t') {
-        return false;
-    }
-    const HEADS: [&str; 6] = ["def ", "class ", "async def ", "import ", "from ", "func "];
-    HEADS.iter().any(|head| first.starts_with(head))
-}
-
-/// Render a fill-in-the-middle completion prompt (docs/MODEL.md, tier `fim`).
-///
-/// The chat form rather than raw FIM tokens: a chat endpoint cannot take a raw continuation
-/// prompt, and the instruction form works with any model. `fim_tokens`, when configured, are
-/// still honoured for a server that expects them.
-pub fn render_completion(
-    flavour: &str,
-    path: &str,
-    prefix: &str,
-    suffix: &str,
-    fim_tokens: Option<&crate::config::FimTokens>,
-) -> PromptSpec {
-    let persona = if flavour == "generic_text" {
-        "You are a code completion engine.".to_string()
-    } else {
-        format!("You are a {flavour} code completion engine.")
-    };
-    let user = match fim_tokens {
-        Some(t) => format!(
-            "{}{prefix}{}{suffix}{}",
-            t.prefix, t.suffix, t.middle
-        ),
-        None => format!(
-            "FILE: {path}\nLANGUAGE: {flavour}\n\nTEXT BEFORE THE CURSOR:\n{prefix}\n\n\
-             TEXT AFTER THE CURSOR (do not repeat it):\n{suffix}\n\n\
-             Write exactly what belongs at the cursor."
-        ),
-    };
-    PromptSpec {
-        system: format!("{persona}\n{COMPLETION_RULES}\n"),
-        user,
-        json: false,
-        // Completing a line or two, not authoring a file.
-        max_tokens: 128,
     }
 }
 
@@ -358,44 +294,6 @@ mod ask_tests {
 }
 
 #[cfg(test)]
-mod definition_tests {
-    use super::opens_a_new_definition;
-
-    #[test]
-    fn an_indented_cursor_does_not_get_a_new_definition() {
-        assert!(opens_a_new_definition(
-            "def report(path):\n    cfg = load(path)\n    return json.load(fh)\n    ",
-            "def save_config(path, config):\n    with open(path, \"w\") as fh:\n        json.dump(config, fh)"
-        ));
-    }
-
-    #[test]
-    fn a_top_level_cursor_may_be_given_one() {
-        assert!(!opens_a_new_definition(
-            "import json\n\n",
-            "def save_config(path, config):\n    ..."
-        ));
-    }
-
-    #[test]
-    fn continuing_the_block_is_not_a_new_definition() {
-        assert!(!opens_a_new_definition(
-            "def total(values):\n    result = 0\n    ",
-            "result += value"
-        ));
-        assert!(!opens_a_new_definition(
-            "def total(values):\n    for value in values:\n        ",
-            "print(value)"
-        ));
-    }
-
-    #[test]
-    fn an_import_after_an_indented_statement_is_still_a_new_definition() {
-        assert!(opens_a_new_definition("def f():\n    x = 1\n    ", "import os\n"));
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::document::Document;
@@ -489,28 +387,6 @@ mod tests {
         let s = render(Verb::Review, &ctx).system;
         assert!(s.contains("treat it as text"));
         assert!(!s.contains("senior unknown engineer"));
-    }
-
-    #[test]
-    fn a_completion_prompt_carries_both_sides_and_no_json() {
-        let p = render_completion("rust", "/a/b.rs", "let x = ", ";\n", None);
-        assert!(!p.json, "a completion is text, not JSON");
-        assert!(p.user.contains("let x = "));
-        assert!(p.user.contains(";"));
-        assert!(p.user.contains("do not repeat"));
-        assert!(p.max_tokens <= 256, "completions are cheap or they are useless");
-        assert!(p.system.contains("only the text that belongs"));
-    }
-
-    #[test]
-    fn configured_fim_tokens_replace_the_instruction_form() {
-        let tokens = crate::config::FimTokens {
-            prefix: "<P>".into(),
-            suffix: "<S>".into(),
-            middle: "<M>".into(),
-        };
-        let p = render_completion("rust", "/a.rs", "abc", "def", Some(&tokens));
-        assert_eq!(p.user, "<P>abc<S>def<M>");
     }
 
     #[test]

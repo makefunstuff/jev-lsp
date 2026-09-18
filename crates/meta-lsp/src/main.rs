@@ -4,9 +4,7 @@
 //! product (`codeAction`, `codeAction/resolve`, `textDocument/diagnostic`,
 //! `workspace/executeCommand`). All the thinking lives in `meta-core`.
 
-mod advertised;
 mod engine;
-mod inline;
 mod server;
 mod state;
 mod trace;
@@ -33,7 +31,7 @@ CONFIGURATION:
     lives, three environment variables override the defaults:
 
     META_BASE_URL        OpenAI-compatible base URL for every tier
-    META_MODEL           model name for the reason and fim tiers
+    META_MODEL           model name for the reason tier
     META_REVIEW_MODEL    model name for the review tier
 ";
 
@@ -68,16 +66,7 @@ async fn main() {
 
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
-    // `build` rather than `new`: inline completion is a 3.18-draft method the pinned
-    // `lsp-types` has no handler for, so it is registered as a custom method.
     let (service, socket) = LspService::build(|client| server::MetaServer::new(client, state))
-        .custom_method(
-            "textDocument/inlineCompletion",
-            server::MetaServer::inline_completion,
-        )
         .finish();
-    // `advertised` adds the one draft capability the pinned `lsp-types` cannot express.
-    Server::new(stdin, stdout, socket)
-        .serve(advertised::Advertised::new(service))
-        .await;
+    Server::new(stdin, stdout, socket).serve(service).await;
 }

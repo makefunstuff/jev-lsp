@@ -23,14 +23,6 @@ impl Think {
     }
 }
 
-/// Fill-in-the-middle markers, for a server that expects a raw continuation prompt.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FimTokens {
-    pub prefix: String,
-    pub suffix: String,
-    pub middle: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TierConfig {
@@ -42,9 +34,6 @@ pub struct TierConfig {
     pub max_tokens: u32,
     pub temperature: f32,
     pub think: Think,
-    /// Only meaningful for the `fim` tier; absent means the instruction form is used.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fim_tokens: Option<FimTokens>,
 }
 
 impl Default for TierConfig {
@@ -60,7 +49,6 @@ impl Default for TierConfig {
             max_tokens: 8192,
             temperature: 0.0,
             think: Think::Off,
-            fim_tokens: None,
         }
     }
 }
@@ -68,7 +56,6 @@ impl Default for TierConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Models {
-    pub fim: TierConfig,
     pub reason: TierConfig,
     pub review: TierConfig,
 }
@@ -108,26 +95,6 @@ impl Default for Triggers {
             diagnostics: "save".to_string(),
             idle_ms: 1500,
             severity_floor: "information".to_string(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct InlineConfig {
-    pub enabled: bool,
-    pub idle_ms: u64,
-    pub min_prefix_chars: u32,
-    pub max_calls_per_min: u32,
-}
-
-impl Default for InlineConfig {
-    fn default() -> Self {
-        InlineConfig {
-            enabled: false,
-            idle_ms: 400,
-            min_prefix_chars: 8,
-            max_calls_per_min: 4,
         }
     }
 }
@@ -215,7 +182,6 @@ pub struct Config {
     pub models: Models,
     pub budget: BudgetConfig,
     pub triggers: Triggers,
-    pub inline_completion: InlineConfig,
     pub ambient: Ambient,
     pub auto_apply: AutoApply,
     pub languages: Languages,
@@ -230,7 +196,6 @@ impl Default for Config {
             models: Models::default(),
             budget: BudgetConfig::default(),
             triggers: Triggers::default(),
-            inline_completion: InlineConfig::default(),
             ambient: Ambient::default(),
             auto_apply: AutoApply::default(),
             languages: Languages::default(),
@@ -289,7 +254,6 @@ impl Config {
 
     pub fn tier(&self, tier: crate::types::Tier) -> &TierConfig {
         match tier {
-            crate::types::Tier::Fim => &self.models.fim,
             crate::types::Tier::Reason => &self.models.reason,
             crate::types::Tier::Review => &self.models.review,
         }
@@ -304,14 +268,12 @@ impl Config {
         if let Ok(url) = std::env::var("META_BASE_URL") {
             if !url.trim().is_empty() {
                 self.models.reason.base_url = url.clone();
-                self.models.review.base_url = url.clone();
-                self.models.fim.base_url = url;
+                self.models.review.base_url = url;
             }
         }
         if let Ok(model) = std::env::var("META_MODEL") {
             if !model.trim().is_empty() {
-                self.models.reason.model = model.clone();
-                self.models.fim.model = model;
+                self.models.reason.model = model;
             }
         }
         if let Ok(model) = std::env::var("META_REVIEW_MODEL") {
@@ -345,7 +307,6 @@ mod tests {
     fn defaults_are_conservative() {
         let c = Config::default();
         assert!(c.enabled);
-        assert!(!c.inline_completion.enabled, "inline completion ships off");
         assert!(!c.auto_apply.fix, "auto-apply ships off");
         assert!(!c.ambient.inlay_hints);
         assert_eq!(c.triggers.diagnostics, "save");
@@ -388,6 +349,9 @@ mod tests {
     #[test]
     fn the_payload_the_plugin_actually_sends_applies() {
         // Lifted from a debug trace of Neovim answering workspace/configuration, verbatim.
+        // `inline_completion` and `models.fim` are still in it because that is what the client
+        // sent, and a config section the server no longer has must be ignored rather than
+        // rejected — an older client with a stale settings table still has to work.
         let payload = serde_json::json!({
             "enabled": true,
             "inline_completion": { "enabled": true },
@@ -402,7 +366,6 @@ mod tests {
         assert_eq!(merged.models.reason.model, "qwen3.6-35b-a3b-iq3xxs");
         assert_eq!(merged.models.reason.timeout_ms, 120_000);
         assert_eq!(merged.models.review.base_url, "http://127.0.0.1:37313/v1");
-        assert!(merged.inline_completion.enabled);
     }
 
     #[test]

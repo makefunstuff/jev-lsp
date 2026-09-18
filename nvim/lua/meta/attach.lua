@@ -99,7 +99,7 @@ end
 --- @return vim.lsp.Config
 --- The `meta` section from whatever shape the caller passed.
 ---
---- `{ inline_completion = … }` and `{ meta = { inline_completion = … } }` both mean the same
+--- `{ ambient = { code_lens = false } }` and `{ meta = { ambient = … } }` both mean the same
 --- thing here; anything else would be a silent no-op.
 local function section(settings)
   if type(settings) ~= 'table' then
@@ -119,9 +119,9 @@ function M.configure()
     -- its own defaults, so there is exactly one place that owns each default.
     --
     -- The section the server reads is `meta`, and Neovim looks that up by name, so what the
-    -- caller passes has to end up under it. `setup({ settings = { inline_completion = … } })`
-    -- is the shape the config schema (PROTOCOL §10) invites, so it is accepted directly
-    -- rather than silently dropped because the `meta` wrapper was missing.
+    -- caller passes has to end up under it. `setup({ settings = { budget = … } })` is the
+    -- shape the config schema (PROTOCOL §10) invites, so it is accepted directly rather than
+    -- silently dropped because the `meta` wrapper was missing.
     settings = { meta = vim.tbl_deep_extend('force', { enabled = true }, section(opts.settings)) },
     handlers = opts.handlers,
   }

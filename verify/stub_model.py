@@ -117,12 +117,6 @@ def _artifact_body():
     }
 
 
-def _completion_body(anchor):
-    """Plain text, not JSON: a completion is inserted verbatim."""
-    stripped = anchor.strip()
-    return stripped + "_completed"
-
-
 def _plan_body(anchor):
     """A one-step plan aimed at whatever the request's scope is."""
     return {
@@ -301,21 +295,6 @@ class Handler(BaseHTTPRequestHandler):
             wants_findings = '"findings"' in text
             wants_plan = '"steps"' in text and not wants_findings
             wants_markdown = '"markdown"' in text and not wants_findings and not wants_plan
-            wants_completion = "completion engine" in text
-            if wants_completion:
-                # A completion needs no anchor: it is answered from the cursor position.
-                # (The request was already recorded above; do not count it twice.)
-                self._send(200, {
-                    "id": "stub",
-                    "object": "chat.completion",
-                    "model": body.get("model", "stub"),
-                    "choices": [{"index": 0, "finish_reason": "stop",
-                                 "message": {"role": "assistant",
-                                             "content": "return_value"}}],
-                    "usage": {"prompt_tokens": 5, "completion_tokens": 3},
-                    "_stub_source": "rule:completion",
-                })
-                return
             anchor = anchor_from_request(body)
             if not anchor:
                 self._send(200, {"error": "no anchor available"})

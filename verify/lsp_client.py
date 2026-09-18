@@ -13,8 +13,8 @@ Runs, in order, and asserts at each step (docs/VERIFICATION.md §1):
   1. `initialize` -> `initialized`; `positionEncoding == "utf-8"` (N1),
      `codeActionProvider.resolveProvider == true`, `diagnosticProvider.identifier == "meta"`,
      `executeCommandProvider.workDoneProgress == true`, all seven §6 commands advertised, and
-     `inlineCompletionProvider` advertised (§2, injected at the transport boundary) — with
-     §2's "advertise only what is served" as the rule the set is checked against.
+     no draft capability advertised — §2's "advertise only what is served" is the rule the set
+     is checked against, in both directions.
   2. `textDocument/didOpen` for two fixture documents written into a temp dir under the
      workspace (a normal `.py` and a never-touched control `.txt`). A notification carries
      no assertion of its own; the control document exists to make step 9 checkable.
@@ -293,7 +293,6 @@ def client_capabilities():
             "hover": {"contentFormat": ["markdown", "plaintext"]},
             "inlayHint": {"dynamicRegistration": False,
                           "resolveSupport": {"properties": ["text", "tooltip", "location"]}},
-            "inlineCompletion": {"dynamicRegistration": False},
         },
     }
 
@@ -443,7 +442,7 @@ class Session(object):
         tier = {"base_url": self.stub_model_url, "model": "stub", "temperature": 0.0,
                 "max_tokens": 4096, "timeout_ms": 30000}
         return {"enabled": True,
-                "models": {"fim": dict(tier), "reason": dict(tier), "review": dict(tier)},
+                "models": {"reason": dict(tier), "review": dict(tier)},
                 "auto_apply": {"fix": False, "fixAll": False}}
 
     # -- writing -----------------------------------------------------------
@@ -1069,11 +1068,12 @@ def run_steps(session, workspace, timeout, report, keep_fixtures=False):
         report.check(1, "all seven §6 commands are advertised (%s)" % ", ".join(served),
                      all(command in commands for command in served),
                      "missing: %s" % _describe([c for c in served if c not in commands]))
-        inline_completion = _cap(server_capabilities, "inlineCompletionProvider")
-        report.check(1, "inlineCompletionProvider is advertised (§2 — injected at the "
-                        "transport boundary, since the pinned lsp-types cannot express it)",
-                     isinstance(inline_completion, dict),
-                     "got %s" % _describe(inline_completion))
+        # The other half of "advertise only what is served": a capability nothing answers for
+        # is a lie the client acts on, and inline completion was removed from the server
+        # entirely (2026-09-19) — so its absence is asserted rather than assumed.
+        report.check(1, "no draft capability is advertised (inline completion was removed)",
+                     _cap(server_capabilities, "inlineCompletionProvider") is None,
+                     "got %s" % _describe(_cap(server_capabilities, "inlineCompletionProvider")))
 
         # -- step 2 --------------------------------------------------------
         report.step(2, "textDocument/didOpen fixtures in a temp dir under the workspace")
@@ -1705,7 +1705,6 @@ class StubServer(threading.Thread):
             },
             "diagnosticProvider": {"identifier": "meta", "interFileDependencies": False,
                                    "workspaceDiagnostics": True},
-            "inlineCompletionProvider": {},
             "executeCommandProvider": {
                 "commands": ["meta.status", "meta.recompute", "meta.explain", "meta.plan",
                              "meta.apply", "meta.revert", "meta.cancel"],

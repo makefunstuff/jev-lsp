@@ -52,6 +52,23 @@ local function client()
     or vim.lsp.get_clients({ name = M.name })[1]
 end
 
+--- Tell the server what the user did with what it offered.
+---
+--- The server never sees the buffer: the picker applies edits and the dismissal is written to
+--- disk here — so without this the only witness to acceptance is the user's memory, and "is
+--- this working" has no answer. A command rather than a custom
+--- method (N6: the standard surface plus `workspace/executeCommand` is the whole back-channel),
+--- fire and forget — the answer is not shown, and a bookkeeping failure must not become a
+--- failed action.
+--- @param bufnr integer
+--- @param params table  `{ kind, id?, line?, verb? }` (`meta.outcome`)
+local function report_outcome(bufnr, params)
+  if vim.lsp.get_clients({ bufnr = bufnr, name = M.name })[1] == nil then
+    return
+  end
+  M.command('meta.outcome', { params }, function() end)
+end
+
 --- Report a command outcome. A Result envelope (PROTOCOL §7) is shown as it is; a failure —
 --- including `not_implemented` — is reported, never dressed up as success.
 --- @param label string
@@ -663,7 +680,7 @@ function M.open_plan(plan)
   vim.keymap.set('n', 'q', '<Cmd>close<CR>', { buffer = bufnr, desc = 'meta: close the plan' })
 end
 
---- `:Meta where <question>` / `<leader>Mw` — where is this handled?
+--- `:Meta where <question>` — where is this handled?
 ---
 --- The one navigation question a model answers better than an index: *"where is retry handled"*
 --- is not a symbol, so nothing that answers `textDocument/references` has anything to say about
@@ -761,8 +778,13 @@ function M.session()
           type(e.ms) == 'number' and (' · ' .. e.ms .. ' ms') or ''
         )
       elseif e.kind == 'analysis' then
+        -- `findings` is the list the server kept; older entries carry only the count.
+        local kept = type(e.findings) == 'table' and #e.findings
+          or (type(e.findings) == 'number' and e.findings)
+          or (type(e.count) == 'number' and e.count)
+          or 0
         lines[#lines + 1] = ('- analysis — %d finding(s)%s'):format(
-          type(e.findings) == 'number' and e.findings or 0,
+          kept,
           e.from_cache == true and ' · cache' or ''
         )
       else
@@ -797,7 +819,7 @@ function M.session()
   end)
 end
 
---- `:Meta followup [question]` / `<leader>Mf` — ask about what is under the cursor.
+--- `:Meta followup [question]` — ask about what is under the cursor.
 ---
 --- The question is the second and last place free text enters, after `plan`, and for the same
 --- reason: a picker cannot express a question (N7). The finding at the cursor, when there is
@@ -900,7 +922,7 @@ function M.review()
   M.command('meta.review', { cursor_scope() })
 end
 
---- `:Meta cancel` / `<leader>mx` — cancel all in-flight work (`docs/UX.md` §2).
+--- `:Meta cancel` — cancel all in-flight work (`docs/UX.md` §2).
 ---
 --- Our own requests are cancelled with `$/cancelRequest` against the id `Client:request`
 --- returned. Server-initiated work — a background re-analysis with no request of ours to
@@ -1039,7 +1061,7 @@ local function finding_data(d)
   return lsp and lsp.data
 end
 
---- `:Meta dismiss [finding_id]` / `<leader>md` — PROTOCOL §9, `docs/UX.md` §4.
+--- `:Meta dismiss [finding_id]` — PROTOCOL §9, `docs/UX.md` §4.
 ---
 --- With no argument the finding on the cursor line is dismissed, which is what the keymap
 --- means. The id is the content-addressed key the server put in the finding's `data`
@@ -1089,6 +1111,7 @@ function M.dismiss(id)
   dismissed[id] = true
   loaded_roots[root] = true
   M.hide_dismissed(bufnr)
+  report_outcome(bufnr, { kind = 'finding-dismissed', id = id, line = line })
 end
 
 --- Drop dismissed findings from what is on screen now, so the sign disappears with the
@@ -1113,7 +1136,7 @@ end
 
 -- Undo --------------------------------------------------------------------------------------
 --
--- `docs/UX.md` §3.5: `:Meta undo` restores the snapshot taken before the last applied edit.
+-- `docs/UX.md` §3.4: `:Meta undo` restores the snapshot taken before the last applied edit.
 -- Neovim's undo-block granularity for an applied `WorkspaceEdit` is unverified ([R10],
 -- `docs/research/nvim-lsp-surface.md` §10), so the plugin does not rely on it.
 --
@@ -1212,6 +1235,9 @@ function M.undo()
   for _, e in ipairs(entries) do
     vim.api.nvim_buf_set_lines(e.bufnr, 0, -1, false, e.before)
   end
+  -- The one outcome that says the edit was wrong, which is the other half of "was this worth
+  -- applying" (`meta.outcome`).
+  report_outcome(entries[1].bufnr, { kind = 'edit-undone' })
   vim.notify(('meta: restored %d buffer(s)'):format(#entries))
 end
 
@@ -1258,7 +1284,7 @@ end
 --- hints **per buffer, not per client** (`lsp/inlay_hint.lua`), so switching them on for this
 --- badge also switches on every other server's hints in that buffer — rust-analyzer's type
 --- hints, clangd's parameter hints. That is a decision for the user, not a side effect of
---- installing this. `<leader>Mh` toggles it for the buffer so it can be tried in one keystroke.
+--- installing this. `:Meta hints on|off` toggles it for the buffer.
 function M.hints(on)
   local bufnr = vim.api.nvim_get_current_buf()
   local enable = on
@@ -1352,111 +1378,35 @@ function M.install_lenses()
   end
 end
 
---- The default keymaps, `docs/UX.md` §2. `<leader>ms` and `<leader>mS` are different keys:
---- `s` is status, `S` is the kill switch, which must be reachable in one mapping without
---- opening anything. `<leader>mG` starts again.
----
---- `<leader>ma` is the plugin's own picker (`require('meta.picker')`, `docs/ROADMAP.md` U4) and
---- is also defined in visual mode: the picker reads the selection and puts it in the request,
---- so the server scopes the action to it (`scope_source = "explicit"`) instead of to the
---- enclosing function. `<leader>mv` is the same flow with the resolved edit opened as a
---- side-by-side diff, applied only on `<CR>` (`docs/UX.md` §3.3).
----
---- The verb keymaps are not selection-aware: the commands they send carry one position
---- (`cursor_scope`), and a keymap that silently dropped a selection would be worse than one
---- that does not exist — `<leader>mt` still filters the *native* menu to the `test` verb's
---- family, which is prefix-matched by the client (`[R4]`).
+--- The default keymaps, `docs/UX.md` §2: four keys, and the reason there are only four is that
+--- eighteen made the plugin unreadable to its own user. `a` is the picker and is also defined
+--- in visual mode: it reads the selection and puts it in the request, so the server scopes the
+--- action to it (`scope_source = "explicit"`) instead of to the enclosing function.
+--- `u` and `q` are the other two products (taking an edit back, asking); `s` is status, which
+--- is also where the kill switch lives. Everything else — explain, review, plan, followup,
+--- where, hints, cancel, dismiss, stop, start — is reachable by typing (`:Meta …`), and
+--- `:Meta usage` is the answer to whether any of it is working.
 --- @param prefix? string  default `'<leader>m'`
---- Make `<Tab>` accept the ghost text, and leave `<Tab>` doing what it already did otherwise.
----
---- Neovim renders the candidate as overlay text and hands the key to the plugin: without a
---- mapping, `vim.lsp.inline_completion.get()` is never called and nothing is ever accepted,
---- however good the completion was. `docs/UX.md` §3.4 promised this key; nothing implemented
---- it until now.
----
---- The fallback matters more than the accept. Neovim 0.12 binds `<Tab>` itself
---- (`vim/_core/defaults.lua`: `vim.snippet.jump` when a snippet is active, the key's ordinary
---- behaviour otherwise), and so does any completion plugin. Reinstating a literal `<Tab>` when
---- there is nothing to accept throws that away and leaves a key that reindents code, which is
---- precisely what happened. The binding is captured *before* this map exists — afterwards
---- `maparg` returns this map — and called directly when there is no candidate.
---- @param bufnr integer
-function M.accept_keymap(bufnr)
-  local previous = vim.fn.maparg('<Tab>', 'i', false, true)
-  vim.keymap.set('i', '<Tab>', function()
-    if vim.lsp.inline_completion.get({ bufnr = bufnr }) then
-      return ''
-    end
-    if previous and type(previous.callback) == 'function' then
-      local out = previous.callback()
-      return type(out) == 'string' and out or ''
-    end
-    if previous and previous.rhs and previous.rhs ~= '' then
-      return vim.api.nvim_replace_termcodes(previous.rhs, true, false, true)
-    end
-    return vim.api.nvim_replace_termcodes('<Tab>', true, false, true)
-  end, { buffer = bufnr, expr = true, desc = 'meta: accept the inline completion' })
-end
-
 function M.keymaps(prefix)
   prefix = prefix or '<leader>m'
+  -- Four, and no more. Six products behind eighteen keymaps made the plugin's own user unable
+  -- to say what it is for: two products survive — findings → actions (`a`) with `u` to take it
+  -- back, and ask (`q`) — plus one non-product, `s`, the window onto whether any of it is
+  -- working. Everything else still works by typing
+  -- (`:Meta explain|review|plan|session|usage|stop|start`, `docs/UX.md` §2); it just does not
+  -- claim a key.
   local maps = {
     { 'a', { 'n', 'x' }, 'code action (picker, summary in the preview pane)', function()
       picker.action()
     end },
-    { 'v', { 'n', 'x' }, 'code action with a diff preview', function()
-      picker.action({ preview = true })
-    end },
-    { 'p', { 'n' }, 'plan for a goal', function()
-      M.plan()
-    end },
-    { 'e', { 'n' }, 'explain scope', function()
-      M.explain()
-    end },
-    { 'f', { 'n' }, 'ask about what is under the cursor', function()
-      M.followup()
-    end },
-    { 'w', { 'n' }, 'where is this handled in the project', function()
-      M.where()
-    end },
-    { 'r', { 'n' }, 'review this file', function()
-      M.review()
-    end },
-    { 't', { 'n' }, 'add tests for scope', function()
-      -- `test` is a `refactor.rewrite.meta` action (PROTOCOL §4.1). Until the plugin picker
-      -- (docs/ROADMAP.md U4) selects a verb, the native menu is filtered to that family;
-      -- kind filtering is prefix-based on `.`, so nothing else matches.
-      vim.lsp.buf.code_action({ context = { only = { 'refactor.rewrite.meta' } } })
+    { 'u', { 'n' }, 'undo the last applied edit', function()
+      M.undo()
     end },
     { 'q', { 'n' }, 'ask a question', function()
       M.ask()
     end },
-    { 'W', { 'n' }, 'ask a question, allowing a documentation fetch', function()
-      M.ask(nil, { web = true })
-    end },
-    { 'd', { 'n' }, 'dismiss finding at cursor', function()
-      M.dismiss()
-    end },
-    { 'l', { 'n' }, 'run the lens on this line', function()
-      vim.lsp.codelens.run()
-    end },
-    { 'h', { 'n' }, 'toggle inlay hints (off by default)', function()
-      M.hints()
-    end },
     { 's', { 'n' }, 'status: queue, budgets, cache hit rate', function()
       M.status()
-    end },
-    { 'x', { 'n' }, 'cancel all in-flight work', function()
-      M.cancel()
-    end },
-    { 'u', { 'n' }, 'undo the last applied edit', function()
-      M.undo()
-    end },
-    { 'S', { 'n' }, 'stop: kill switch (PROTOCOL §5)', function()
-      M.stop()
-    end },
-    { 'G', { 'n' }, 'start: re-enable after :Meta stop', function()
-      M.start()
     end },
   }
   for _, m in ipairs(maps) do
@@ -1510,6 +1460,11 @@ M.subcommands = {
   status = function()
     M.status()
   end,
+  usage = function()
+    M.command('meta.usage', {}, function(err, result, ctx)
+      render_artifact('meta.usage', err, result, ctx)
+    end)
+  end,
   stop = function()
     M.stop()
   end,
@@ -1557,35 +1512,6 @@ function M.setup(opts)
     { ['textDocument/diagnostic'] = filter_findings },
     install.handlers or {}
   )
-
-  -- Inline completion is off by default (PROTOCOL §10, docs/UX.md §3.4). When the settings
-  -- turn it on, enable Neovim's own machinery: the server advertises
-  -- `inlineCompletionProvider`, but the client only attaches its completor once enabled, and
-  -- it fires on a 200 ms timer in insert mode (`lsp/inline_completion.lua`).
-  local inline = install.settings
-    and install.settings.inline_completion
-    and install.settings.inline_completion.enabled
-  if inline then
-    -- Enabled once, unfiltered, *before* any client attaches.
-    --
-    -- Per-buffer calls from `LspAttach` do not take. `vim.lsp._capability.enable` walks the
-    -- client's `attached_buffers` when it is given a buffer, and that table is not yet
-    -- populated while the attach event is being handled: the loop runs zero times, no
-    -- capability is created, and nothing errors — the completor is simply never installed and
-    -- no completion is ever requested. Neovim's own quickstart calls this unfiltered for the
-    -- same reason, and clients attaching later pick the marker up.
-    vim.lsp.inline_completion.enable(true)
-    vim.api.nvim_create_autocmd('LspAttach', {
-      callback = function(ev)
-        local client = vim.lsp.get_client_by_id(ev.data.client_id)
-        if client and client.name == M.name
-          and client:supports_method('textDocument/inlineCompletion')
-        then
-          M.accept_keymap(ev.buf)
-        end
-      end,
-    })
-  end
 
   attach.setup(install)
   vim.lsp.config(M.name, attach.configure())

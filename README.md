@@ -2,7 +2,7 @@
 
 An LSP server that makes Neovim an agent harness: the model observes your code in the
 background and proposes work through Neovim's **native** surfaces — diagnostics, code
-actions, code lens, inlay hints, ghost text — instead of a chat pane you have to talk to.
+actions, code lens, inlay hints — instead of a chat pane you have to talk to.
 
 The model is not a destination you visit. It is a process attached to the buffer.
 
@@ -89,15 +89,17 @@ This is not aspirational — `verify/nvim_live.lua` bootstraps through exactly t
 (`runtimepath` + `require('meta').setup({ cmd = … })`) and is green against the real server.
 
 ```vim
-:Meta status|explain|recompute|cancel|stop|start|undo|dismiss|log
-<leader>ma  code actions      <leader>me  explain      <leader>ms  status
-<leader>mt  add tests         <leader>mS  stop (kill switch, no prompt)
+:Meta status|explain|review|plan|session|usage|stop|start|undo|dismiss|log|recompute
+<leader>ma  code actions      <leader>mu  undo the last applied edit
+<leader>mq  ask               <leader>ms  status (and the kill switch lives there)
 ```
 
-Served today: `status`, `explain`, `recompute`, `cancel`, plus the plugin-local `undo`,
-`dismiss`, `stop`, `start`, `log`. `:Meta plan` and `:Meta review` answer with a structured
-`not_implemented` and say so — they are designed (`docs/ROADMAP.md` U5) but not built, and
-neither is advertised in the server's capabilities.
+Two products and four keys. Findings → actions, and ask, are what this server is for;
+everything else is reachable by typing. There is no ghost text: inline completion was removed
+on 2026-09-19 (STATUS.md), and generated code is asked for through an action or `:Meta ask`.
+
+Served today: `status`, `explain`, `review`, `plan`, `session`, `usage`, `recompute`, `cancel`,
+plus the plugin-local `undo`, `dismiss`, `stop`, `start`, `log`.
 
 Model endpoints come from config, never from a file of ours: point `settings.meta.models.*`
 at a local llama.cpp OpenAI-compatible server, or set `api_key_env` for a remote tier.
@@ -108,7 +110,7 @@ at a local llama.cpp OpenAI-compatible server, or set `api_key_env` for a remote
 
 | | |
 |---|---|
-| `cargo test` | 200 passing, warning-clean |
+| `cargo test` | 219 passing, warning-clean |
 | `cargo build --release` | no warnings |
 | `python3 verify/smoke.py` | 35/35 against the real binary |
 | `python3 verify/plan_test.py` | 35/35 — plan, apply, revert, staleness, divergence, multi-file |
@@ -116,13 +118,11 @@ at a local llama.cpp OpenAI-compatible server, or set `api_key_env` for a remote
 | `python3 verify/lsp_client.py --server …` | 28 ok, 0 FAIL (independent, spec-derived client) |
 | `nvim --headless -l verify/nvim_live.lua` | 0 failures, 0 skips (real plugin, real server) |
 | `nvim --headless -l verify/nvim_ui_test.lua` | 0 failures, 0 skips (picker, diff preview, lenses, hints, streaming, plan, session) |
-| `python3 verify/inline_test.py` | 14/14 — the capability, the handler, and every gate |
 | `python3 verify/quality_eval.py --base-url … --model …` | recall, precision and noise on a labelled defect set — the only harness that answers "is the review right", and it needs a real model |
 | `python3 verify/latency.py` | 8/8 — every editor-driven path under 1 ms against a model made **2 s** slow, which is how the bench tells "fast" from "cached" |
 | `python3 verify/queue_test.py` | 5/5 — the mid-flight-edit race, with a stalled model |
 | `python3 verify/config_race_test.py` | 3/3 — a save during startup is not analysed against the defaults |
 | `python3 verify/supersede_probe.py` | 7 ok, 0 FAIL — supersession, independently probed, with a control |
-| `nvim --headless -l verify/inline_live.lua` | 0 failures (ghost text itself needs an interactive session) |
 | `nvim --headless -l verify/dismiss_test.lua` | 9/9 — dismissal is recorded per repository and does not resurface |
 | `python3 verify/real_model.py` | 6/6 against **DeepSeek** — 1 finding, an edit, and a file that still parses, every run |
 | `python3 verify/soak.py` | **8/9** on DeepSeek, **6/6** on the local `llama.cpp` model; 0 files left unparseable either way |
@@ -139,7 +139,7 @@ pinned by tests; `docs/VERIFICATION.md` §8 records them.
 Served today: universal attachment, document sync, ambient findings via pull diagnostics
 with `workspace/diagnostic/refresh`, a code-action menu with lazy `codeAction/resolve`,
 version-stamped `WorkspaceEdit`s, plans with per-step approval and revert, multi-file edits,
-inline completion (off by default), `$/progress` streaming, and the `meta.status`,
+`$/progress` streaming, and the `meta.status`,
 `meta.recompute`, `meta.explain`, `meta.plan`, `meta.apply`, `meta.revert`, `meta.cancel`
 commands. Capabilities and commands not yet
 implemented are **not advertised** (PROTOCOL §2).
@@ -166,7 +166,6 @@ python3 verify/real_model.py --base-url http://127.0.0.1:4000/v1 --model deepsee
 python3 verify/soak.py --base-url http://127.0.0.1:4000/v1 --model deepseek/deepseek-flash --rounds 3
 python3 verify/supersede_probe.py             # same contract, independent probe + control
 python3 verify/plan_test.py                   # plan -> server-side apply -> revert
-python3 verify/inline_test.py                 # inline completion and every gate before it
 python3 verify/cli_parity.py                  # the CLI and the LSP must agree exactly
 
 # the independent, spec-derived client (needs the stub to be listenable)

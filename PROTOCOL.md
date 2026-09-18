@@ -48,7 +48,6 @@ Server capabilities returned from `initialize`:
     ]
   },
   "diagnosticProvider": { "identifier": "meta", "interFileDependencies": false, "workspaceDiagnostics": false },
-  "inlineCompletionProvider": {},
   "executeCommandProvider": { "commands": [ /* §6 */ ], "workDoneProgress": true }
 }
 ```
@@ -60,10 +59,9 @@ means every `workspace/diagnostic/refresh` is answered by a method that does not
 server caches findings and nothing ever reaches the sign column. Measured, and fixed — see
 `docs/VERIFICATION.md` §8.
 
-`inlineCompletionProvider` is 3.18 draft and is **not expressible** by the `lsp-types` 0.94
-that tower-lsp 0.20 pins, so it is injected into the `initialize` response at the transport
-boundary (`crates/meta-lsp/src/advertised.rs`). Neovim only attaches its completor for a
-client that advertises it, so without the injection the handler would be unreachable.
+`inlineCompletionProvider` is **not** advertised: inline completion was removed from the
+server on 2026-09-19 (see the log at the end of this file), so the draft capability, its
+custom method and the transport-boundary injection that carried it are gone with it.
 
 **Rule: advertise only what is served.** A provider the server does not implement is a lie
 the client will act on — it will send requests that can only fail, or set up UI for progress
@@ -105,7 +103,6 @@ be enforced before any model call.
 | `codeLens/resolve` | p99 < 50 ms | — | Fills the `command`. |
 | `textDocument/inlayHint` | p99 < 30 ms | default **off** except risk markers | Cached only. |
 | `inlayHint/resolve` | p99 < 50 ms | — | |
-| `textDocument/inlineCompletion` | p50 < 150 ms, p99 < 500 ms | see §5 — the strictest gate in the system | FIM tier only. |
 | `textDocument/hover` | p99 < 100 ms | on-demand prefetch | Cached explanation. Miss returns the plain signature immediately and warms the cache. |
 
 ### 3.3 Client to server, control
@@ -169,11 +166,14 @@ found:
 ```
 
 Two payloads, one lifecycle: both describe the document at one version, and one guard covers the
-pair. `definitions` answer the surfaces that enumerate (§3.4.1, §3.4.2); `context` answers the
-path that cannot assemble anything per request — the completion, which fires on a 200 ms timer
-while the user types, and for which a round trip to another language server is slower than the
-keystroke it serves. Context assembled *per request* (§6.1) goes on the generating commands
-instead, which is why references appear there and not here.
+pair. `definitions` answer the surfaces that enumerate (§3.4.1, §3.4.2). `context` is the
+standing set: what the editor can see for this document, pushed once per change rather than
+assembled per request. Its one consumer was the completion — the only path that could not
+afford a round trip to another language server — and that was removed on 2026-09-19, so the
+server stores this set and reads it for nothing. It stays in the contract because the client
+pushes it and a stale client must not be rejected; the next consumer of it is a change to this
+document, not a silent one. Context assembled *per request* (§6.1) goes on the generating
+commands, which is why references appear there and not here.
 
 Rules:
 
@@ -211,8 +211,7 @@ they cannot be skimmed past.
 The client decides whether to draw any of this, and the plugin keeps it **off** by default for
 a reason of Neovim's rather than a matter of taste: `vim.lsp.inlay_hint.enable` switches hints
 on **per buffer, not per client**, so turning it on for this badge turns on every other
-server's hints in that buffer too. `<leader>Mh` toggles it for the buffer, and
-`:Meta hints on|off` does the same.
+server's hints in that buffer too. `:Meta hints on|off` toggles it for the buffer.
 
 ### 3.4.4 Project context — what the editor sends with a request
 
@@ -415,12 +414,9 @@ Ordered, all mandatory, all evaluated before any model call:
 
 1. **Dedupe** — `sha256(model_tier, prompt_template_version, context_hash, verb)`; hit
    returns the cached conclusion.
-2. **Debounce** — inline completion: 200 ms client-side `[R7]` plus a server-side idle
-   floor (`inline_completion.idle_ms`, default 400 ms). Diagnostics: `on_save` or
-   `on_idle_ms` (default 1500), never per keystroke.
-3. **Prefix floor** — inline completion requires ≥ 8 non-whitespace characters before the
-   cursor.
-4. **Budgets** — `max_calls_per_min`, `max_calls_per_hour`, `max_tokens_per_session`.
+2. **Debounce** — diagnostics: `on_save` or `on_idle_ms` (default 1500), never per
+   keystroke.
+3. **Budgets** — `max_calls_per_min`, `max_calls_per_hour`, `max_tokens_per_session`.
    Exhaustion is not an error: the server returns `state = "over_budget"` actions and a
    single `window/showMessage` on first exhaustion, then stays silent.
 5. **Kill switch** — `:Meta stop` (plugin) sets `enabled = false` through
@@ -441,6 +437,8 @@ Ordered, all mandatory, all evaluated before any model call:
 | `meta.followup` | `{uri, line, question, finding_id?, range?}` | `Artifact` (§7, `kind: "answer"`) | yes |
 | `meta.document` | `{uri, version, definitions?, context?}` | `Result` with `{stored}` — the client's own parser answering §3.4.3 | no |
 | `meta.session` | `{limit?}` | `Result` with `{entries, count, path}` | no |
+| `meta.usage` | `{}` | `Result` counting what was published and what was done with it, over the session log | yes |
+| `meta.outcome` | `{kind, id?, line?, verb?}` | `Result` with `{recorded}` — the client reporting what the user did | yes |
 | `meta.cancel` | `{progress_token}` | `Result` | yes |
 | `meta.plan` | `{goal, scope}` | `Artifact` | yes |
 | `meta.apply` | `{plan_id, steps: [n]}` | `Result` | yes |
@@ -582,12 +580,10 @@ environment variables beyond the model endpoints.
 
 ```jsonc
 { "enabled": true,
-  "models": { "fim": {…}, "reason": {…}, "review": {…} },   // see docs/MODEL.md
+  "models": { "reason": {…}, "review": {…} },                // see docs/MODEL.md
   "budget": { "max_calls_per_min": 6, "max_calls_per_hour": 120,
               "max_tokens_per_session": 500000, "timeout_ms": 30000 },
   "triggers": { "diagnostics": "save", "idle_ms": 1500, "severity_floor": "information" },
-  "inline_completion": { "enabled": false, "idle_ms": 400, "min_prefix_chars": 8,
-                         "max_calls_per_min": 4 },
   "ambient": { "code_lens": true, "inlay_hints": false, "diagnostics": true },
   "auto_apply": { "fix": false, "fixAll": false },
   "verbs": { "explain": true, "review": true, "test": true, "generate": true },
@@ -601,8 +597,7 @@ environment variables beyond the model endpoints.
   "log": "warn" }
 ```
 
-Defaults are conservative: `inline_completion.enabled = false`, `auto_apply` off,
-`inlay_hints` off.
+Defaults are conservative: `auto_apply` off, `inlay_hints` off.
 
 ---
 
@@ -679,3 +674,4 @@ Recorded so the refusals are not relitigated:
 | 2026-09-18 | **§6.1 added: the command error codes are named.** They were already contract in practice — the CLI maps them to exit codes and the plugin surfaces them verbatim — but only `not_implemented` and `unknown_edit` were written down, so a harness asserting the real codes could be broken by a rename the document never mentioned. |
 | 2026-09-18 | **Resolve timeout raised 30 s → 90 s, ceilings raised, repair widened.** Measured against a real reasoning model: an 8192-token answer took over 60 s on a Rust rewrite, so the old 30 s cap converted valid-but-slow answers into transport errors; and a rejected answer is often answered the same way again, so the repair budget went from one attempt to two. `MAX_REPAIR_ATTEMPTS` now covers *applicability* failures as well as JSON ones — an anchor that cannot be located, or a replacement that repeats lines it did not consume — which docs/MODEL.md §5 specified and the implementation had not. Over a nine-run soak on three languages: 8 applied, 0 left a file unparseable, against 2/6 and 8/12 before. |
 | 2026-09-18 | **U7 built.** Inline completion is served and advertised: `textDocument/inlineCompletion` is registered as a custom method (the pinned `lsp-types` has no handler for a 3.18-draft method) and `inlineCompletionProvider` is injected into the `initialize` response, because Neovim attaches its completor only for a client that advertises it. Gates: off by default, binary/size/ignore, a content-hash answer cache, a prefix floor that applies only to timed requests, and its own per-minute window so completions cannot starve explicit work. Also implemented `workspace/didChangeConfiguration`, without which the plugin's kill switch could never take effect. |
+| 2026-09-19 | **Inline completion withdrawn.** The feature was removed at the user's decision — generated code is asked for, not suggested under the cursor — so this contract no longer carries it: §2's capability block and the paragraph about injecting `inlineCompletionProvider`, §3.2's latency row for `textDocument/inlineCompletion`, §5's 200 ms debounce and 8-character prefix floor, §10's `models.fim` and `inline_completion` section, and the method itself. `crates/meta-lsp/src/{inline,advertised}.rs` are deleted with it. A client whose settings still mention `fim` or `inline_completion` is unaffected: unknown sections are ignored. |

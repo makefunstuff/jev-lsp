@@ -92,13 +92,10 @@ is unbounded.
 graph TB
   CH[didChange / didSave / didChangeWatchedFiles] --> D{demand scheduler}
   D -->|"gates 1-4"| Q1[queue: diagnostics]
-  D -->|"inline gate"| Q2[queue: fim]
   D -->|"explicit only"| Q3[queue: actions]
   Q1 --> W1[worker: analyse]
-  Q2 --> W2[worker: complete]
   Q3 --> W3[worker: generate]
   W1 --> C[(conclusion cache)]
-  W2 --> C
   W3 --> C
   W1 --> R[refresh emitter]
   R -->|"workspace/diagnostic/refresh"| NV[Neovim]
@@ -107,9 +104,7 @@ graph TB
 Properties:
 
 - **Coalescing.** A newer request for the same document cancels the queued older one
-  before it starts. Inline completion additionally drops in-flight requests whose prefix
-  is no longer a prefix of the current line — the client does this on `InsertLeave`, the
-  server does it on delivery.
+  before it starts.
 - **Cancellation.** `$/cancelRequest` maps to a cancellation token threaded through
   `meta-core`, so an aborted HTTP call is dropped rather than awaited.
 - **Refresh, not push.** The worker never publishes conclusions directly; it invalidates
@@ -137,7 +132,6 @@ Properties:
 | `textDocument/diagnostic` | p99 < 30 ms | cache read |
 | `textDocument/hover` (hit) | p99 < 100 ms | cache read |
 | `textDocument/hover` (miss) | immediate | returns signature, warms cache, no block |
-| `inlineCompletion` | p50 < 150 ms | small FIM model, server-side idle floor |
 | Startup to first `initialize` result | < 20 ms | no index load on the critical path. No filesystem scan, no classification |
 | Language resolution | p99 < 50 µs | `docs/LANGUAGE.md` §6 — table lookups; cached by `(uri, content_hash)`; never calls a model |
 | Scope resolution | p99 < 1 ms | treesitter query, else the structural scan, else whole file |

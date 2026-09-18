@@ -23,8 +23,8 @@ local M = {}
 --- but a statusline that polls on every redraw is a busy loop with extra steps.
 local POLL_MS = 5000
 
---- Above half of a ceiling the numbers earn the slot (`docs/UX.md` §3.4 shows the FIM count
---- on exactly that rule).
+--- Above half of a ceiling the numbers earn the slot: a counter that is nowhere near its
+--- limit is not worth the characters.
 local PRESSURE = 0.5
 
 --- Work in flight, by progress token. `$/progress` `begin` adds and `end` removes (PROTOCOL

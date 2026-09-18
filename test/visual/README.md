@@ -23,7 +23,7 @@ META_BASE_URL=http://127.0.0.1:4000/v1 META_MODEL=deepseek/deepseek-flash \
 ```
 
 A fixture with two deliberate defects opens, and a message confirms the server attached and
-whether inline completion is advertised.
+which endpoints are in force.
 
 ## 2. What should happen
 
@@ -34,21 +34,21 @@ whether inline completion is advertised.
 | put the cursor on that line, `<leader>ma` | a menu whose first entry is `Fix: file handle is never closed` |
 | pick it | the edit is applied; the sign clears |
 | `<leader>mu` | the buffer is restored byte for byte |
-| `<leader>mv` after saving and picking an action | side-by-side diff; `<CR>` applies, `q` leaves everything alone |
-| `<leader>me` | an explanation opens in a scratch buffer; `q` closes it |
-| `<leader>md` on a finding | it disappears, and stays gone after a re-save |
-| `i` then type inside a function | ghost text after ~0.4 s idle; `<Tab>` accepts, `<C-e>` dismisses |
+| `:Meta explain` | an explanation opens in a scratch buffer; `q` closes it |
+| `:Meta dismiss` on a finding | it disappears, and stays gone after a re-save |
 | `:Meta status` | queue, budgets, cache counters, and which endpoints are in force |
-| `<leader>mf` with the cursor on a finding | it asks you a question, then the answer arrives in a buffer a few words at a time |
-| `<leader>mp`, type a goal | a plan opens as one line per step; `<CR>` applies that step, `a` the rest, `u` takes one back |
-| `<leader>ml` on a function | runs the code lens there — `meta: explain`, or `meta: N finding(s) · fix` |
+| `:Meta followup` with the cursor on a finding | it asks you a question, then the answer arrives in a buffer a few words at a time |
+| `:Meta plan`, type a goal | a plan opens as one line per step; `<CR>` applies that step, `a` the rest, `u` takes one back |
+| `:lua vim.lsp.codelens.run()` on a function | runs the code lens there — `meta: explain`, or `meta: N finding(s) · fix` |
+| `:Meta usage` | published findings, files analysed, and what was applied, dismissed, accepted, undone |
 | `:Meta session` | what this server has done here; `<CR>` on an entry opens the file and line it names |
 
-`<leader>mr` (review the file now — the findings come back in the Result rather than waiting for
-the next save), `<leader>ms` (status), `<leader>mx` (cancel), `<leader>mS` (stop — the kill
-switch, no prompt), `<leader>mG` (start again) are also wired. `<leader>mh` toggles inlay hints,
-which are off by default: Neovim switches hints on per *buffer*, not per client, so turning them
-on for meta's badge would turn on every other server's hints in that buffer too.
+Four keys are bound: those above, plus `<leader>mq` (ask). The rest of the surface is typed —
+`:Meta review` (review the file now; the findings come back in the Result rather than waiting
+for the next save), `:Meta hints on|off` (inlay hints, off by default: Neovim switches hints on
+per *buffer*, not per client, so turning them on for meta's badge would turn on every other
+server's hints in that buffer too), `:Meta cancel`, `:Meta stop` (the kill switch, no prompt),
+`:Meta start`, `:Meta log`, `:Meta recompute`, `:Meta where`.
 
 ## 3. On your own files
 
@@ -101,7 +101,6 @@ new file alone would have been inert):
       prefix = '<leader>M',
       cmd = { bin },
       settings = {
-        inline_completion = { enabled = false },
         models = {
           reason = { base_url = 'http://127.0.0.1:37313/v1', model = 'qwen3.6-35b-a3b-iq3xxs' },
           review = { base_url = 'http://127.0.0.1:37313/v1', model = 'qwen3.6-35b-a3b-iq3xxs' },
@@ -119,7 +118,8 @@ does, and both worth checking for in any config:
   and `<leader>mb` — Telescope marks and `make` in the sample config — will have one of the
   two silently win. `<leader>M` keeps every meta key in one namespace and collides with
   nothing. Check `<leader>m*` before installing.
-- **`inline completion off`.** The sample config runs llama.vim, which owns ghost text. Two
+- **No ghost text.** Inline completion was removed from the server on 2026-09-19; generated
+  code is asked for with `<leader>Ma` or `:Meta ask`. Two
   providers driving the same surface is worse than one.
 
 `META_BASE_URL` / `META_MODEL` / `META_REVIEW_MODEL` are applied last and override the settings.
@@ -141,7 +141,7 @@ replacement is the colon form, `client:supports_method(...)`. The plugin uses th
 
 1. `:checkhealth meta` — binary, attachment, capabilities.
 2. `:LspLog` — the server logs the endpoint it is actually using:
-   `meta: settings applied — reason http://… · review http://… · inline completion on`.
+   `meta: settings applied — reason http://… · review http://…`.
    If that line names an endpoint you did not configure, the settings did not arrive and the
    server is on its built-in defaults.
 3. `:Meta status` — what the server believes its configuration is.
@@ -171,7 +171,7 @@ buffer whatever mode it is in — two accidental edits to a real file before tha
 Stated so nothing here promises a surface that does not exist:
 
 - **Nothing else from `docs/UX.md` §1 is missing.** Plans have their step-through buffer
-  (`:Meta plan <goal>` or `<leader>Mp`): one line per step, `<CR>` applies that step, `a` the
+  (`:Meta plan <goal>`): one line per step, `<CR>` applies that step, `a` the
   rest, `u` takes one back, and the line says what happened to it.
 - **Code lens and inlay hints** are designed and not advertised.
 - **Scope resolution is structural**, not treesitter-backed: brace and indentation blocks with

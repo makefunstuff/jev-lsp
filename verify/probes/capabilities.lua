@@ -23,7 +23,6 @@ local picks = {
   { 'general.positionEncodings', caps.general.positionEncodings },
   { 'textDocument.codeAction', caps.textDocument.codeAction },
   { 'textDocument.diagnostic', caps.textDocument.diagnostic },
-  { 'textDocument.inlineCompletion', caps.textDocument.inlineCompletion },
   { 'textDocument.synchronization', caps.textDocument.synchronization },
   { 'workspace.codeLens', caps.workspace.codeLens },
   { 'workspace.diagnostics', caps.workspace.diagnostics },

@@ -19,6 +19,9 @@ not for the code they touch.
 | `verify/real_model.py` | built | real endpoint, reports rather than asserts; run against DeepSeek through the omp auth gateway |
 | `verify/soak.py` | built | several languages through the whole loop against a real endpoint; last result 8/9 applied, 0 unparseable |
 | `verify/stub_model.py` | built | scripted endpoint; no GPU, no network |
+| `verify/quality_eval.py` | built | real endpoint: 4/4 planted defects caught, 4/4 precision, **0 findings across 2 clean files**, 0 discarded |
+| `verify/outcome_test.py` | built | 18/18 — `meta.outcome` recorded, `meta.usage` counted, the unknown event kept verbatim. Proven to fail on the pre-change binary |
+| `verify/repo_bench.py` | built | real endpoint, a measurement rather than a threshold: 40 files of this repository: 62 findings, **3.21 per 1000 lines** (three runs, 3.21/3.48/3.71) |
 | `verify/nvim_live.lua` | built | 0 failures, 0 skips — real plugin, real server, real buffer |
 | `verify/goldens/` | **not built** | planned with U6; the anchor-ambiguity rules are covered by `meta-core` unit tests instead |
 | `verify/bench.sh` | **not built** | latency budgets are asserted where they can be (`codeAction` p99 in `lsp_client.py` step 3); a standalone bench waits for U9 |
@@ -101,7 +104,6 @@ suite is the actual regression net; it is run in CI *and* as part of the design 
 | `version` omitted from a `TextDocumentEdit` | validator self-test, reproducing `[R3]`'s `util.lua:541` crash as a *rejection* |
 | `version` set to a stale value | `verify/lsp_client.py` step 7 |
 | Model call placed inside the `codeAction` handler | latency bench, `codeAction` p99 budget |
-| Unbounded inline-completion calls | stub endpoint call counter under a simulated 60 s insert session |
 | Cache keyed by `(uri, version)` instead of content hash | revert-then-resolve test: same content, different version, must hit |
 | `title` derived from model output | determinism test: two cold runs must produce identical titles |
 | Budget check after the call instead of before | budget test asserting the stub sees exactly `max_calls_per_min` calls |
@@ -125,6 +127,9 @@ suite is the actual regression net; it is run in CI *and* as part of the design 
 | A skipped buffer reported silently | `:Meta status` test asserting `over_size`, `binary`, `ignored`, `generic_scope` are surfaced |
 | Model output applied without anchor resolution | golden test: ambiguous anchor must yield no edit |
 | `ERROR` severity emitted from the findings contract | schema rejection test |
+| The finding cap applied at some surfaces and not others | `meta-core` `findings::tests::the_cap_keeps_warnings_over_information_and_truncates`; every surface reads the one finalised set, so `verify/quality_eval.py` keeps its zero on the clean files |
+| What the client did with an offer never reaching the server | `verify/outcome_test.py` — proven to fail on the binary without `meta.outcome` (17 checks) |
+| A record that can be read as a schema instead of a log | same test: an unknown `kind` is recorded verbatim and counted as nothing |
 
 ## 5. Latency bench
 
@@ -146,6 +151,8 @@ is measured separately and reported as `[U]` context, never as a pass condition.
 | "The frozen contract is implemented by a real client" | `verify/probes/trace.lua` green — a reference server's payloads for §2/§4/§8 are accepted, applied, and refused exactly as specified |
 | "Every file is supported, not just known filetypes" | `verify/probes/language.lua` green — 8/11 attached by the built-in path, 11/11 after the plugin pass, including files with no language at all |
 | "The model output is usable" | golden intents |
+| "The findings are quiet enough to live with" | `verify/quality_eval.py` — 4/4 planted defects caught and zero findings on the two clean files |
+| "What the user does with an offer is known" | `verify/outcome_test.py` — `meta.usage` counts it and the line is in `<root>/.git/meta/session.jsonl` |
 
 Anything not covered above is reported as unverified, with the exact probe that would
 settle it.
@@ -255,18 +262,13 @@ Recorded because each was invisible to a scripted model, and each is now pinned 
 
 Recorded because they are deliberate boundaries, not oversights:
 
-- **Inline completion ghost text is verified interactively, not headlessly.** The server side
-  is covered (`verify/inline_test.py`, 14/14). A headless Neovim cannot drive it: it fires
-  **none** of `InsertEnter` / `CursorMovedI` / `TextChangedP`, measured as zero each after
-  `startinsert` plus a text change, so `verify/inline_live.lua` reports a skip for the ghost
-  text itself. Driving a real Neovim in a PTY settles it — the events fire, the client asks
-  (`triggerKind = 2`, at the cursor), the server answers one item, and the ghost text renders
-  while the buffer stays untouched. The probe is the sequence in `inline_live.lua` run in a
-  terminal instead of `--headless`.
-- **`inlineCompletionProvider` is injected rather than declared**, because `lsp-types` 0.94
-  (pinned by tower-lsp 0.20) has no field for it — it first appears in 0.95.0. The injection
-  is one function at the transport boundary, tested in `crates/meta-lsp/src/advertised.rs`,
-  and disappears the day the dependency moves.
+- **Inline completion is gone, and with it the two boundaries it used to carry.** Ghost text
+  was verified interactively (a headless Neovim fires none of `InsertEnter` / `CursorMovedI` /
+  `TextChangedP`) and `inlineCompletionProvider` had to be injected into the `initialize`
+  response because `lsp-types` 0.94 cannot express it. Both are moot since 2026-09-19: the
+  method, the capability, the `fim` tier and the `<Tab>` acceptance were removed, along with
+  `crates/meta-lsp/src/advertised.rs` and the transport-boundary wrapper that existed only to
+  carry that one field.
 - **`shutdown` with an explicit `params` member is rejected** with `-32602 Unexpected
   params`. tower-lsp only accepts `()` for a no-params method, and JSON-RPC 2.0 permits
   omitting `params` but does not define a null one, so the rejection is spec-correct.

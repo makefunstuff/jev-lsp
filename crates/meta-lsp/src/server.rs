@@ -147,9 +147,23 @@ impl MetaServer {
                                 &json!({
                                     "kind": "analysis",
                                     "uri": uri,
-                                    "findings": out.findings.len(),
+                                    "count": out.findings.len(),
                                     "discarded": out.rejected,
                                     "from_cache": out.from_cache,
+                                    // What the run actually kept, not only how many. The count
+                                    // alone cannot answer "what is it complaining about on this
+                                    // repository", which is the question the volume measurement
+                                    // exists to answer; `label` is already clipped at
+                                    // MAX_LABEL, so a line stays a line.
+                                    "findings": out
+                                        .findings
+                                        .iter()
+                                        .map(|f| json!({
+                                            "line": f.line,
+                                            "severity": severity_str(f.severity),
+                                            "label": f.label,
+                                        }))
+                                        .collect::<Vec<_>>(),
                                     // The first finding's line, so the entry can be walked
                                     // back to the place it is about.
                                     "line": out.findings.first().map(|f| f.line),
@@ -331,6 +345,8 @@ const COMMANDS: &[&str] = &[
     "meta.followup",
     "meta.document",
     "meta.session",
+    "meta.usage",
+    "meta.outcome",
     "meta.plan",
     "meta.apply",
     "meta.revert",
@@ -522,6 +538,15 @@ fn explicit_scope(arg: &Value) -> Option<meta_core::types::LineRange> {
     })
 }
 
+/// The wire name of a severity. One mapping, so a diagnostic and a log entry can never
+/// describe the same finding differently.
+fn severity_str(s: Severity) -> &'static str {
+    match s {
+        Severity::Warning => "warning",
+        Severity::Information => "information",
+    }
+}
+
 /// One finding as a client receives it in a Result. The same fields the diagnostic carries,
 /// so the two surfaces cannot describe the same finding differently.
 fn finding_json(f: &Finding) -> Value {
@@ -530,10 +555,7 @@ fn finding_json(f: &Finding) -> Value {
         "line": f.line,
         "start_col": f.start_col,
         "end_col": f.end_col,
-        "severity": match f.severity {
-            Severity::Warning => "warning",
-            Severity::Information => "information",
-        },
+        "severity": severity_str(f.severity),
         "label": f.label,
         "detail": f.detail,
         "verb": f.verb_hint.as_str(),
@@ -796,17 +818,16 @@ impl LanguageServer for MetaServer {
         let invoked = params.context.trigger_kind != Some(CodeActionTriggerKind::AUTOMATIC);
         let mut actions: Vec<CodeActionOrCommand> = Vec::new();
 
-        // One action per finding, so the user fixes what they highlighted.
+        // One action per finding, so the user fixes what they highlighted. The count is already
+        // capped where the finding set is built, so every surface shows the same ones.
         let mut relevant: Vec<&Finding> = findings
             .iter()
             .filter(|f| f.line >= scope.range.start_line && f.line <= scope.range.end_line)
-            .take(cfg.noise.max_visible_findings)
             .collect();
         if relevant.is_empty() {
             relevant = findings
                 .iter()
                 .filter(|f| f.line == cursor_line)
-                .take(cfg.noise.max_visible_findings)
                 .collect();
         }
 
@@ -1001,11 +1022,9 @@ impl LanguageServer for MetaServer {
         let Some(doc) = self.state.doc(&uri) else {
             return Ok(empty);
         };
-        let cfg = self.state.config();
         let (findings, _) = self.findings_for(&doc);
         let items = findings
             .iter()
-            .take(cfg.noise.max_visible_findings)
             .map(|f| to_diagnostic(f, &doc.hash))
             .collect();
         Ok(DocumentDiagnosticReportResult::Report(
@@ -1198,14 +1217,19 @@ impl LanguageServer for MetaServer {
         // record is never read back to decide anything (N9); a read-only checkout that cannot
         // be written to is not a reason to fail a request over a convenience.
         //
-        // Three commands are left out on purpose, for the same reason: they are not work.
-        // `meta.definitions` is the client telling the server what it already knows, sent on
-        // every change; `meta.status` and `meta.session` are polls — the statusline asks for
+        // Five commands are left out on purpose, for the same reason: they are not work.
+        // `meta.document` is the client telling the server what it already knows, sent on every
+        // change; `meta.status` and `meta.session` are polls — the statusline asks for
         // the first every few seconds and the session buffer for the second. Recording polls
         // fills the record with the act of reading it and buries the work it exists to show,
         // which is exactly what happened: a day of testing left ninety-five megabytes of
-        // `meta.status` behind and nothing else in the last two hundred entries.
-        let recorded = !matches!(command.as_str(), "meta.document" | "meta.status" | "meta.session");
+        // `meta.status` behind and nothing else in the last two hundred entries. `meta.usage`
+        // reads the same record, so it is a poll by construction, and `meta.outcome` is not
+        // work either — it *is* the entry it would otherwise duplicate.
+        let recorded = !matches!(
+            command.as_str(),
+            "meta.document" | "meta.status" | "meta.session" | "meta.usage" | "meta.outcome"
+        );
         if recorded {
         if let Some(root) = self.state.root() {
             let _ = crate::trace::append(
@@ -1323,66 +1347,12 @@ impl MetaServer {
             .await;
     }
 
-    /// `textDocument/inlineCompletion` (3.18 draft), registered as a custom method because
-    /// the pinned `lsp-types` has no handler for it.
-    ///
-    /// Everything here answers with an empty list rather than an error: a completion is
-    /// offered while the user is typing, so a refusal must be silent — no popup, no
-    /// diagnostic, just no ghost text (`docs/UX.md` §6). The reason goes to the log.
-    pub async fn inline_completion(
-        &self,
-        params: crate::inline::InlineParams,
-    ) -> tower_lsp::jsonrpc::Result<crate::inline::InlineList> {
-        let uri = params.text_document.uri.to_string();
-        let empty = crate::inline::InlineList::default();
-        let Some(doc) = self.state.doc(&uri) else {
-            return Ok(empty);
-        };
-        // Neovim sends triggerKind 1 for a manual request and 2 when it fired on its own
-        // timer (`lsp/inline_completion.lua`); only the timed path is rate-limited by context.
-        let invoked = params
-            .context
-            .as_ref()
-            .and_then(|c| c.trigger_kind)
-            .is_some_and(|k| k == 1);
-        let (line, character) = (params.position.line, params.position.character);
-        // What the client pushed for this version: a completion cannot ask for context per
-        // request without being slower than the keystroke it serves.
-        let provided = self.state.standing_context(&uri, doc.version);
-        let outcome = self
-            .blocking(move |engine| {
-                engine.complete_with_context(&doc, line, character, invoked, &provided)
-            })
-            .await;
-        match outcome {
-            Ok(text) if !text.is_empty() => Ok(crate::inline::InlineList {
-                items: vec![crate::inline::InlineItem {
-                    insert_text: text,
-                    // No range: the text belongs exactly at the cursor, and proposing a
-                    // range invites the client to replace more than the user selected.
-                    range: None,
-                }],
-            }),
-            Ok(_) => Ok(empty),
-            Err(f) => {
-                self.client
-                    .log_message(
-                        MessageType::LOG,
-                        format!("meta: no completion — {}", f.message()),
-                    )
-                    .await;
-                Ok(empty)
-            }
-        }
-    }
-
     /// Run an engine call off the async worker.
     ///
     /// The model client is synchronous (one blocking `ureq` implementation, no async in
     /// `meta-core`), so calling it from an `async fn` blocks a runtime thread for as long as
-    /// the request takes — up to the tier timeout. Inline completion fires on a 200 ms timer
-    /// while the user types, so this is not theoretical: it is how a language server stalls
-    /// every other handler behind one model call.
+    /// the request takes — up to the tier timeout, which is how a language server ends up
+    /// stalling every other handler behind one model call.
     ///
     /// Every model-calling handler goes through here.
     async fn blocking<T, F>(&self, work: F) -> Result<T, Failure>
@@ -1496,10 +1466,9 @@ impl MetaServer {
                                 .log_message(
                                     MessageType::LOG,
                                     format!(
-                                        "meta: settings applied — reason {} · review {} · inline completion {}",
+                                        "meta: settings applied — reason {} · review {}",
                                         cfg.models.reason.base_url,
-                                        cfg.models.review.base_url,
-                                        if cfg.inline_completion.enabled { "on" } else { "off" }
+                                        cfg.models.review.base_url
                                     ),
                                 )
                                 .await;
@@ -1534,7 +1503,6 @@ impl MetaServer {
                     "documents": self.state.doc_count(),
                     "analysis_in_flight": self.state.is_analyzing(),
                     "plans": self.state.plan_count(),
-                    "fim_calls_last_minute": self.state.fim.calls_last_minute(),
                     "cache": {"entries": entries, "hits": hits, "misses": misses},
                     "budget": {
                         "calls_last_minute": snap.calls_last_minute,
@@ -1694,6 +1662,97 @@ impl MetaServer {
                         .as_deref()
                         .map(|r| crate::trace::path_for(r).to_string_lossy().to_string()),
                 }))
+            }
+            "meta.usage" => {
+                // Counts over what the record still holds, not since the beginning of time:
+                // the log trims itself (`trace::MAX_BYTES`), so a number here is a number for
+                // the window that is still readable, and saying so is part of the answer.
+                let entries = self
+                    .state
+                    .root()
+                    .map(|r| crate::trace::tail(&r, 2000))
+                    .unwrap_or_default();
+                let mut published = 0usize;
+                let mut files: Vec<String> = Vec::new();
+                let mut applied = 0usize;
+                let mut dismissed = 0usize;
+                let mut undone = 0usize;
+                for e in &entries {
+                    match e.get("kind").and_then(|v| v.as_str()) {
+                        Some("analysis") => {
+                            // The array is authoritative when present; the older count field
+                            // still speaks for entries written before it existed.
+                            published += match e.get("findings") {
+                                Some(Value::Array(items)) => items.len(),
+                                _ => e.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+                            };
+                            if let Some(uri) = e.get("uri").and_then(|v| v.as_str()) {
+                                if !files.iter().any(|f| f.as_str() == uri) {
+                                    files.push(uri.to_string());
+                                }
+                            }
+                        }
+                        Some("outcome") => match e.get("event").and_then(|v| v.as_str()) {
+                            Some("action-applied") => applied += 1,
+                            Some("action-dismissed") | Some("finding-dismissed") => dismissed += 1,
+                            Some("edit-undone") => undone += 1,
+                            _ => {}
+                        },
+                        _ => {}
+                    }
+                }
+                result_ok(json!({
+                    "window": "session log",
+                    "published": published,
+                    "files": files.len(),
+                    "applied": applied,
+                    "dismissed": dismissed,
+                    "undone": undone,
+                    // The client renders this with `M.open_artifact`, so the answer has to be
+                    // an artifact (`PROTOCOL.md` §7): the counts above are for anything that
+                    // wants to read them, this is for the person who asked.
+                    "kind": "usage",
+                    "id": "usage",
+                    "summary": "what the server offered and what was done with it",
+                    "markdown": format!(
+                        "published {published} finding(s) across {} file(s)\n\n\
+                         - applied    {applied}\n\
+                         - dismissed  {dismissed}\n\
+                         - undone     {undone}\n\n\
+                         Over the session log: the record trims itself, so these count what is \
+                         still readable, not everything since the server started.\n",
+                        files.len()
+                    ),
+                }))
+            }
+            "meta.outcome" => {
+                // What the user did with what was offered. The client is the only witness — it
+                // applies the edit, dismisses the finding, accepts the completion — and none of
+                // that used to come back, which is why "is this working" had no answer.
+                //
+                // A command rather than a custom method: N6 freezes the surface at the standard
+                // methods plus this one back-channel, and a `meta/…` method would be exactly
+                // the invented method the rule forbids. It is a record, not a schema — `event`
+                // is written exactly as it arrives, so a client that starts reporting something
+                // new is recorded rather than rejected — and it never fails: the user asked for
+                // an edit, not for bookkeeping, and a metric must not become a failed action.
+                let given = params.arguments.first().cloned().unwrap_or_else(|| json!({}));
+                if let Some(root) = self.state.root() {
+                    let mut entry = json!({"kind": "outcome"});
+                    if let (Some(e), Value::Object(payload)) = (entry.as_object_mut(), given) {
+                        for (k, v) in payload {
+                            // `kind` is how the log tells one entry type from another, so the
+                            // payload's own event name is recorded under `event` instead.
+                            if k == "kind" {
+                                e.insert("event".to_string(), v);
+                            } else {
+                                e.insert(k, v);
+                            }
+                        }
+                    }
+                    let _ = crate::trace::append(&root, &entry);
+                }
+                result_ok(json!({"recorded": true}))
             }
             "meta.ask" => {
                 let arg = params.arguments.first().cloned().unwrap_or_else(|| json!({}));

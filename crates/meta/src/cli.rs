@@ -101,11 +101,7 @@ impl Overrides {
     /// Point every tier at the override. The CLI serves one request at a time and cannot
     /// know which tier is coming, so a flag that names an endpoint names it for all of them.
     pub fn apply(&self, cfg: &mut Config) {
-        for tier in [
-            &mut cfg.models.fim,
-            &mut cfg.models.reason,
-            &mut cfg.models.review,
-        ] {
+        for tier in [&mut cfg.models.reason, &mut cfg.models.review] {
             if let Some(url) = &self.base_url {
                 tier.base_url = url.clone();
             }
@@ -615,7 +611,7 @@ mod tests {
             max_tokens: Some(32),
         }
         .apply(&mut cfg);
-        for tier in [&cfg.models.fim, &cfg.models.reason, &cfg.models.review] {
+        for tier in [&cfg.models.reason, &cfg.models.review] {
             assert_eq!(tier.base_url, "http://elsewhere/v1");
             assert_eq!(tier.model, "other");
             assert_eq!(tier.max_tokens, 32);

@@ -64,11 +64,9 @@ vim.opt.updatetime = 300     -- how quickly idle/save-driven work is picked up
 require('meta').setup({
   cmd = { BIN },
   settings = {
-    inline_completion = { enabled = true },
     models = {
       reason = { base_url = BASE, model = MODEL, timeout_ms = 120000 },
       review = { base_url = BASE, model = MODEL, timeout_ms = 120000 },
-      fim = { base_url = BASE, model = MODEL, timeout_ms = 30000 },
     },
   },
 })
@@ -103,10 +101,9 @@ local function report()
       .. ' runs', vim.log.levels.ERROR)
     return
   end
-  local inline = clients[1]:supports_method('textDocument/inlineCompletion')
-  vim.notify(('meta ready · server attached · inline completion %s\n'
+  vim.notify(('meta ready · server attached\n'
     .. 'model: %s\n'
     .. 'press :Meta status · <leader>ma for actions after saving this file')
-    :format(inline and 'advertised' or 'NOT advertised', MODEL), vim.log.levels.INFO)
+    :format(MODEL), vim.log.levels.INFO)
 end
 vim.defer_fn(report, 500)

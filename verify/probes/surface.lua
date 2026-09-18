@@ -37,8 +37,6 @@ local checks = {
   { 'codeAction.isPreferredSupport', td.codeAction.isPreferredSupport == true },
   { 'codeAction.resolveSupport.properties has edit',
     vim.tbl_contains(td.codeAction.resolveSupport.properties, 'edit') },
-  { 'inlineCompletion advertised (table, not true)',
-    type(td.inlineCompletion) == 'table' and td.inlineCompletion.dynamicRegistration == false },
   { 'diagnostic.dynamicRegistration', td.diagnostic.dynamicRegistration == true },
   { 'diagnostic.dataSupport', td.diagnostic.dataSupport == true },
   { 'workspace.diagnostics.refreshSupport', ws.diagnostics.refreshSupport == true },

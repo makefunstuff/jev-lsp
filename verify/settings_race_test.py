@@ -67,7 +67,6 @@ def main():
             "models": {
                 "reason": {"base_url": url, "model": "stub-model"},
                 "review": {"base_url": url, "model": "stub-model"},
-                "fim": {"base_url": url, "model": "stub-model"},
             },
         }
         server.request("initialize", {

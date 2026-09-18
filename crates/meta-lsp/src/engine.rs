@@ -134,68 +134,6 @@ fn repair_context(original: &context::Context, error: &str, previous: &str) -> c
     repaired
 }
 
-/// How much of the document either side of the cursor is shown to the model.
-const PREFIX_WINDOW: usize = 2000;
-const SUFFIX_WINDOW: usize = 500;
-/// A completion is a line or two. More than this is the model writing the file.
-const MAX_COMPLETION_LINES: usize = 4;
-
-/// Byte offset of a position, or `None` if it is out of range or not a boundary.
-fn byte_offset(text: &str, line: u32, character: u32) -> Option<usize> {
-    let mut start = 0usize;
-    let mut seen = 0u32;
-    if line > 0 {
-        for (i, b) in text.bytes().enumerate() {
-            if b == b'\n' {
-                seen += 1;
-                if seen == line {
-                    start = i + 1;
-                    break;
-                }
-            }
-        }
-        if seen != line {
-            return None;
-        }
-    }
-    let offset = start + character as usize;
-    if offset > text.len() || !text.is_char_boundary(offset) {
-        return None;
-    }
-    Some(offset)
-}
-
-/// The last `n` characters.
-fn tail(text: &str, n: usize) -> String {
-    let count = text.chars().count();
-    text.chars().skip(count.saturating_sub(n)).collect()
-}
-
-/// The first `n` characters.
-fn head(text: &str, n: usize) -> String {
-    text.chars().take(n).collect()
-}
-
-/// Strip what a model wraps completions in, and stop it writing the rest of the file.
-fn clean_completion(raw: &str) -> String {
-    let mut text = raw.trim_start_matches(['\n', '\r']).to_string();
-    if text.starts_with("```") {
-        // Drop the opening fence and its language tag, then the closing fence.
-        if let Some(nl) = text.find('\n') {
-            text = text[nl + 1..].to_string();
-        }
-        if let Some(end) = text.rfind("```") {
-            text.truncate(end);
-        }
-    }
-    let mut lines: Vec<&str> = text.lines().collect();
-    lines.truncate(MAX_COMPLETION_LINES);
-    while lines.last().is_some_and(|l| l.trim().is_empty()) {
-        lines.pop();
-    }
-    lines.join("\n").trim_end().to_string()
-}
-
 pub struct Engine {
     pub state: Arc<AppState>,
 }
@@ -270,7 +208,12 @@ impl Engine {
             contract::parse_findings,
             None,
         )?;
-        let built = findings::build(&doc.text, &raw, &meta_core::lang::profile(&doc.language.name));
+        let built = findings::build(
+            &doc.text,
+            &raw,
+            &meta_core::lang::profile(&doc.language.name),
+            cfg.noise.max_visible_findings,
+        );
 
         self.state.cache.put(
             &cache::findings_key(&doc.hash),
@@ -382,7 +325,7 @@ impl Engine {
                 let mut attempt_ctx = ctx.clone();
                 let mut repairs = 0usize;
                 loop {
-                    let attempt = self.chat_with(&cfg, verb.tier(), verbs::render(verb, &attempt_ctx), None, None)?;
+                    let attempt = self.chat_with(&cfg, verb.tier(), verbs::render(verb, &attempt_ctx), None)?;
                     let refusal = match contract::parse_edit(&attempt.text) {
                         Err(e) => e.to_string(),
                         Ok(raw) => match edit::build_proposal(&doc.text, &raw, &profile, &opts) {
@@ -434,7 +377,7 @@ impl Engine {
         if !cfg.enabled {
             return Err(Failure::Skipped("meta is stopped".to_string()));
         }
-        let response = self.chat_with(&cfg, Tier::Reason, spec, None, None)?;
+        let response = self.chat_with(&cfg, Tier::Reason, spec, None)?;
         Ok(response.text)
     }
 
@@ -495,7 +438,6 @@ impl Engine {
         cfg: &Config,
         tier_kind: Tier,
         spec: verbs::PromptSpec,
-        fim: Option<(String, String)>,
         delta: Delta<'_>,
     ) -> Result<ChatResponse, Failure> {
         let _permit = match self.state.budget.try_acquire(&cfg.budget) {
@@ -514,7 +456,6 @@ impl Engine {
             max_tokens,
             json: spec.json,
             think: tier.think,
-            fim,
         };
         let response = match delta {
             Some(cb) => self.state.backend.chat_stream(tier, &request, cb),
@@ -542,7 +483,7 @@ impl Engine {
         mut delta: Delta<'_>,
     ) -> Result<(T, Usage), Failure> {
         let started = std::time::Instant::now();
-        let response = self.chat_with(cfg, tier_kind, render(ctx), None, reborrow(&mut delta))?;
+        let response = self.chat_with(cfg, tier_kind, render(ctx), reborrow(&mut delta))?;
         let mut tokens_in = response.prompt_tokens;
         let mut tokens_out = response.completion_tokens;
 
@@ -567,7 +508,7 @@ impl Engine {
         let mut last = first_error;
         for _ in 0..MAX_REPAIR_ATTEMPTS {
             let repair = repair_context(ctx, &last.to_string(), &response.text);
-            let retry = self.chat_with(cfg, tier_kind, render(&repair), None, reborrow(&mut delta))?;
+            let retry = self.chat_with(cfg, tier_kind, render(&repair), reborrow(&mut delta))?;
             tokens_in += retry.prompt_tokens;
             tokens_out += retry.completion_tokens;
             match parse(&retry.text) {
@@ -604,133 +545,6 @@ impl Engine {
             explicit,
             cfg.languages.max_scope_lines,
         )
-    }
-
-    /// A fill-in-the-middle completion at a cursor position (PROTOCOL.md §3.2, §5).
-    ///
-    /// The gate order matters and is asserted by tests: cheap refusals come first, the
-    /// expensive one last. Nothing here is allowed to be slow — the client fires this on a
-    /// 200 ms timer while the user types.
-    ///
-    /// `invoked` means the user pressed a key rather than the client firing on a timer:
-    /// an explicit request is not second-guessed by the prefix floor, because they asked.
-    /// The same, with the standing context the client keeps for this document.
-    ///
-    /// A completion cannot assemble context per request — it fires on a 200 ms timer while the
-    /// user types, and asking another language server for references costs 300 ms — so what it
-    /// sees is what the client pushed for this document version. The context is in the cache
-    /// key for the same reason it is everywhere else: a completion computed with the project
-    /// in view is not the answer to a question asked without it.
-    pub fn complete_with_context(
-        &self,
-        doc: &Document,
-        line: u32,
-        character: u32,
-        invoked: bool,
-        provided: &[Provided],
-    ) -> Result<String, Failure> {
-        let cfg = self.config();
-        if !cfg.enabled {
-            return Err(Failure::Skipped("meta is stopped".to_string()));
-        }
-        if !cfg.inline_completion.enabled {
-            return Err(Failure::Skipped("inline completion is off".to_string()));
-        }
-        if let Some(skip) = gates::evaluate(
-            &doc.text,
-            &doc.path,
-            cfg.languages.max_file_bytes,
-            &cfg.languages.ignore,
-        ) {
-            return Err(Failure::Skipped(skip.reason()));
-        }
-
-        let offset = byte_offset(&doc.text, line, character)
-            .ok_or_else(|| Failure::Skipped("the cursor is not in the document".to_string()))?;
-        let prefix = &doc.text[..offset];
-        let suffix = &doc.text[offset..];
-
-        // Never complete in the middle of a word. Asked at `res|ult` the model continues the
-        // *token*, which is byte-correct and useless: measured against the live endpoint, that
-        // position produced `rn result` and `ult += value`. No editor's completion engine fires
-        // there, and neither does this one — the request is not made at all.
-        if let (Some(before), Some(after)) = (prefix.chars().next_back(), suffix.chars().next()) {
-            let word = |c: char| c.is_alphanumeric() || c == '_';
-            if word(before) && word(after) {
-                return Err(Failure::Skipped(
-                    "the cursor is inside a word".to_string(),
-                ));
-            }
-        }
-
-        // Do not fire on trivial context: a completion for every keystroke is noise.
-        let non_whitespace = prefix
-            .chars()
-            .rev()
-            .take(PREFIX_WINDOW)
-            .filter(|c| !c.is_whitespace())
-            .count();
-        if !invoked && (non_whitespace as u32) < cfg.inline_completion.min_prefix_chars {
-            return Err(Failure::Skipped(
-                "not enough context before the cursor".to_string(),
-            ));
-        }
-
-        // The same cursor in the same content is the same question.
-        let key = cache::op_key_for(
-            "completion",
-            PROMPT_VERSION,
-            &cfg.models.fim.model,
-            &doc.hash,
-            line,
-            character,
-            &context::provided_digest(provided),
-        );
-        if let Some(hit) = self.state.cache.get(&key) {
-            if let Some(text) = &hit.artifact {
-                return Ok(text.clone());
-            }
-        }
-
-        if !self
-            .state
-            .fim
-            .try_acquire(cfg.inline_completion.max_calls_per_min)
-        {
-            return Err(Failure::Refused(meta_core::budget::Refusal::PerMinute));
-        }
-
-        let mut spec = verbs::render_completion(
-            &doc.language.prompt,
-            &doc.path,
-            &tail(prefix, PREFIX_WINDOW),
-            &head(suffix, SUFFIX_WINDOW),
-            cfg.models.fim.fim_tokens.as_ref(),
-        );
-        spec.user.push_str(&context::render_provided(provided));
-        // The two halves travel with the request: a FIM endpoint wants them as its own fields,
-        // and the prompt above is for the chat endpoints that have no such fields.
-        let response = self.chat_with(
-            &cfg,
-            Tier::Fim,
-            spec,
-            Some((tail(prefix, PREFIX_WINDOW), head(suffix, SUFFIX_WINDOW))),
-            None,
-        )?;
-        let text = clean_completion(&response.text);
-        if verbs::opens_a_new_definition(prefix, &text) {
-            return Err(Failure::Skipped(
-                "the completion started a new definition instead of continuing this one".to_string(),
-            ));
-        }
-        self.state.cache.put(
-            &key,
-            Conclusion {
-                artifact: Some(text.clone()),
-                ..Default::default()
-            },
-        );
-        Ok(text)
     }
 
     /// Turn a goal into a plan (PROTOCOL.md §6, §7). A plan holds no edits: each step is

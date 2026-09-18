@@ -308,10 +308,15 @@ def main():
                     except Exception:
                         continue
                     if entry.get("kind") == "analysis":
+                        # `findings` is the list the server kept (line, severity, label); the
+                        # count is its length, or the older scalar field on entries written
+                        # before that list existed.
+                        listed = entry.get("findings")
+                        kept = len(listed) if isinstance(listed, list) else entry.get("count")
                         print(
                             "  {uri:<32} findings={findings} discarded={discarded}".format(
                                 uri=entry.get("uri", "").rsplit("/", 1)[-1],
-                                findings=entry.get("findings"),
+                                findings=kept,
                                 discarded=entry.get("discarded"),
                             )
                         )
