@@ -166,6 +166,11 @@ def main():
     ap.add_argument("--base-url", required=True, help="an OpenAI-compatible endpoint")
     ap.add_argument("--model", required=True)
     ap.add_argument("--timeout", type=float, default=180)
+    ap.add_argument("--think", default=None, choices=["off", "low", "medium", "high"],
+                    help="override models.<tier>.think for both tiers. The metric is the "
+                         "review tier's, but a level is worth setting on both: an action "
+                         "resolved with reasoning and a review without is not a fair "
+                         "comparison of anything")
     args = ap.parse_args()
 
     workdir = tempfile.mkdtemp(prefix="meta-quality-")
@@ -182,12 +187,16 @@ def main():
     server = Lsp([args.bin, "--stdio"], env)
     # One analysis per file and this run is not about the limiter, so the ceiling is raised the
     # way a client raises it rather than through an environment variable that does not exist.
+    tiers = {
+        "reason": {"base_url": args.base_url, "model": args.model},
+        "review": {"base_url": args.base_url, "model": args.model},
+    }
+    if args.think:
+        for tier in tiers.values():
+            tier["think"] = args.think
     server.settings = {
         "budget": {"max_calls_per_min": 120, "max_calls_per_hour": 600},
-        "models": {
-            "reason": {"base_url": args.base_url, "model": args.model},
-            "review": {"base_url": args.base_url, "model": args.model},
-        },
+        "models": tiers,
     }
     findings_total = 0
     matched_total = 0

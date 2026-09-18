@@ -296,7 +296,9 @@ nvim --headless -u NONE -l verify/nvim_ui_test.lua # the plugin's own surfaces
 
 And with a real model: `verify/quality_eval.py` (is the review *right*), `verify/repo_bench.py`
 (how much does it produce per 1000 lines), `verify/soak.py` (does the file still parse).
-`STATUS.md` carries the latest numbers.
+`quality_eval.py` takes `--think off|low|medium|high` to run the same fixtures with a thinking
+level, which is how the default was checked rather than argued. `STATUS.md` carries the latest
+numbers.
 
 ## 9. What it will not do
 

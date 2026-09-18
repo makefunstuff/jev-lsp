@@ -19,7 +19,23 @@ api_key_env, timeout_ms, max_tokens, temperature, think}`. `think` mirrors the C
 reasoning control — `off` sends `chat_template_kwargs.enable_thinking = false`, a level
 sends `reasoning_effort`. Every tier defaults to `think = "off"` — `TierConfig::default()`
 is the only place a tier's defaults live, and no tier overrides it — so a thinking model is
-opted *into* per tier rather than out of.
+opted *into* per tier rather than out.
+
+**Why `off` is the default, measured** (2026-09-19, `deepseek/deepseek-v4-flash` through the
+omp auth gateway, and the local `llama.cpp` server):
+
+| Setting | What happened |
+|---|---|
+| `off` | `chat_template_kwargs: {enable_thinking: false}` → 744 ms, 9 completion tokens, a real answer, **zero** reasoning tokens |
+| `low` / `high` | accepted, and the reasoning tokens consume the whole budget: with a 32-token ceiling all 32 went to `reasoning_tokens` and `content` came back `null` — the "empty answer" failure `parse_response` has to name. Over a real ceiling on the local server the same shape spent **47 s producing 16 tokens and no answer** (docs/VERIFICATION.md §7) |
+| `medium` | **rejected**: `502 upstream_error — Thinking effort medium is not supported by deepseek/deepseek-v4-flash. Supported efforts: low, high, max`. Every call fails, so an analysis produces nothing at all |
+
+The supported effort set is a property of the endpoint and the model, not of the levels this
+config offers, and an unsupported one fails loudly rather than falling back — which is the
+right shape (`:Meta log` shows `model call failed: POST …`). Two consequences worth knowing:
+this server's jobs are narrow and fully specified (locate an anchor, emit one JSON object),
+which is where thinking buys least; and a level spent against a fixed ceiling *removes* the
+answer rather than improving it. Raise `max_tokens` and `timeout_ms` with any level.
 
 ## 2. Routing
 
