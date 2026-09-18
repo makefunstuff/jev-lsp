@@ -151,7 +151,7 @@ worse than no lens. `vim.lsp.codelens.run()` re-requests and then sends the comm
 server, so the plugin wraps `run` and dispatches its own namespace locally; every other
 command passes through untouched `[R14]`.
 
-### 3.4.3 `meta.definitions` — what the client's parser found
+### 3.4.3 `meta.document` — what the client knows about a document
 
 The server has no parser, by design (`LANGUAGE.md` §4): its declaration scan is structural, and
 in C, C++, Java and C# — languages that declare a function by *shape* rather than by keyword —
@@ -159,12 +159,21 @@ it finds no functions at all. The client is the side with parsers, so it sends w
 found:
 
 ```jsonc
-// plugin -> server, on attach, on change (debounced), and on save
-{ "command": "meta.definitions",
+// plugin -> server, on attach, on change (debounced), on save, and on FileType
+{ "command": "meta.document",
   "arguments": [ { "uri": "file:///…/statusline.lua", "version": 7,
                    "definitions": [ { "start_line": 45, "end_line": 51 },
-                                    { "start_line": 114, "end_line": 128 } ] } ] }
+                                    { "start_line": 114, "end_line": 128 } ],
+                   "context":     [ { "kind": "imports", "uri": "…", "text": "…" },
+                                    { "kind": "sibling", "uri": "…", "text": "…" } ] } ] }
 ```
+
+Two payloads, one lifecycle: both describe the document at one version, and one guard covers the
+pair. `definitions` answer the surfaces that enumerate (§3.4.1, §3.4.2); `context` answers the
+path that cannot assemble anything per request — the completion, which fires on a 200 ms timer
+while the user types, and for which a round trip to another language server is slower than the
+keystroke it serves. Context assembled *per request* (§6.1) goes on the generating commands
+instead, which is why references appear there and not here.
 
 Rules:
 
@@ -430,7 +439,7 @@ Ordered, all mandatory, all evaluated before any model call:
 | `meta.recompute` | `{}` | `Result` | yes |
 | `meta.explain` | `{uri, line, range?}` | `Artifact` (§7, `kind: "explanation"`) | yes |
 | `meta.followup` | `{uri, line, question, finding_id?, range?}` | `Artifact` (§7, `kind: "answer"`) | yes |
-| `meta.definitions` | `{uri, version, definitions:[{start_line, end_line}]}` | `Result` with `{stored}` — the client's own parser answering §3.4.3 | no |
+| `meta.document` | `{uri, version, definitions?, context?}` | `Result` with `{stored}` — the client's own parser answering §3.4.3 | no |
 | `meta.session` | `{limit?}` | `Result` with `{entries, count, path}` | no |
 | `meta.cancel` | `{progress_token}` | `Result` | yes |
 | `meta.plan` | `{goal, scope}` | `Artifact` | yes |

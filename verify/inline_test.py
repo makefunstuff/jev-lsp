@@ -161,6 +161,77 @@ def main():
         check("fim_calls_last_minute" in status,
               f"status reports the completion traffic: {status.get('fim_calls_last_minute')}")
 
+        print("[inline] the completion sees the project context, and caches on it")
+        # A completion cannot assemble context per request — it fires on a timer while the user
+        # types, and asking another language server costs more than the keystroke it serves —
+        # so what the client pushed for this document version is what the model sees. It is in
+        # the cache key for the same reason it is everywhere else: a completion computed with
+        # the project in view is not the answer to a question asked without it.
+        sibling = os.path.join(workdir, "elsewhere.py")
+        with open(sibling, "w") as fh:
+            fh.write("# MARKER_CONTEXT_ONE\ndef other():\n    return 1\n")
+
+        def push(context_text, version=1):
+            return server.request("workspace/executeCommand", {
+                "command": "meta.document",
+                "arguments": [{
+                    "uri": uri,
+                    "version": version,
+                    "definitions": [],
+                    "context": [{
+                        "kind": "sibling",
+                        "uri": "file://" + sibling,
+                        "start_line": 0,
+                        "end_line": 2,
+                        "text": context_text,
+                    }],
+                }],
+            }, timeout=10)
+
+        def prompt_has(marker):
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/__requests", timeout=5) as r:
+                body = " ".join(
+                    m.get("content", "")
+                    for req in json.load(r)["requests"]
+                    for m in req.get("messages", [])
+                    if isinstance(m, dict)
+                )
+            return marker in body
+
+        # The check above set the rate limit to one a minute and spent it, deliberately. This
+        # section is about context rather than about the limiter, so it raises the rate first —
+        # and waits, because the reconfiguration is a notification: the server re-reads the
+        # settings when it processes it, which is not necessarily before the next request.
+        spacious = {"inline_completion": {"enabled": True, "max_calls_per_min": 60}}
+        server.settings = spacious
+        server.notify("workspace/didChangeConfiguration", {"settings": {"meta": spacious}})
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            status = server.request("workspace/executeCommand",
+                                    {"command": "meta.status", "arguments": []},
+                                    timeout=10).get("result", {})
+            if status.get("triggers"):
+                break
+            time.sleep(0.1)
+        time.sleep(0.5)
+
+        push("# MARKER_CONTEXT_ONE")
+        before = model_calls()
+        ask(2, 0)
+        check(model_calls() > before, "a completion is generated with the pushed context")
+        check(prompt_has("MARKER_CONTEXT_ONE"), "and the model is shown what the editor knows")
+
+        cached = model_calls()
+        ask(2, 0)
+        check(model_calls() == cached, "the same cursor and content comes from the cache")
+
+        push("# MARKER_CONTEXT_TWO")
+        ask(2, 0)
+        check(
+            model_calls() > cached,
+            "and a changed context is a new question, not a stale completion",
+        )
+
         return 0 if all(ok for ok, _ in RESULTS) else 1
     finally:
         server.stop()

@@ -198,6 +198,32 @@ pub fn build_with(
 }
 
 /// The rendered block shared by every prompt, so a cache hit means identical input.
+/// The heading every prompt uses for what the editor contributed.
+///
+/// Shared rather than repeated: a completion and an explanation must describe the same thing
+/// the same way, and the model should never have to work out which is which.
+pub fn render_provided(provided: &[Provided]) -> String {
+    if provided.is_empty() {
+        return String::new();
+    }
+    // Bounded here as well as on the way in, so a caller that skipped `build` cannot flood a
+    // prompt either — the completion path renders directly, and a bound that only applies to
+    // one of two entry points is not a bound.
+    let provided = bounded(provided);
+    let mut out = String::from("\nPROJECT CONTEXT (provided by the editor, not chosen by you):\n");
+    for p in &provided {
+        out.push_str(&format!(
+            "  ({kind}) {uri} lines {start}..{end}:\n{text}\n",
+            kind = if p.kind.is_empty() { "context" } else { &p.kind },
+            uri = p.uri,
+            start = p.start_line + 1,
+            end = p.end_line + 1,
+            text = p.text,
+        ));
+    }
+    out
+}
+
 pub fn render_block(ctx: &Context) -> String {
     let mut out = String::new();
     out.push_str(&format!("FILE: {}\n", ctx.path));
@@ -215,19 +241,7 @@ pub fn render_block(ctx: &Context) -> String {
         ctx.scope_start + 1,
         ctx.scope_end + 1
     ));
-    if !ctx.provided.is_empty() {
-        out.push_str("\nPROJECT CONTEXT (provided by the editor, not chosen by you):\n");
-        for p in &ctx.provided {
-            out.push_str(&format!(
-                "  ({kind}) {uri} lines {start}..{end}:\n{text}\n",
-                kind = if p.kind.is_empty() { "context" } else { &p.kind },
-                uri = p.uri,
-                start = p.start_line + 1,
-                end = p.end_line + 1,
-                text = p.text,
-            ));
-        }
-    }
+    out.push_str(&render_provided(&ctx.provided));
     if ctx.truncated {
         out.push_str(
             "NOTE: the enclosing declaration is larger than the configured limit, so only \
@@ -268,6 +282,21 @@ mod tests {
             end_line: lines.saturating_sub(1) as u32,
             text: (0..lines).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n"),
         }
+    }
+
+    #[test]
+    fn rendered_context_is_labelled_and_bounded() {
+        let rendered = render_provided(&[provided("imports", "file:///a.py", 3)]);
+        assert!(rendered.contains("PROJECT CONTEXT"));
+        assert!(rendered.contains("(imports) file:///a.py"));
+        assert!(rendered.contains("line 0"), "the lines are shown");
+        assert!(render_provided(&[]).is_empty(), "nothing to say, nothing said");
+        let long = render_provided(&[provided("sibling", "file:///b.py", 500)]);
+        assert_eq!(
+            long.matches("line ").count(),
+            MAX_PROVIDED_LINES,
+            "the bounds apply to what is rendered, not only to what is stored"
+        );
     }
 
     #[test]

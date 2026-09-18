@@ -239,6 +239,30 @@ local function siblings_of(bufnr)
   return out
 end
 
+--- What is cheap enough to keep for every document, all the time.
+---
+--- Imports come from a parser that has already parsed, and siblings are buffer text — neither
+--- costs a round trip. References are *not* here on purpose: they are a request to another
+--- language server, which is worth paying when the user asks for something and not worth
+--- paying on a keystroke.
+--- @param bufnr integer
+--- @return table[]
+function M.standing(bufnr)
+  if not is_file_buffer(bufnr) then
+    return {}
+  end
+  local out = {}
+  for _, provider in ipairs({ imports_of, siblings_of }) do
+    local ok, part = pcall(provider, bufnr)
+    if ok then
+      for _, entry in ipairs(part) do
+        out[#out + 1] = entry
+      end
+    end
+  end
+  return out
+end
+
 --- Everything this editor can contribute about one position.
 ---
 --- Order is fixed — imports, references, test, siblings — and the server re-sorts by kind

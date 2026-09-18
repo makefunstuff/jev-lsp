@@ -10,7 +10,7 @@ inline annotation, or a key you already press.
 | Sign column + virtual text | `publishDiagnostics` / pull diagnostics | findings while you work | never — no notifications |
 | Lightbulb / code action menu | `textDocument/codeAction` | all explicit intents | only when invoked |
 | Inline annotation | `textDocument/codeLens` | per-symbol affordances: "explain", "test", "+2 findings" | never |
-| Ghost text | `textDocument/inlineCompletion` | FIM completion | never |
+| Ghost text | `textDocument/inlineCompletion` | FIM completion, with the imports and open buffers the client pushed for this document | never |
 | Inline hint | `textDocument/inlayHint` | a `meta: N finding(s)` badge on a declaration that has findings, and nothing elsewhere | never |
 | Plan buffer | plugin + `window/showDocument` | multi-step work: a line per step, `<CR>` applies one, `a` the rest, `u` takes one back | once, on completion |
 | Statusline segment | `$/progress` via `LspProgress` | what is running, budget remaining | never |

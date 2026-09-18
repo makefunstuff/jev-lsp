@@ -327,7 +327,8 @@ local function treesitter_definitions(bufnr)
   return defs
 end
 
---- Tell the server what this buffer's declarations are, for the version it is seeing.
+--- Tell the server what this buffer's declarations and standing context are, for the version
+--- it is seeing (`PROTOCOL.md` §3.4.3, §6.1).
 ---
 --- Nothing is sent when the parser cannot answer: `nil` means the server keeps its own
 --- structural scan, which is what a client without a parser gets. A definition set the server
@@ -346,10 +347,22 @@ local function push_definitions(bufnr)
   if type(version) ~= 'number' then
     return
   end
+  -- Cheap by construction: imports come from a parser that has already parsed, and siblings
+  -- are buffer text. References are deliberately absent — they cost a round trip to another
+  -- language server, which is worth paying when the user asks for something and not worth
+  -- paying on a keystroke.
+  local ok, standing = pcall(function()
+    return require('meta.context').standing(bufnr)
+  end)
   client:request('workspace/executeCommand', {
-    command = 'meta.definitions',
+    command = 'meta.document',
     arguments = {
-      { uri = vim.uri_from_bufnr(bufnr), version = version, definitions = defs },
+      {
+        uri = vim.uri_from_bufnr(bufnr),
+        version = version,
+        definitions = defs,
+        context = ok and standing or {},
+      },
     },
   }, function() end, bufnr)
 end

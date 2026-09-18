@@ -325,7 +325,7 @@ const COMMANDS: &[&str] = &[
     "meta.review",
     "meta.explain",
     "meta.followup",
-    "meta.definitions",
+    "meta.document",
     "meta.session",
     "meta.plan",
     "meta.apply",
@@ -1194,7 +1194,7 @@ impl LanguageServer for MetaServer {
         // fills the record with the act of reading it and buries the work it exists to show,
         // which is exactly what happened: a day of testing left ninety-five megabytes of
         // `meta.status` behind and nothing else in the last two hundred entries.
-        let recorded = !matches!(command.as_str(), "meta.definitions" | "meta.status" | "meta.session");
+        let recorded = !matches!(command.as_str(), "meta.document" | "meta.status" | "meta.session");
         if recorded {
         if let Some(root) = self.state.root() {
             let _ = crate::trace::append(
@@ -1335,8 +1335,13 @@ impl MetaServer {
             .and_then(|c| c.trigger_kind)
             .is_some_and(|k| k == 1);
         let (line, character) = (params.position.line, params.position.character);
+        // What the client pushed for this version: a completion cannot ask for context per
+        // request without being slower than the keystroke it serves.
+        let provided = self.state.standing_context(&uri, doc.version);
         let outcome = self
-            .blocking(move |engine| engine.complete(&doc, line, character, invoked))
+            .blocking(move |engine| {
+                engine.complete_with_context(&doc, line, character, invoked, &provided)
+            })
             .await;
         match outcome {
             Ok(text) if !text.is_empty() => Ok(crate::inline::InlineList {
@@ -1616,22 +1621,35 @@ impl MetaServer {
                     Err(f) => result_err(f.code(), &f.message()),
                 }
             }
-            "meta.definitions" => {
+            "meta.document" => {
                 let Some(arg) = params.arguments.first() else {
                     return result_err(
                         "bad_arguments",
-                        "meta.definitions needs {uri, version, definitions:[{start_line, end_line}]}",
+                        "meta.document needs {uri, version, definitions?, context?}",
                     );
                 };
                 let uri = arg.get("uri").and_then(|v| v.as_str()).unwrap_or_default().to_string();
                 let version = arg.get("version").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
-                let defs: Vec<crate::state::ClientDefinition> = arg
-                    .get("definitions")
-                    .and_then(|v| serde_json::from_value(v.clone()).ok())
-                    .unwrap_or_default();
-                let stored = defs.len();
-                self.state.put_definitions(&uri, version, defs);
-                result_ok(json!({ "stored": stored, "uri": uri, "version": version }))
+                let known = crate::state::KnownDocument {
+                    version,
+                    definitions: arg
+                        .get("definitions")
+                        .and_then(|v| serde_json::from_value(v.clone()).ok())
+                        .unwrap_or_default(),
+                    context: arg
+                        .get("context")
+                        .and_then(|v| serde_json::from_value(v.clone()).ok())
+                        .unwrap_or_default(),
+                };
+                let stored = known.definitions.len();
+                let contexts = known.context.len();
+                self.state.put_known(&uri, known);
+                result_ok(json!({
+                    "stored": stored,
+                    "context": contexts,
+                    "uri": uri,
+                    "version": version,
+                }))
             }
             "meta.session" => {
                 let limit = params

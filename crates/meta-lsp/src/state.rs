@@ -34,6 +34,20 @@ pub struct AppliedEdit {
     pub before: String,
 }
 
+/// What the client knows about one version of a document (PROTOCOL §3.4.3, §6.1).
+///
+/// One entry, one version guard: declarations for the surfaces that enumerate (`codeLens`,
+/// `inlayHint`) and standing context for the path that cannot assemble it per request — the
+/// completion, which fires on a timer while the user types.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct KnownDocument {
+    pub version: i32,
+    #[serde(default)]
+    pub definitions: Vec<ClientDefinition>,
+    #[serde(default)]
+    pub context: Vec<meta_core::context::Provided>,
+}
+
 /// A declaration the *client* found with its own parser (PROTOCOL §3.4.3).
 ///
 /// The client has the parser and this side does not, by design (`LANGUAGE.md` §4). The plugin
@@ -74,8 +88,8 @@ pub struct AppState {
     plans: Mutex<Vec<meta_core::types::Plan>>,
     /// Explanations and answers, oldest first, so hover can repeat one for free.
     artifacts: Mutex<Vec<(String, StoredArtifact)>>,
-    /// Declarations the client sent, by uri, with the document version they describe.
-    definitions: Mutex<std::collections::HashMap<String, (i32, Vec<ClientDefinition>)>>,
+    /// What the client sent, by uri, with the version it describes.
+    known: Mutex<std::collections::HashMap<String, KnownDocument>>,
     /// What each applied edit replaced, for `meta.revert`.
     applied: Mutex<HashMap<String, AppliedEdit>>,
     /// The text each server-applied edit was predicted to produce, checked against what
@@ -106,7 +120,7 @@ impl AppState {
             generations: Mutex::new(HashMap::new()),
             analysis: Mutex::new(HashMap::new()),
             plans: Mutex::new(Vec::new()),
-            definitions: Mutex::new(std::collections::HashMap::new()),
+            known: Mutex::new(std::collections::HashMap::new()),
             artifacts: Mutex::new(Vec::new()),
             applied: Mutex::new(HashMap::new()),
             predictions: Mutex::new(HashMap::new()),
@@ -263,22 +277,29 @@ impl AppState {
         })
     }
 
-    /// Record what the client's parser found, for one document version.
-    pub fn put_definitions(&self, uri: &str, version: i32, defs: Vec<ClientDefinition>) {
-        self.definitions
-            .lock()
-            .insert(uri.to_string(), (version, defs));
+    /// Record what the client sent about one document version.
+    pub fn put_known(&self, uri: &str, known: KnownDocument) {
+        self.known.lock().insert(uri.to_string(), known);
     }
 
-    /// The client's declarations, but only for the version it sent them for: an answer about
-    /// a document that has moved on is worse than no answer, because a lens would point at
+    /// Everything the client sent, but only for the version it sent it for: an answer about a
+    /// document that has moved on is worse than no answer, because a lens would point at
     /// whatever now occupies those lines.
-    pub fn definitions(&self, uri: &str, version: i32) -> Option<Vec<ClientDefinition>> {
-        self.definitions
+    fn known_for(&self, uri: &str, version: i32) -> Option<KnownDocument> {
+        self.known
             .lock()
             .get(uri)
-            .filter(|(v, _)| *v == version)
-            .map(|(_, d)| d.clone())
+            .filter(|k| k.version == version)
+            .cloned()
+    }
+
+    pub fn definitions(&self, uri: &str, version: i32) -> Option<Vec<ClientDefinition>> {
+        self.known_for(uri, version).map(|k| k.definitions)
+    }
+
+    /// The standing context for a document, for paths that cannot assemble it per request.
+    pub fn standing_context(&self, uri: &str, version: i32) -> Vec<meta_core::context::Provided> {
+        self.known_for(uri, version).map(|k| k.context).unwrap_or_default()
     }
 
     pub fn plan(&self, id: &str) -> Option<meta_core::types::Plan> {
@@ -420,14 +441,28 @@ mod tests {
         };
         assert!(s.definitions("file:///a.c", 1).is_none(), "nothing sent, nothing to use");
 
-        s.put_definitions("file:///a.c", 1, defs());
+        s.put_known(
+            "file:///a.c",
+            KnownDocument {
+                version: 1,
+                definitions: defs(),
+                context: Vec::new(),
+            },
+        );
         assert!(s.definitions("file:///a.c", 1).is_some(), "the version it describes");
         assert!(
             s.definitions("file:///a.c", 2).is_none(),
             "a document that moved on gets the structural scan, not a stale set of lines"
         );
 
-        s.put_definitions("file:///a.c", 2, defs());
+        s.put_known(
+            "file:///a.c",
+            KnownDocument {
+                version: 2,
+                definitions: defs(),
+                context: Vec::new(),
+            },
+        );
         assert!(s.definitions("file:///a.c", 2).is_some(), "and the next push replaces it");
         assert!(s.definitions("file:///b.c", 2).is_none(), "per document, not global");
     }

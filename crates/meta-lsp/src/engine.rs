@@ -596,12 +596,20 @@ impl Engine {
     ///
     /// `invoked` means the user pressed a key rather than the client firing on a timer:
     /// an explicit request is not second-guessed by the prefix floor, because they asked.
-    pub fn complete(
+    /// The same, with the standing context the client keeps for this document.
+    ///
+    /// A completion cannot assemble context per request — it fires on a 200 ms timer while the
+    /// user types, and asking another language server for references costs 300 ms — so what it
+    /// sees is what the client pushed for this document version. The context is in the cache
+    /// key for the same reason it is everywhere else: a completion computed with the project
+    /// in view is not the answer to a question asked without it.
+    pub fn complete_with_context(
         &self,
         doc: &Document,
         line: u32,
         character: u32,
         invoked: bool,
+        provided: &[Provided],
     ) -> Result<String, Failure> {
         let cfg = self.config();
         if !cfg.enabled {
@@ -638,7 +646,14 @@ impl Engine {
         }
 
         // The same cursor in the same content is the same question.
-        let key = cache::op_key("completion", PROMPT_VERSION, &doc.hash, line, character);
+        let key = cache::op_key_with_context(
+            "completion",
+            PROMPT_VERSION,
+            &doc.hash,
+            line,
+            character,
+            &context::provided_digest(provided),
+        );
         if let Some(hit) = self.state.cache.get(&key) {
             if let Some(text) = &hit.artifact {
                 return Ok(text.clone());
@@ -653,13 +668,14 @@ impl Engine {
             return Err(Failure::Refused(meta_core::budget::Refusal::PerMinute));
         }
 
-        let spec = verbs::render_completion(
+        let mut spec = verbs::render_completion(
             &doc.language.prompt,
             &doc.path,
             &tail(prefix, PREFIX_WINDOW),
             &head(suffix, SUFFIX_WINDOW),
             cfg.models.fim.fim_tokens.as_ref(),
         );
+        spec.user.push_str(&context::render_provided(provided));
         let response = self.chat_with(&cfg, Tier::Fim, spec, None)?;
         let text = clean_completion(&response.text);
         self.state.cache.put(
