@@ -195,10 +195,16 @@ def main():
             )
             server.notify("textDocument/didSave", {"textDocument": {"uri": uri}})
 
+            # Wait for *this* file's analysis, not for any analysis that has ever happened.
+            # `saw_request` accumulates, so a bare "has a refresh arrived" is true forever after
+            # the first file — and the loop then reads diagnostics before the analysis that
+            # would have filled them has even started, calling every later file a miss. That
+            # bug produced a headline in this repository's own log before it was found.
+            refreshes_before = len(server.saw_request("workspace/diagnostic/refresh"))
             deadline = time.time() + args.timeout
             items = []
             while time.time() < deadline:
-                if server.saw_request("workspace/diagnostic/refresh"):
+                if len(server.saw_request("workspace/diagnostic/refresh")) > refreshes_before:
                     report = server.request(
                         "textDocument/diagnostic", {"textDocument": {"uri": uri}}
                     ).get("result", {})
@@ -247,6 +253,28 @@ def main():
                 verdict = "quiet" if not items else f"{len(items)} finding(s) on a clean file"
             print(f"{fixture['name']:<24} {len(items):>8}  {verdict}")
             server.notify("textDocument/didClose", {"textDocument": {"uri": uri}})
+
+        # What the server itself recorded, which is where a finding goes missing: the analysis
+        # can produce findings and still leave none in the diagnostics — discarded on an anchor
+        # that cannot be located, or refused before the call.
+        trace = os.path.join(workdir, ".git", "meta", "session.jsonl")
+        if os.path.isfile(trace):
+            print()
+            print("server-side record:")
+            with open(trace) as fh:
+                for line in fh:
+                    try:
+                        entry = json.loads(line)
+                    except Exception:
+                        continue
+                    if entry.get("kind") == "analysis":
+                        print(
+                            "  {uri:<32} findings={findings} discarded={discarded}".format(
+                                uri=entry.get("uri", "").rsplit("/", 1)[-1],
+                                findings=entry.get("findings"),
+                                discarded=entry.get("discarded"),
+                            )
+                        )
 
         print()
         recall = caught / len(defective) if defective else 0.0
