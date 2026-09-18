@@ -350,6 +350,24 @@ end
 --- The record is an append-only log under the repository root's `.git/meta/`, beside the
 --- dismissals, so it survives a restart and never appears in `git status`. It is something to
 --- read, not state the plugin acts on: nothing in this file consults it.
+--- Where each line of a session buffer wants to take you, by buffer.
+local session_targets = {} -- bufnr -> { [line] = { uri, line } }
+
+--- Open the file and line an entry names.
+---
+--- The record is only useful if a line in it can be walked back: an entry that names a place
+--- is a place you can return to, which is the difference between a log and a history.
+local function jump_to(target)
+  if type(target) ~= 'table' or type(target.uri) ~= 'string' then
+    return
+  end
+  local path = vim.uri_to_fname(target.uri)
+  vim.cmd('edit ' .. vim.fn.fnameescape(path))
+  if type(target.line) == 'number' then
+    pcall(vim.api.nvim_win_set_cursor, 0, { target.line + 1, 0 })
+  end
+end
+
 function M.session()
   M.command('meta.session', { { limit = 200 } }, function(err, result)
     if err or (type(result) == 'table' and result.ok == false) then
@@ -358,10 +376,23 @@ function M.session()
     end
     local entries = (type(result) == 'table' and result.entries) or {}
     local lines = { '# meta session', '' }
+    local targets = {}
     for i = #entries, 1, -1 do
       local e = entries[i]
+      -- Entry order is newest first, and the target is keyed by the buffer line it lands on.
+      local target = type(e.uri) == 'string'
+          and { uri = e.uri, line = type(e.line) == 'number' and e.line or nil }
+        or nil
+      local where = ''
+      if target ~= nil then
+        where = vim.fn.fnamemodify(vim.uri_to_fname(e.uri), ':t')
+        if target.line ~= nil then
+          where = ('%s:%d'):format(where, target.line + 1)
+        end
+      end
       -- A field the server sent as null arrives as `vim.NIL`, which is userdata: it has to be
       -- checked rather than used, or a renderer turns a missing value into an error.
+      local at = (#lines + 1)
       if e.kind == 'command' then
         local verdict = 'ok'
         if e.ok ~= true then
@@ -380,6 +411,12 @@ function M.session()
       else
         lines[#lines + 1] = '- ' .. vim.inspect(e):gsub('%s+', ' ')
       end
+      if target ~= nil and where ~= '' then
+        lines[#lines] = lines[#lines] .. '  · ' .. where
+      end
+      if target ~= nil then
+        targets[at] = target
+      end
     end
     if #entries == 0 then
       lines[#lines + 1] = '_nothing recorded for this root yet_'
@@ -388,7 +425,18 @@ function M.session()
       lines[#lines + 1] = ''
       lines[#lines + 1] = ('_record: %s_'):format(result.path)
     end
-    M.open_artifact({ kind = 'session', id = 'session', markdown = table.concat(lines, '\n') })
+    local bufnr = M.open_artifact({
+      kind = 'session',
+      id = 'session',
+      markdown = table.concat(lines, '\n'),
+    })
+    if bufnr ~= nil and next(targets) ~= nil then
+      session_targets[bufnr] = targets
+      vim.keymap.set('n', '<CR>', function()
+        local here = vim.api.nvim_win_get_cursor(0)[1]
+        jump_to(session_targets[bufnr] and session_targets[bufnr][here])
+      end, { buffer = bufnr, desc = 'meta: open the place this entry names' })
+    end
   end)
 end
 
@@ -450,6 +498,7 @@ function M.open_artifact(artifact, bufnr)
   if vim.api.nvim_get_current_buf() ~= bufnr then
     vim.cmd('sbuffer ' .. bufnr)
   end
+  return bufnr
 end
 
 --- `:Meta plan [goal]` — `docs/UX.md` §1: free text enters here and nowhere else, because the

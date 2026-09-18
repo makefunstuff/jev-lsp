@@ -63,6 +63,8 @@ Commands: `:Meta plan|explain|followup|review|session|hints|status|stop|start|un
 
 `:Meta session` opens what this server has done at this root — every command and every
 analysis, newest first, with a pointer to the log itself (`<root>/.git/meta/session.jsonl`).
+An entry that names a place says so (`review_me.py:5`), and `<CR>` on it opens that file at
+that line: the record is a history you can walk, not only read.
 
 `stop` is the kill switch from PROTOCOL §5 and must be reachable in one mapping without
 opening anything.

@@ -147,6 +147,9 @@ impl MetaServer {
                                     "findings": out.findings.len(),
                                     "discarded": out.rejected,
                                     "from_cache": out.from_cache,
+                                    // The first finding's line, so the entry can be walked
+                                    // back to the place it is about.
+                                    "line": out.findings.first().map(|f| f.line),
                                 }),
                             );
                         }
@@ -436,6 +439,18 @@ fn build_workspace_edit(
         document_changes: Some(DocumentChanges::Operations(operations)),
         change_annotations: None,
     }
+}
+
+/// A value from the first argument, or from `scope` inside it.
+///
+/// Commands put the anchor at the top level (`meta.explain`) or under `scope` (`meta.plan`),
+/// and the record wants it either way without teaching every caller about both shapes.
+fn anchored(arguments: &[Value], field: &str) -> Option<Value> {
+    let arg = arguments.first()?;
+    arg.get(field)
+        .or_else(|| arg.get("scope").and_then(|s| s.get(field)))
+        .filter(|v| !v.is_null())
+        .cloned()
 }
 
 /// An explicit scope carried in a command's argument, when the client resolved it itself.
@@ -1097,6 +1112,12 @@ impl LanguageServer for MetaServer {
                         .and_then(|e| e.get("code"))
                         .and_then(|v| v.as_str()),
                     "ms": started.elapsed().as_millis() as u64,
+                    // Where the request was anchored, when it says. This is what makes the
+                    // record something you can walk back through rather than only read: an
+                    // entry that knows its file and line can be opened from the session
+                    // buffer. `plan` nests its anchor under `scope`, so both are checked.
+                    "uri": anchored(&params.arguments, "uri"),
+                    "line": anchored(&params.arguments, "line"),
                 }),
             );
         }

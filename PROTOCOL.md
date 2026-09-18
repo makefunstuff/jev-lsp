@@ -248,7 +248,9 @@ rendered as a message.
 ### 3.6 The session record, and why it is not memory
 
 Every command and every analysis appends one line to `<root>/.git/meta/session.jsonl`, and
-`meta.session` reads the tail back. It sits where dismissals sit, so it survives a restart,
+`meta.session` reads the tail back. An entry carries the place the request was anchored on
+(`uri`, and `line` when the request or the findings give one), which is what lets a client put
+a jump target on the line rather than a bare description of it. It sits where dismissals sit, so it survives a restart,
 survives a buffer being closed, and never appears in `git status`.
 
 **N9 still holds, and this is the reason it can.** The record is written and never read to

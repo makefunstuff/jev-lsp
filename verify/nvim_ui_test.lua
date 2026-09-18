@@ -1436,6 +1436,47 @@ do
     check(#lines > 0, 'and it has entries', ('%d line(s)'):format(#lines))
   end
 
+  -- An entry that names a place can be walked back to it: that is the difference between a log
+  -- and a history. `ask.py` was saved and analysed a moment ago, so its entry is in the record.
+  local session_buf = nil
+  for _, b in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(b)
+      and vim.api.nvim_buf_get_name(b):find('meta://session/', 1, true)
+    then
+      session_buf = b
+    end
+  end
+  if session_buf == nil then
+    skip('walking the record', 'no session buffer')
+  else
+    local here, entry = nil, nil
+    for i, l in ipairs(vim.api.nvim_buf_get_lines(session_buf, 0, -1, false)) do
+      if l:find('ask.py', 1, true) and l:find(':', 1, true) then
+        here, entry = i, l
+      end
+    end
+    check(here ~= nil, 'an entry names where it happened', entry or 'no line mentions ask.py')
+
+    if here ~= nil then
+      vim.api.nvim_set_current_buf(session_buf)
+      vim.api.nvim_win_set_cursor(0, { here, 0 })
+      local keys = vim.api.nvim_replace_termcodes('<CR>', true, false, true)
+      vim.api.nvim_feedkeys(keys, 'x', false)
+      vim.wait(500)
+      local landed = vim.api.nvim_buf_get_name(0)
+      check(
+        landed:find('ask.py', 1, true) ~= nil,
+        'and <CR> walks there',
+        ('landed in %s at line %d'):format(landed, vim.api.nvim_win_get_cursor(0)[1])
+      )
+      check(
+        vim.fn.line('.') >= 1,
+        'at a real line',
+        tostring(vim.fn.line('.'))
+      )
+    end
+  end
+
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find('meta://', 1, true) then
       vim.api.nvim_buf_delete(b, { force = true })
