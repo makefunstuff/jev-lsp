@@ -110,13 +110,17 @@ at a local llama.cpp OpenAI-compatible server, or set `api_key_env` for a remote
 |---|---|
 | `cargo test` | 200 passing, warning-clean |
 | `cargo build --release` | no warnings |
-| `python3 verify/smoke.py` | 34/34 against the real binary |
+| `python3 verify/smoke.py` | 35/35 against the real binary |
 | `python3 verify/plan_test.py` | 35/35 — plan, apply, revert, staleness, divergence, multi-file |
 | `python3 verify/cli_parity.py` | 12/12 — the CLI and the LSP agree exactly |
-| `python3 verify/lsp_client.py --server …` | 27 ok, 0 FAIL (independent, spec-derived client) |
+| `python3 verify/lsp_client.py --server …` | 28 ok, 0 FAIL (independent, spec-derived client) |
 | `nvim --headless -l verify/nvim_live.lua` | 0 failures, 0 skips (real plugin, real server) |
-| `nvim --headless -l verify/nvim_ui_test.lua` | 0 failures, 0 skips (picker, diff preview, statusline) |
+| `nvim --headless -l verify/nvim_ui_test.lua` | 0 failures, 0 skips (picker, diff preview, lenses, hints, streaming, plan, session) |
 | `python3 verify/inline_test.py` | 14/14 — the capability, the handler, and every gate |
+| `python3 verify/latency.py` | 8/8 — every editor-driven path under 1 ms against a model made **2 s** slow, which is how the bench tells "fast" from "cached" |
+| `python3 verify/queue_test.py` | 5/5 — the mid-flight-edit race, with a stalled model |
+| `python3 verify/config_race_test.py` | 3/3 — a save during startup is not analysed against the defaults |
+| `python3 verify/supersede_probe.py` | 7 ok, 0 FAIL — supersession, independently probed, with a control |
 | `nvim --headless -l verify/inline_live.lua` | 0 failures (ghost text itself needs an interactive session) |
 | `nvim --headless -l verify/dismiss_test.lua` | 9/9 — dismissal is recorded per repository and does not resurface |
 | `python3 verify/real_model.py` | 6/6 against **DeepSeek** — 1 finding, an edit, and a file that still parses, every run |

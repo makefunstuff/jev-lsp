@@ -241,7 +241,10 @@ class Lsp:
                 self.docs[d["uri"]] = self._apply_text_edits(self.docs[d["uri"]], changes)
         self._write({"jsonrpc": "2.0", "method": method, "params": params})
 
-    def request(self, method, params, timeout=30):
+    def request(self, method, params, timeout=30, poll=0.02):
+        """One request, bounded. `poll` is how often the answer is looked for: the default is
+        fine for correctness, and a caller that is *measuring* has to pass something finer, or
+        every reading is quantised to the poll interval and the bench measures itself."""
         self.next_id += 1
         rid = self.next_id
         self._write({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
@@ -250,7 +253,7 @@ class Lsp:
             with self.lock:
                 if rid in self.pending:
                     return self.pending.pop(rid)
-            time.sleep(0.02)
+            time.sleep(poll)
         raise TimeoutError(f"{method} did not answer within {timeout}s")
 
     def saw_notification(self, method):
