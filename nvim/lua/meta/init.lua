@@ -294,6 +294,42 @@ local function cursor_scope()
 end
 
 
+--- Render whatever came back as an artifact.
+---
+--- The shared end of every artifact command, so a second one cannot grow its own idea of what
+--- to do with an answer. `ctx.stream_bufnr` is the buffer a stream was already filling, so the
+--- finished text lands where the partial text was instead of in a second window.
+--- @param command string  the command being reported, if it fails
+local function render_artifact(command, err, result, ctx)
+  if err or (type(result) == 'table' and result.ok == false) then
+    M.report(command, err, result)
+    return
+  end
+  if type(result) ~= 'table' or type(result.markdown) ~= 'string' then
+    M.report(command, nil, result)
+    return
+  end
+  M.open_artifact(result, ctx and ctx.stream_bufnr)
+end
+
+--- The finding on a line, if one is there.
+---
+--- The id is what makes a question about "this" about this: the server looks the finding up and
+--- puts it in the prompt, so the answer is grounded in the code rather than in a description of
+--- it. Neovim keeps the LSP diagnostic under `user_data.lsp`, which is where the data we attach
+--- to it can be read back.
+local function finding_at(bufnr, line)
+  for _, d in ipairs(vim.diagnostic.get(bufnr)) do
+    if d.source == 'meta' and d.lnum <= line and line <= (d.end_lnum or d.lnum) then
+      local data = d.user_data and d.user_data.lsp and d.user_data.lsp.data
+      if type(data) == 'table' and type(data.finding_id) == 'string' then
+        return data.finding_id
+      end
+    end
+  end
+  return nil
+end
+
 --- `:Meta explain` — the cursor's file and line.
 ---
 --- Not a code action: Neovim executes a resolved action's `command` by sending it back to the
@@ -305,17 +341,44 @@ end
 --- @param cb? fun(err: table?, result: any)
 function M.explain(cb)
   M.command('meta.explain', { cursor_scope() }, cb or function(err, result, ctx)
-    if err or (type(result) == 'table' and result.ok == false) then
-      M.report('meta.explain', err, result)
-      return
-    end
-    if type(result) ~= 'table' or type(result.markdown) ~= 'string' then
-      M.report('meta.explain', nil, result)
-      return
-    end
-    -- The buffer the stream was filling, so the finished answer does not move.
-    M.open_artifact(result, ctx and ctx.stream_bufnr)
+    render_artifact('meta.explain', err, result, ctx)
   end, { stream = true })
+end
+
+--- `:Meta followup [question]` / `<leader>Mf` — ask about what is under the cursor.
+---
+--- The question is the second and last place free text enters, after `plan`, and for the same
+--- reason: a picker cannot express a question (N7). The finding at the cursor, when there is
+--- one, travels with it — that is the difference between "why is this wrong here" and a
+--- question about code in general, and it is why this is one keystroke rather than a chat.
+---
+--- @param question? string
+function M.followup(question)
+  local bufnr = vim.api.nvim_get_current_buf()
+  local line = vim.api.nvim_win_get_cursor(0)[1] - 1
+  local function ask(text)
+    local arg = { uri = vim.uri_from_bufnr(bufnr), line = line, question = text }
+    local range = treesitter_scope(bufnr, line)
+    if range ~= nil then
+      arg.range = range
+    end
+    local id = finding_at(bufnr, line)
+    if id ~= nil then
+      arg.finding_id = id
+    end
+    M.command('meta.followup', { arg }, function(err, result, ctx)
+      render_artifact('meta.followup', err, result, ctx)
+    end, { stream = true })
+  end
+  if question ~= nil and vim.trim(question) ~= '' then
+    ask(vim.trim(question))
+    return
+  end
+  vim.ui.input({ prompt = 'meta: ask about this: ' }, function(input)
+    if input ~= nil and vim.trim(input) ~= '' then
+      ask(vim.trim(input))
+    end
+  end)
 end
 
 --- Render an artifact in a scratch buffer.
@@ -840,6 +903,9 @@ function M.keymaps(prefix)
     { 'e', { 'n' }, 'explain scope', function()
       M.explain()
     end },
+    { 'f', { 'n' }, 'ask about what is under the cursor', function()
+      M.followup()
+    end },
     { 'r', { 'n' }, 'review this file', function()
       M.review()
     end },
@@ -891,6 +957,9 @@ M.subcommands = {
   end,
   explain = function()
     M.explain()
+  end,
+  followup = function(arg)
+    M.followup(arg ~= '' and arg or nil)
   end,
   log = function()
     M.log()

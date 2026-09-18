@@ -280,6 +280,7 @@ const COMMANDS: &[&str] = &[
     "meta.recompute",
     "meta.review",
     "meta.explain",
+    "meta.followup",
     "meta.plan",
     "meta.apply",
     "meta.revert",
@@ -1220,6 +1221,67 @@ impl MetaServer {
             .map_err(|e| Failure::Model(format!("the worker task failed: {e}")))?
     }
 
+    /// Run artifact work, reporting the answer as it arrives when the client gave us a token
+    /// to report under (§3.5 path 1).
+    ///
+    /// The sender lives inside the work closure, so the channel closes when the work ends and
+    /// the forwarder drains and returns — which is why this awaits it rather than detaching.
+    async fn streaming<T, F>(&self, token: Option<ProgressToken>, work: F) -> Result<T, Failure>
+    where
+        F: FnOnce(Engine, &mut dyn FnMut(&str)) -> Result<T, Failure> + Send + 'static,
+        T: Send + 'static,
+    {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let forwarder = token.map(|t| {
+            let client = self.client.clone();
+            tokio::spawn(async move {
+                let mut so_far = String::new();
+                let mut flushed = std::time::Instant::now();
+                let started = std::time::Instant::now();
+                let mut beat = std::time::Instant::now();
+                // The model spends seconds before the first token — prefill, and reasoning that
+                // never becomes part of the answer. Staying silent until content arrives leaves
+                // that window empty, exactly where a user is deciding whether this is working.
+                loop {
+                    match tokio::time::timeout(STREAM_FLUSH, rx.recv()).await {
+                        Ok(Some(chunk)) => {
+                            so_far.push_str(&chunk);
+                            if flushed.elapsed() < STREAM_FLUSH {
+                                continue;
+                            }
+                            flushed = std::time::Instant::now();
+                            partial_artifact(&client, &t, &so_far).await;
+                            beat = std::time::Instant::now();
+                        }
+                        Ok(None) => break, // work done, and the sender is gone
+                        Err(_) => {
+                            if beat.elapsed() >= STREAM_HEARTBEAT {
+                                beat = std::time::Instant::now();
+                                if so_far.is_empty() {
+                                    nothing_yet(&client, &t, started.elapsed()).await;
+                                } else {
+                                    partial_artifact(&client, &t, &so_far).await;
+                                }
+                            }
+                        }
+                    }
+                }
+            })
+        });
+        let outcome = self
+            .blocking(move |engine| {
+                let mut on_delta = move |delta: &str| {
+                    let _ = tx.send(delta.to_string());
+                };
+                work(engine, &mut on_delta)
+            })
+            .await;
+        if let Some(handle) = forwarder {
+            let _ = handle.await;
+        }
+        outcome
+    }
+
     /// Read the `meta` section from the client and merge it over the current settings.
     async fn pull_configuration(&self) {
         let items = vec![ConfigurationItem {
@@ -1331,67 +1393,20 @@ impl MetaServer {
                 // The answer as it arrives, for the client that asked to see it. The token is
                 // the one the client put in the request (§3.5 path 1), so no create request is
                 // made and nothing is sent for a token we were not given.
-                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-                let forwarder = params
-                    .work_done_progress_params
-                    .work_done_token
-                    .clone()
-                    .map(|t| {
-                    let client = self.client.clone();
-                    tokio::spawn(async move {
-                        let mut so_far = String::new();
-                        let mut flushed = std::time::Instant::now();
-                        let started = std::time::Instant::now();
-                        let mut beat = std::time::Instant::now();
-                        // The model spends seconds before the first token — prefill, and
-                        // reasoning that never becomes part of the answer. Staying silent
-                        // until content arrives leaves that window empty, exactly where a
-                        // user is deciding whether this is working at all.
-                        loop {
-                            match tokio::time::timeout(STREAM_FLUSH, rx.recv()).await {
-                                Ok(Some(chunk)) => {
-                                    so_far.push_str(&chunk);
-                                    if flushed.elapsed() < STREAM_FLUSH {
-                                        continue;
-                                    }
-                                    flushed = std::time::Instant::now();
-                                    partial_artifact(&client, &t, &so_far).await;
-                                    beat = std::time::Instant::now();
-                                }
-                                Ok(None) => break, // work done, and the sender is gone
-                                Err(_) => {
-                                    if beat.elapsed() >= STREAM_HEARTBEAT {
-                                        beat = std::time::Instant::now();
-                                        if so_far.is_empty() {
-                                            nothing_yet(&client, &t, started.elapsed()).await;
-                                        } else {
-                                            partial_artifact(&client, &t, &so_far).await;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    })
-                });
                 let outcome = self
-                    .blocking(move |engine| {
-                        let mut on_delta = move |delta: &str| {
-                            let _ = tx.send(delta.to_string());
-                        };
-                        engine.generate_streaming(
-                            &target,
-                            Verb::Explain,
-                            &scope_for_call,
-                            &[],
-                            Some(&mut on_delta),
-                        )
-                    })
+                    .streaming(
+                        params.work_done_progress_params.work_done_token.clone(),
+                        move |engine, delta| {
+                            engine.generate_streaming(
+                                &target,
+                                Verb::Explain,
+                                &scope_for_call,
+                                &[],
+                                Some(delta),
+                            )
+                        },
+                    )
                     .await;
-                // The sender lived inside the closure, so the channel closes when the work is
-                // done and the forwarder drains and returns.
-                if let Some(handle) = forwarder {
-                    let _ = handle.await;
-                }
                 match outcome {
                     Ok(Generated::Artifact(markdown)) => json!({
                         "schema": ARTIFACT_SCHEMA,
@@ -1428,6 +1443,84 @@ impl MetaServer {
                         "from_cache": out.from_cache,
                         "discarded": out.rejected,
                     })),
+                    Err(f) => result_err(f.code(), &f.message()),
+                }
+            }
+            "meta.followup" => {
+                let Some(arg) = params.arguments.first() else {
+                    return result_err("bad_arguments", "meta.followup needs {uri, line, question}");
+                };
+                let question = arg
+                    .get("question")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                if question.is_empty() {
+                    return result_err("bad_arguments", "meta.followup needs a question");
+                }
+                let uri = arg.get("uri").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                let line = arg.get("line").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let explicit = explicit_scope(arg);
+                let Some(doc) = self.state.doc(&uri) else {
+                    return result_err("unknown_document", "no open document for that uri");
+                };
+                let scope = self.engine.scope_at(&doc, line, explicit);
+                // The finding the question is about, when the client says which one: it is what
+                // makes the question grounded in the code rather than general.
+                let about: Vec<Finding> = arg
+                    .get("finding_id")
+                    .and_then(|v| v.as_str())
+                    .and_then(|id| {
+                        self.findings_for(&doc)
+                            .0
+                            .into_iter()
+                            .find(|f| f.id == id)
+                    })
+                    .into_iter()
+                    .collect();
+                let (target, scope_for_call) = (doc.clone(), scope.clone());
+                // The question is part of the key: two questions about the same range are two
+                // different answers, and the cache is content-addressed or it is wrong.
+                let key = format!(
+                    "{}:{}",
+                    meta_core::cache::op_key(
+                        "follow-up",
+                        meta_core::types::PROMPT_VERSION,
+                        &doc.hash,
+                        scope.range.start_line,
+                        scope.range.end_line,
+                    ),
+                    question
+                );
+                let asked = question.clone();
+                let outcome = self
+                    .streaming(
+                        params.work_done_progress_params.work_done_token.clone(),
+                        move |engine, delta| {
+                            engine.artifact_for(
+                                &target,
+                                &scope_for_call,
+                                &about,
+                                &key,
+                                |ctx| meta_core::verbs::follow_up(ctx, &asked),
+                                Some(delta),
+                            )
+                        },
+                    )
+                    .await;
+                match outcome {
+                    Ok(Generated::Artifact(markdown)) => json!({
+                        "schema": ARTIFACT_SCHEMA,
+                        "kind": "answer",
+                        "id": ActionData::make_id(Verb::Explain, &doc_ref(&doc), &data_scope(&scope), Some(&question)),
+                        "language": doc.language.name,
+                        "summary": question,
+                        "markdown": markdown,
+                    }),
+                    Ok(Generated::Edit(_)) => {
+                        result_err("unexpected", "a follow-up cannot produce an edit")
+                    }
                     Err(f) => result_err(f.code(), &f.message()),
                 }
             }

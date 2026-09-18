@@ -237,6 +237,24 @@ pub fn render(verb: Verb, ctx: &Context) -> PromptSpec {
     }
 }
 
+/// A question about code the model has already been shown.
+///
+/// Not a verb: the verb taxonomy is the model's action set (PROTOCOL §4.1), and a question is
+/// not an action. It reuses the explanation's system prompt and the artifact contract, so the
+/// answer is the same shape as an explanation — it streams the same way and lands in the same
+/// kind of buffer — and only the question differs from what `explain` asks.
+///
+/// The context is the same context every other prompt gets, so a follow-up is grounded in the
+/// code the user is asking about rather than in a recollection of it.
+pub fn follow_up(ctx: &Context, question: &str) -> PromptSpec {
+    PromptSpec {
+        system: system(&ctx.flavour, Verb::Explain),
+        user: format!("QUESTION: {question}\n\n{}\n", render_block(ctx)),
+        json: true,
+        max_tokens: 2048,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,6 +266,16 @@ mod tests {
         let d = Document::new("file:///tmp/a", 1, text.to_string(), Some(lang));
         let s = scope::resolve(text, 0, &crate::lang::profile(lang), None, 400);
         crate::context::build(&d, &s, &[], 5)
+    }
+
+    #[test]
+    fn a_follow_up_carries_the_question_and_the_code() {
+        let ctx = ctx_of("fn a() { let x = 1; }\n", "rust");
+        let p = follow_up(&ctx, "why is x unused?");
+        assert!(p.json, "the artifact contract is the same one explain uses");
+        assert!(p.user.contains("why is x unused?"));
+        assert!(p.user.contains("let x = 1"), "the code the question is about is in the prompt");
+        assert!(p.system.contains("single JSON object"), "and the shape is still demanded");
     }
 
     #[test]

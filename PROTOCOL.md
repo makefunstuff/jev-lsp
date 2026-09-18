@@ -288,6 +288,13 @@ preview pane, never as the label.
 `explain` and `review` still arrive through the code action menu; they resolve to a
 `command` that opens a buffer. One entry point for every intent.
 
+`meta.followup` is the one command that is not an action. It carries a question the *plugin*
+asked the user for (N7 — free text enters at the client, never at the server) and, when the
+cursor is on a finding, that finding's id, which the server looks up and puts in the prompt.
+That is the whole difference from `explain`: same context, same artifact contract, same
+streaming, and a question instead of a task. It is not a chat — there is no conversation held
+anywhere, and the same question about the same unchanged code is answered from the cache.
+
 ---
 
 ## 5. Cost gates
@@ -318,7 +325,8 @@ Ordered, all mandatory, all evaluated before any model call:
 |---|---|---|---|
 | `meta.status` | `{}` | `Result` with queue, budgets, cache counters, in-flight calls | yes |
 | `meta.recompute` | `{}` | `Result` | yes |
-| `meta.explain` | `{uri, line}` | `Artifact` (§7, `kind: "explanation"`) | yes |
+| `meta.explain` | `{uri, line, range?}` | `Artifact` (§7, `kind: "explanation"`) | yes |
+| `meta.followup` | `{uri, line, question, finding_id?, range?}` | `Artifact` (§7, `kind: "answer"`) | yes |
 | `meta.cancel` | `{progress_token}` | `Result` | yes |
 | `meta.plan` | `{goal, scope}` | `Artifact` | yes |
 | `meta.apply` | `{plan_id, steps: [n]}` | `Result` | yes |

@@ -1269,6 +1269,97 @@ do
   end
 end
 
+-- 13. A question about a finding -----------------------------------------------------------
+
+-- The finding at the cursor travels with the question, which is what makes the answer about
+-- this code rather than about code in general — and the answer arrives the way an explanation
+-- does, in a buffer, streamed.
+do
+  local ask_path = root .. '/ask.py'
+  local BODY = {
+    'import json',
+    '',
+    '',
+    'def alpha(path):',
+    '    f = open(path)',
+    '    return json.load(f)',
+  }
+  local function open()
+    vim.fn.writefile(BODY, ask_path)
+    vim.cmd('silent! edit! ' .. vim.fn.fnameescape(ask_path))
+    return vim.api.nvim_get_current_buf()
+  end
+  local bufnr = open()
+  local attached = vim.wait(15000, function()
+    return #vim.lsp.get_clients({ bufnr = bufnr, name = 'meta' }) > 0
+  end, 25)
+  check(attached, 'the plugin attached a client to the ask fixture')
+
+  if not attached then
+    skip('the follow-up', 'no client on the ask fixture')
+  else
+    local analysed = false
+    for _ = 1, 12 do
+      bufnr = open()
+      pcall(vim.cmd, 'write')
+      analysed = vim.wait(3000, function()
+        return #vim.diagnostic.get(bufnr) > 0
+      end, 50)
+      if analysed then
+        break
+      end
+    end
+    check(analysed, 'the ask fixture is analysed, so there is a finding to ask about')
+
+    if analysed then
+      local finding = vim.diagnostic.get(bufnr)[1]
+      local client = vim.lsp.get_clients({ bufnr = bufnr, name = 'meta' })[1]
+      local captured = nil
+      local orig = client.request
+      client.request = function(_, method, params, ...)
+        if method == 'workspace/executeCommand' and params.command == 'meta.followup' then
+          captured = params.arguments
+        end
+        return orig(_, method, params, ...)
+      end
+      vim.api.nvim_set_current_buf(bufnr)
+      vim.api.nvim_win_set_cursor(0, { finding.lnum + 1, 0 })
+      require('meta').followup('why does this leak?')
+      vim.wait(5000, function()
+        return captured ~= nil
+      end, 25)
+      client.request = orig
+
+      local arg = (captured and captured[1]) or {}
+      check(arg.question == 'why does this leak?', 'the question reaches the server', vim.inspect(arg.question))
+      local expected = finding.user_data and finding.user_data.lsp and finding.user_data.lsp.data
+        and finding.user_data.lsp.data.finding_id
+      check(
+        expected ~= nil and arg.finding_id == expected,
+        'and the finding at the cursor travels with it',
+        ('sent=%s at cursor=%s'):format(tostring(arg.finding_id), tostring(expected))
+      )
+
+      local opened = vim.wait(20000, function()
+        for _, b in ipairs(vim.api.nvim_list_bufs()) do
+          if vim.api.nvim_buf_is_valid(b)
+            and vim.api.nvim_buf_get_name(b):find('meta://answer/', 1, true)
+          then
+            return true
+          end
+        end
+        return false
+      end, 50)
+      check(opened, 'the answer lands in a buffer, like an explanation')
+      for _, b in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find('meta://', 1, true) then
+          vim.api.nvim_buf_delete(b, { force = true })
+        end
+      end
+    end
+  end
+end
+
 -- Report ---------------------------------------------------------------------------------------
 
 -- Lens state first, and a settle before the stop. Neovim's lens provider schedules a

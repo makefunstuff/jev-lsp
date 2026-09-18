@@ -413,6 +413,61 @@ impl Engine {
         Ok(generated)
     }
 
+    /// An artifact for an arbitrary prompt, through the same gates, budget, repair and cache
+    /// path a verb's artifact takes.
+    ///
+    /// The follow-up is a question rather than an action, so it has no verb — and this is what
+    /// keeps it from being a second implementation of everything an artifact needs.
+    pub fn artifact_for(
+        &self,
+        doc: &Document,
+        scope: &Resolved,
+        findings_in_scope: &[Finding],
+        cache_key: &str,
+        render_prompt: impl Fn(&context::Context) -> verbs::PromptSpec,
+        mut delta: Delta<'_>,
+    ) -> Result<Generated, Failure> {
+        let cfg = self.config();
+        if !cfg.enabled {
+            return Err(Failure::Skipped("meta is stopped".to_string()));
+        }
+        if let Some(skip) = gates::evaluate(
+            &doc.text,
+            &doc.path,
+            cfg.languages.max_file_bytes,
+            cfg.languages.max_scope_lines,
+            &cfg.languages.ignore,
+        ) {
+            return Err(Failure::Skipped(skip.reason()));
+        }
+        if let Some(hit) = self.state.cache.get(cache_key) {
+            if let Some(artifact) = &hit.artifact {
+                return Ok(Generated::Artifact(artifact.clone()));
+            }
+        }
+
+        let ctx = context::build(doc, scope, findings_in_scope, 12);
+        let (raw, _usage) = self.with_repair(
+            &cfg,
+            Tier::Reason,
+            &ctx,
+            render_prompt,
+            contract::parse_artifact,
+            reborrow(&mut delta),
+        )?;
+        if raw.markdown.trim().is_empty() {
+            return Err(Failure::Contract("artifact carried no text".to_string()));
+        }
+        self.state.cache.put(
+            cache_key,
+            Conclusion {
+                artifact: Some(raw.markdown.clone()),
+                ..Default::default()
+            },
+        );
+        Ok(Generated::Artifact(raw.markdown))
+    }
+
     /// The lowest-level model call. Every call takes a permit, including a repair attempt:
     /// two calls are two calls (PROTOCOL.md §5).
     fn chat_with(

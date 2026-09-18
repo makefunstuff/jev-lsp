@@ -50,6 +50,7 @@ complete answer, the first 3 of which are prefill and reasoning.
 <leader>mp   plan for a goal              -- :Meta plan
 <leader>me   explain scope                -- :Meta explain
 <leader>ml   run the lens on this line     -- vim.lsp.codelens.run()
+<leader>mf   ask about what is under the cursor -- :Meta followup
 <leader>mr   review this file
 <leader>mt   add tests for scope
 <leader>md   dismiss finding at cursor
