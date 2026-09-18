@@ -42,6 +42,12 @@ from smoke import Lsp  # noqa: E402
 
 # Each entry: the file, whether it is defective, the line the defect is on (1-based), and words
 # a finding about it would plausibly use.
+#
+# The labels are hand-written and therefore the first thing to suspect when a verdict looks
+# wrong: two of these lines were wrong for three runs, and the metric reported 50% recall for a
+# review that had found all four defects. Nothing here can check them — the keywords describe
+# the consequence (`leak`), not the line (`f = open(path)`) — so the fixture's line numbers are
+# read by hand when a number changes, and the run prints every finding it kept.
 FIXTURES = [
     {
         "name": "leaked_handle.py",
@@ -75,7 +81,8 @@ def load(path):
     {
         "name": "mutable_default.py",
         "defect": True,
-        "line": 4,
+        # `def record(name, seen=[])` — line 1, and the label said 4 for three runs.
+        "line": 1,
         "keywords": ["mutable", "default", "shared", "list"],
         "text": """def record(name, seen=[]):
     seen.append(name)
@@ -85,7 +92,8 @@ def load(path):
     {
         "name": "unchecked_index.py",
         "defect": True,
-        "line": 6,
+        # `return ports[0]` — line 3.
+        "line": 3,
         "keywords": ["index", "range", "empty", "check", "bound"],
         "text": """def first_port(services):
     ports = [s["port"] for s in services]
@@ -121,6 +129,29 @@ def save(path, payload):
 ]
 
 
+def analysed(trace_path, uri):
+    """Has the server finished an analysis of this document?
+
+    Read from the server's own record rather than inferred from a notification: the entry
+    names the uri and is written when the analysis completes, which is exactly the signal a
+    measurement needs and exactly what an accumulating `saw_request` cannot provide.
+    """
+    if not os.path.isfile(trace_path):
+        return False
+    try:
+        with open(trace_path) as fh:
+            for line in fh:
+                try:
+                    entry = json.loads(line)
+                except Exception:
+                    continue
+                if entry.get("kind") == "analysis" and entry.get("uri") == uri:
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def free_port():
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
@@ -138,6 +169,7 @@ def main():
     args = ap.parse_args()
 
     workdir = tempfile.mkdtemp(prefix="meta-quality-")
+    trace_path = os.path.join(workdir, ".git", "meta", "session.jsonl")
     env = {
         k: v
         for k, v in os.environ.items()
@@ -195,16 +227,16 @@ def main():
             )
             server.notify("textDocument/didSave", {"textDocument": {"uri": uri}})
 
-            # Wait for *this* file's analysis, not for any analysis that has ever happened.
-            # `saw_request` accumulates, so a bare "has a refresh arrived" is true forever after
-            # the first file — and the loop then reads diagnostics before the analysis that
-            # would have filled them has even started, calling every later file a miss. That
-            # bug produced a headline in this repository's own log before it was found.
-            refreshes_before = len(server.saw_request("workspace/diagnostic/refresh"))
+            # Wait for *this* file's analysis, keyed on the server's own record rather than on
+            # an LSP notification. `saw_request` accumulates, so "has a refresh ever arrived"
+            # is true forever after the first file — that bug reported five files as misses
+            # before the seventh analysis had started, and produced a headline in this
+            # repository's log that had to be retracted. The record names the document, so the
+            # wait is attributable and the number is about the file in front of it.
             deadline = time.time() + args.timeout
             items = []
             while time.time() < deadline:
-                if len(server.saw_request("workspace/diagnostic/refresh")) > refreshes_before:
+                if analysed(trace_path, uri):
                     report = server.request(
                         "textDocument/diagnostic", {"textDocument": {"uri": uri}}
                     ).get("result", {})
@@ -212,7 +244,9 @@ def main():
                         report.get("fullDocumentDiagnosticReport", {}) or {}
                     ).get("items", [])
                     break
-                time.sleep(0.1)
+                time.sleep(0.2)
+            if not items and time.time() >= deadline:
+                print(f"{fixture['name']:<24} {'-':>8}  no analysis within {args.timeout:.0f}s")
 
             findings_total += len(items)
             hit = False
@@ -252,12 +286,18 @@ def main():
             else:
                 verdict = "quiet" if not items else f"{len(items)} finding(s) on a clean file"
             print(f"{fixture['name']:<24} {len(items):>8}  {verdict}")
+            # What it actually said, because "MISSED" and "a finding about something else" are
+            # different results and only one of them is about the defect that was planted.
+            for item in items[:2]:
+                line = item["range"]["start"]["line"] + 1
+                message = (item.get("message") or "").replace("\n", " ")[:88]
+                print(f"{'':<24} {'':>8}  line {line}: {message}")
             server.notify("textDocument/didClose", {"textDocument": {"uri": uri}})
 
         # What the server itself recorded, which is where a finding goes missing: the analysis
         # can produce findings and still leave none in the diagnostics — discarded on an anchor
         # that cannot be located, or refused before the call.
-        trace = os.path.join(workdir, ".git", "meta", "session.jsonl")
+        trace = trace_path
         if os.path.isfile(trace):
             print()
             print("server-side record:")
