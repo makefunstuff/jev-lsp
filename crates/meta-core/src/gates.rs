@@ -9,7 +9,6 @@ pub enum Skip {
     Binary,
     OverSize { bytes: usize, limit: u64 },
     Ignored { pattern: String },
-    TooManyLines { lines: u32, limit: u32 },
 }
 
 impl Skip {
@@ -18,7 +17,6 @@ impl Skip {
             Skip::Binary => "binary",
             Skip::OverSize { .. } => "over_size",
             Skip::Ignored { .. } => "ignored",
-            Skip::TooManyLines { .. } => "over_size",
         }
     }
 
@@ -29,9 +27,6 @@ impl Skip {
                 format!("{bytes} bytes exceeds the {limit} byte analysis limit")
             }
             Skip::Ignored { pattern } => format!("path matches the ignore pattern {pattern:?}"),
-            Skip::TooManyLines { lines, limit } => {
-                format!("{lines} lines exceeds the {limit} line scope limit")
-            }
         }
     }
 }
@@ -102,11 +97,17 @@ pub fn ignored_by(path: &str, patterns: &[String]) -> Option<String> {
 }
 
 /// Evaluate every gate for one document.
+/// Whether a document is worth analysing at all.
+///
+/// The file bound is **bytes**; the scope bound is separate and per declaration
+/// (`scope::resolve`). Passing the scope limit here as well refused every file longer than it —
+/// four hundred lines, an ordinary module — and refused it as `over_size`, which reads like a
+/// size problem rather than a length one. A long file is analysed; a long *declaration* inside
+/// it degrades to a statement, which is that bound doing its own job.
 pub fn evaluate(
     text: &str,
     path: &str,
     max_file_bytes: u64,
-    max_lines: u32,
     patterns: &[String],
 ) -> Option<Skip> {
     if is_binary(text) {
@@ -120,13 +121,6 @@ pub fn evaluate(
     }
     if let Some(pattern) = ignored_by(path, patterns) {
         return Some(Skip::Ignored { pattern });
-    }
-    let lines = text.split('\n').count() as u32;
-    if max_lines > 0 && lines > max_lines {
-        return Some(Skip::TooManyLines {
-            lines,
-            limit: max_lines,
-        });
     }
     None
 }
@@ -177,20 +171,19 @@ mod tests {
     #[test]
     fn evaluate_reports_the_first_gate_that_trips() {
         let pats = vec!["**/vendor/**".to_string()];
-        assert_eq!(evaluate("ok", "/a/b.rs", 1000, 100, &pats), None);
-        assert_eq!(evaluate("a\0b", "/a/b.rs", 1000, 100, &pats), Some(Skip::Binary));
+        assert_eq!(evaluate("ok", "/a/b.rs", 1000, &pats), None);
+        assert_eq!(evaluate("a\0b", "/a/b.rs", 1000, &pats), Some(Skip::Binary));
         assert!(matches!(
-            evaluate(&"x".repeat(50), "/a/b.rs", 10, 100, &pats),
+            evaluate(&"x".repeat(50), "/a/b.rs", 10, &pats),
             Some(Skip::OverSize { .. })
         ));
         assert!(matches!(
-            evaluate("ok", "/a/vendor/b.rs", 1000, 100, &pats),
+            evaluate("ok", "/a/vendor/b.rs", 1000, &pats),
             Some(Skip::Ignored { .. })
         ));
-        assert!(matches!(
-            evaluate("a\nb\nc", "/a/b.rs", 1000, 2, &pats),
-            Some(Skip::TooManyLines { .. })
-        ));
+        // Length is not a refusal: four hundred lines is an ordinary module, and refusing it
+        // here would leave every large file with no findings, no lenses and no hints.
+        assert!(evaluate(&"a\n".repeat(1000), "/a/b.rs", 100_000, &pats).is_none());
     }
 
     #[test]

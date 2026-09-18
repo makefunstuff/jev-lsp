@@ -207,7 +207,6 @@ impl MetaServer {
             &doc.text,
             &doc.path,
             cfg.languages.max_file_bytes,
-            cfg.languages.max_scope_lines,
             &cfg.languages.ignore,
         )
         .is_some()

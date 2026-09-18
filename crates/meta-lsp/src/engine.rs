@@ -247,7 +247,6 @@ impl Engine {
             &doc.text,
             &doc.path,
             cfg.languages.max_file_bytes,
-            cfg.languages.max_scope_lines,
             &cfg.languages.ignore,
         ) {
             return Err(Failure::Skipped(skip.reason()));
@@ -321,7 +320,6 @@ impl Engine {
             &doc.text,
             &doc.path,
             cfg.languages.max_file_bytes,
-            cfg.languages.max_scope_lines,
             &cfg.languages.ignore,
         ) {
             return Err(Failure::Skipped(skip.reason()));
@@ -435,7 +433,6 @@ impl Engine {
             &doc.text,
             &doc.path,
             cfg.languages.max_file_bytes,
-            cfg.languages.max_scope_lines,
             &cfg.languages.ignore,
         ) {
             return Err(Failure::Skipped(skip.reason()));
@@ -610,7 +607,6 @@ impl Engine {
             &doc.text,
             &doc.path,
             cfg.languages.max_file_bytes,
-            cfg.languages.max_scope_lines,
             &cfg.languages.ignore,
         ) {
             return Err(Failure::Skipped(skip.reason()));
@@ -685,7 +681,6 @@ impl Engine {
             &doc.text,
             &doc.path,
             cfg.languages.max_file_bytes,
-            cfg.languages.max_scope_lines,
             &cfg.languages.ignore,
         ) {
             return Err(Failure::Skipped(skip.reason()));

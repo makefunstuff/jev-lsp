@@ -545,7 +545,6 @@ fn prepare(config: &Config, target: &Target, deps: &Deps) -> R<Prepared> {
         &doc.text,
         &doc.path,
         config.languages.max_file_bytes,
-        config.languages.max_scope_lines,
         &config.languages.ignore,
     ) {
         return Err(Failure::Skipped(format!(

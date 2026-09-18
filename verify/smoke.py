@@ -378,6 +378,28 @@ def main():
                   and got.get("end", {}).get("character") == want_col + len(anchor),
                   "finding range covers exactly the anchored text")
 
+        print("[smoke] a long file is analysed, not refused for its length")
+        # Four hundred lines was the *scope* limit and used to be the file limit too, so any
+        # longer file was refused as `over_size` and got no findings, no lenses and no hints —
+        # silently, in the ordinary size of module.
+        long_path = os.path.join(workdir, "long.rs")
+        long_text = "\n".join(
+            ["fn long_one() {"] + [f"    let x{i} = {i};" for i in range(600)] + ["}", ""]
+        )
+        with open(long_path, "w") as fh:
+            fh.write(long_text)
+        long_uri = "file://" + long_path
+        before_calls = len(stub.requests()["requests"])
+        server.notify("textDocument/didOpen", {"textDocument": {
+            "uri": long_uri, "languageId": "rust", "version": 1, "text": long_text}})
+        server.notify("textDocument/didSave", {"textDocument": {"uri": long_uri}})
+        deadline = time.time() + 20
+        while time.time() < deadline and len(stub.requests()["requests"]) <= before_calls:
+            time.sleep(0.1)
+        after_calls = len(stub.requests()["requests"])
+        check(after_calls > before_calls,
+              f"a 600-line file reaches the model ({before_calls} -> {after_calls} calls)")
+
         print("[smoke] code actions")
         actions = server.request("textDocument/codeAction", {
             "textDocument": {"uri": uri},
