@@ -38,8 +38,8 @@ progress bar.
 The inline hint is built too (`textDocument/inlayHint`, §1 row 5): a `meta: N finding(s)`
 badge on a declaration that has findings, and silence everywhere else. It stays **off** by
 default — Neovim switches inlay hints on per *buffer*, not per client, so enabling it for this
-badge also enables every other server's hints in that buffer. `<leader>Mh` toggles it, and
-`:Meta hints on|off` does the same.
+badge also enables every other server's hints in that buffer. `<leader>mh` toggles it, and `:Meta hints on|off`
+does the same.
 
 The inline annotation is built (`textDocument/codeLens`, §1 row 3): a clean declaration shows
 `meta: explain`, one with cached findings shows `meta: N finding(s) · fix`, and running it is
@@ -61,7 +61,7 @@ complete answer, the first 3 of which are prefill and reasoning.
 <leader>me   explain scope                -- :Meta explain
 <leader>ml   run the lens on this line     -- vim.lsp.codelens.run()
 <leader>mf   ask about what is under the cursor -- :Meta followup
-<leader>Mw   where is this handled in the project -- :Meta where
+<leader>mw   where is this handled in the project -- :Meta where
 <leader>mr   review this file
 <leader>mt   add tests for scope
 <leader>md   dismiss finding at cursor
