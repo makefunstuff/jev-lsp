@@ -17,6 +17,21 @@ use meta_core::model::{ChatRequest, ChatResponse};
 use meta_core::scope::{self, Resolved};
 use meta_core::types::{Finding, Proposal, Tier, Usage, Verb, PROMPT_VERSION};
 use meta_core::verbs;
+
+/// Where generated text goes while it is being generated.
+///
+/// `None` means nothing until the answer is complete, which is what an *edit* needs: half a
+/// JSON object is not a preview, and an edit that is streamed is an edit that cannot be
+/// validated before someone sees it. Prose is the case that wants streaming.
+type Delta<'a> = Option<&'a mut dyn FnMut(&str)>;
+
+/// Reborrow, so a caller can hand the same callback to more than one call.
+fn reborrow<'a, 'b>(delta: &'a mut Delta<'b>) -> Delta<'a>
+where
+    'b: 'a,
+{
+    delta.as_mut().map(|f| &mut **f as &mut dyn FnMut(&str))
+}
 use std::sync::Arc;
 
 /// A successful generation.
@@ -254,6 +269,7 @@ impl Engine {
             &ctx,
             |c| verbs::render(Verb::Review, c),
             contract::parse_findings,
+            None,
         )?;
         let built = findings::build(&doc.text, &raw, &meta_core::lang::profile(&doc.language.name));
 
@@ -279,6 +295,23 @@ impl Engine {
         verb: Verb,
         scope: &Resolved,
         findings_in_scope: &[Finding],
+    ) -> Result<Generated, Failure> {
+        self.generate_streaming(doc, verb, scope, findings_in_scope, None)
+    }
+
+    /// The same generation, with the answer reported as it arrives.
+    ///
+    /// The stream is a *preview*: what the caller finally receives is the artifact this
+    /// returns, and a repair attempt — which only ever happens for artifacts — means the
+    /// preview was the first, rejected attempt. The Result is authoritative; the stream is
+    /// what makes the wait visible.
+    pub fn generate_streaming(
+        &self,
+        doc: &Document,
+        verb: Verb,
+        scope: &Resolved,
+        findings_in_scope: &[Finding],
+        mut delta: Delta<'_>,
     ) -> Result<Generated, Failure> {
         let cfg = self.config();
         if !cfg.enabled {
@@ -320,6 +353,7 @@ impl Engine {
                     &ctx,
                     |c| verbs::render(verb, c),
                     contract::parse_artifact,
+                    reborrow(&mut delta),
                 )?;
                 if raw.markdown.trim().is_empty() {
                     return Err(Failure::Contract("artifact carried no text".to_string()));
@@ -341,7 +375,7 @@ impl Engine {
                 let mut attempt_ctx = ctx.clone();
                 let mut repairs = 0usize;
                 loop {
-                    let attempt = self.chat_with(&cfg, verb.tier(), verbs::render(verb, &attempt_ctx))?;
+                    let attempt = self.chat_with(&cfg, verb.tier(), verbs::render(verb, &attempt_ctx), None)?;
                     let refusal = match contract::parse_edit(&attempt.text) {
                         Err(e) => e.to_string(),
                         Ok(raw) => match edit::build_proposal(&doc.text, &raw, &profile, &opts) {
@@ -386,6 +420,7 @@ impl Engine {
         cfg: &Config,
         tier_kind: Tier,
         spec: verbs::PromptSpec,
+        delta: Delta<'_>,
     ) -> Result<ChatResponse, Failure> {
         let _permit = match self.state.budget.try_acquire(&cfg.budget) {
             meta_core::budget::Permit::Granted => Permit(&self.state.budget),
@@ -404,11 +439,11 @@ impl Engine {
             json: spec.json,
             think: tier.think,
         };
-        let response = self
-            .state
-            .backend
-            .chat(tier, &request)
-            .map_err(|e| Failure::Model(e.to_string()))?;
+        let response = match delta {
+            Some(cb) => self.state.backend.chat_stream(tier, &request, cb),
+            None => self.state.backend.chat(tier, &request),
+        }
+        .map_err(|e| Failure::Model(e.to_string()))?;
         self.state.budget.record_tokens(response.total_tokens());
         Ok(response)
     }
@@ -427,9 +462,10 @@ impl Engine {
         ctx: &context::Context,
         render: impl Fn(&context::Context) -> verbs::PromptSpec,
         parse: impl Fn(&str) -> Result<T, contract::ContractError>,
+        mut delta: Delta<'_>,
     ) -> Result<(T, Usage), Failure> {
         let started = std::time::Instant::now();
-        let response = self.chat_with(cfg, tier_kind, render(ctx))?;
+        let response = self.chat_with(cfg, tier_kind, render(ctx), reborrow(&mut delta))?;
         let mut tokens_in = response.prompt_tokens;
         let mut tokens_out = response.completion_tokens;
 
@@ -454,7 +490,7 @@ impl Engine {
         let mut last = first_error;
         for _ in 0..MAX_REPAIR_ATTEMPTS {
             let repair = repair_context(ctx, &last.to_string(), &response.text);
-            let retry = self.chat_with(cfg, tier_kind, render(&repair))?;
+            let retry = self.chat_with(cfg, tier_kind, render(&repair), reborrow(&mut delta))?;
             tokens_in += retry.prompt_tokens;
             tokens_out += retry.completion_tokens;
             match parse(&retry.text) {
@@ -566,7 +602,7 @@ impl Engine {
             &head(suffix, SUFFIX_WINDOW),
             cfg.models.fim.fim_tokens.as_ref(),
         );
-        let response = self.chat_with(&cfg, Tier::Fim, spec)?;
+        let response = self.chat_with(&cfg, Tier::Fim, spec, None)?;
         let text = clean_completion(&response.text);
         self.state.cache.put(
             &key,
@@ -607,6 +643,7 @@ impl Engine {
             &ctx,
             |c| verbs::render_plan(c, goal),
             contract::parse_plan,
+            None,
         )?;
         let built = meta_core::plan::build(
             &doc.uri,

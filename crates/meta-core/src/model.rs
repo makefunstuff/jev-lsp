@@ -37,6 +37,83 @@ impl ChatResponse {
 /// One chat round trip. Implementations must be safe to share across threads.
 pub trait Backend: Send + Sync {
     fn chat(&self, cfg: &TierConfig, req: &ChatRequest) -> Result<ChatResponse>;
+
+    /// The same round trip, reporting the answer as it arrives.
+    ///
+    /// The default waits for the whole answer and reports it once, so a backend that cannot
+    /// stream is still a backend. `OpenAiCompat` overrides it with `stream: true`.
+    fn chat_stream(
+        &self,
+        cfg: &TierConfig,
+        req: &ChatRequest,
+        on_delta: &mut dyn FnMut(&str),
+    ) -> Result<ChatResponse> {
+        let answer = self.chat(cfg, req)?;
+        on_delta(&answer.text);
+        Ok(answer)
+    }
+}
+
+/// Accumulates a streaming completion.
+///
+/// Pure on purpose: everything that decides what an SSE line *means* is testable without a
+/// socket, which is where the mistakes are — a keep-alive taken for content, `[DONE]` parsed
+/// as JSON, usage dropped because the chunk that carries it has no `choices`.
+///
+/// llama.cpp, vLLM and OpenAI all send `data: {json}` per event and end with `data: [DONE]`;
+/// comment lines (`: ping`) and blank lines are keep-alives.
+#[derive(Default)]
+pub struct Stream {
+    text: String,
+    reasoning: String,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    finish_reason: Option<String>,
+}
+
+impl Stream {
+    /// Feed one line of the body. Returns the text it added, which is what a caller forwards.
+    pub fn push_line(&mut self, line: &str) -> Option<String> {
+        let payload = line.trim_end_matches(['\r', '\n']).strip_prefix("data:")?.trim();
+        if payload.is_empty() || payload == "[DONE]" {
+            return None;
+        }
+        let chunk: serde_json::Value = serde_json::from_str(payload).ok()?;
+        if let Some(usage) = chunk.get("usage").and_then(|u| u.as_object()) {
+            let n = |k: &str| usage.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+            self.prompt_tokens = n("prompt_tokens");
+            self.completion_tokens = n("completion_tokens");
+        }
+        let choice = chunk.get("choices").and_then(|c| c.get(0))?;
+        if let Some(reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
+            self.finish_reason = Some(reason.to_string());
+        }
+        let delta = choice.get("delta")?;
+        if let Some(thought) = delta.get("reasoning_content").and_then(|c| c.as_str()) {
+            self.reasoning.push_str(thought);
+        }
+        let text = delta.get("content").and_then(|c| c.as_str())?;
+        if text.is_empty() {
+            return None;
+        }
+        self.text.push_str(text);
+        Some(text.to_string())
+    }
+
+    /// The answer, judged by the same function that judges a buffered one: what an empty
+    /// answer means must not fork between the streaming and non-streaming paths.
+    pub fn into_response(self) -> Result<ChatResponse> {
+        OpenAiCompat::parse_response(&json!({
+            "choices": [{
+                "message": { "content": self.text, "reasoning_content": self.reasoning },
+                "finish_reason": self.finish_reason,
+            }],
+            "usage": {
+                "prompt_tokens": self.prompt_tokens,
+                "completion_tokens": self.completion_tokens,
+            },
+        }))
+    }
 }
 
 #[derive(Serialize)]
@@ -105,6 +182,16 @@ impl OpenAiCompat {
                 }
             }
         }
+        body
+    }
+
+    /// The same request, asking the server to stream. `include_usage` is ignored by servers
+    /// that do not know it, and honoured by the ones that do — llama.cpp and vLLM both send
+    /// the token counts in a final chunk with an empty `choices` array when asked.
+    pub fn build_stream_body(cfg: &TierConfig, req: &ChatRequest) -> serde_json::Value {
+        let mut body = Self::build_body(cfg, req);
+        body["stream"] = json!(true);
+        body["stream_options"] = json!({ "include_usage": true });
         body
     }
 
@@ -195,6 +282,66 @@ impl Backend for OpenAiCompat {
             .read_json()
             .with_context(|| format!("decoding the response from {url}"))?;
         Self::parse_response(&raw)
+    }
+
+    fn chat_stream(
+        &self,
+        cfg: &TierConfig,
+        req: &ChatRequest,
+        on_delta: &mut dyn FnMut(&str),
+    ) -> Result<ChatResponse> {
+        let url = Self::endpoint(&cfg.base_url);
+        let body = Self::build_stream_body(cfg, req);
+
+        let mut call = self
+            .agent
+            .post(&url)
+            .config()
+            .timeout_global(Some(Duration::from_millis(cfg.timeout_ms.max(1))))
+            .build()
+            .header("content-type", "application/json")
+            .header("accept", "text/event-stream");
+        if let Some(env) = &cfg.api_key_env {
+            if let Ok(key) = std::env::var(env) {
+                if !key.is_empty() {
+                    call = call.header("authorization", &format!("Bearer {key}"));
+                }
+            }
+        }
+
+        let mut response = call
+            .send_json(&body)
+            .with_context(|| format!("POST {url}"))?;
+        let mut stream = Stream::default();
+        let mut raw_body = String::new();
+        let mut saw_event = false;
+        {
+            use std::io::BufRead as _;
+            let reader = std::io::BufReader::new(response.body_mut().as_reader());
+            for line in reader.lines() {
+                let line = line.with_context(|| format!("reading the stream from {url}"))?;
+                if line.trim_start().starts_with("data:") {
+                    saw_event = true;
+                }
+                raw_body.push_str(&line);
+                raw_body.push('\n');
+                if let Some(delta) = stream.push_line(&line) {
+                    on_delta(&delta);
+                }
+            }
+        }
+        if !saw_event {
+            // A server that ignores `stream` answers with one JSON object, and a proxy that
+            // strips the header can do the same. Fall back to reading it whole: otherwise a
+            // working endpoint is reported as an empty answer, which is the least useful
+            // thing to say.
+            let raw: serde_json::Value = serde_json::from_str(&raw_body)
+                .with_context(|| format!("decoding the response from {url}"))?;
+            let answer = Self::parse_response(&raw)?;
+            on_delta(&answer.text);
+            return Ok(answer);
+        }
+        stream.into_response()
     }
 }
 
@@ -335,6 +482,87 @@ mod tests {
         ] {
             assert!(OpenAiCompat::parse_response(&bad).is_err(), "{bad}");
         }
+    }
+
+    /// One SSE event, as llama.cpp and OpenAI both send it.
+    fn delta(text: &str) -> String {
+        json!({"choices": [{"index": 0, "delta": {"content": text}}]}).to_string()
+    }
+
+    #[test]
+    fn a_stream_line_yields_the_text_it_adds() {
+        let mut s = Stream::default();
+        assert_eq!(s.push_line(&format!("data: {}", delta("Hel"))).as_deref(), Some("Hel"));
+        assert_eq!(s.push_line(&format!("data: {}", delta("lo"))).as_deref(), Some("lo"));
+        let out = s.into_response().expect("a complete answer");
+        assert_eq!(out.text, "Hello");
+    }
+
+    #[test]
+    fn keepalives_and_the_sentinel_are_not_content() {
+        let mut s = Stream::default();
+        for line in [
+            "",
+            "\r",
+            ": ping",
+            ": keep-alive",
+            "event: message",
+            "data: ",
+            "data: [DONE]",
+            "data: not json at all",
+            &format!("data: {}", delta("")),
+        ] {
+            assert_eq!(s.push_line(line), None, "line {line:?} was taken for content");
+        }
+        assert!(s.into_response().is_err(), "nothing was said, so there is no answer");
+    }
+
+    #[test]
+    fn usage_arrives_in_a_chunk_with_no_choices_and_is_kept() {
+        let mut s = Stream::default();
+        s.push_line(&format!("data: {}", delta("42")));
+        s.push_line("data: {\"choices\": [], \"usage\": {\"prompt_tokens\": 120, \"completion_tokens\": 7}}");
+        let out = s.into_response().expect("a complete answer");
+        assert_eq!(out.text, "42");
+        assert_eq!(out.prompt_tokens, 120);
+        assert_eq!(out.completion_tokens, 7);
+    }
+
+    #[test]
+    fn a_finish_reason_is_carried_through() {
+        let mut s = Stream::default();
+        s.push_line(&format!("data: {}", delta("x")));
+        s.push_line("data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}");
+        assert_eq!(s.into_response().unwrap().finish_reason.as_deref(), Some("stop"));
+    }
+
+    #[test]
+    fn a_streamed_answer_with_only_reasoning_is_refused_like_a_buffered_one() {
+        let mut s = Stream::default();
+        assert_eq!(s.push_line("data: {\"choices\": [{\"delta\": {\"reasoning_content\": \"thinking\"}}]}"), None);
+        let err = s.into_response().unwrap_err().to_string();
+        assert!(
+            err.contains("only reasoning"),
+            "the diagnosis a buffered answer gets must survive streaming: {err}"
+        );
+    }
+
+    #[test]
+    fn the_stream_body_asks_for_streaming_and_usage() {
+        let req = ChatRequest {
+            system: "s".into(),
+            user: "u".into(),
+            temperature: 0.0,
+            max_tokens: 8,
+            json: false,
+            think: Think::Off,
+        };
+        let body = OpenAiCompat::build_stream_body(&tier(), &req);
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["stream_options"]["include_usage"], true);
+        // everything the buffered body carries still has to be there
+        assert_eq!(body["model"], "m");
+        assert_eq!(body["messages"][1]["content"], "u");
     }
 
     #[test]

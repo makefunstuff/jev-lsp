@@ -27,6 +27,7 @@ Name: workspace and binary are `meta`, crates `meta-core` / `meta-lsp` / `meta`,
 | N9 | The server holds no cross-session memory. Caches are keyed by content hash and are never a source of truth. | Two editors, two views; a stale cache must be detectably stale, not authoritative. |
 | N10 | Support is unconditional. No language, filetype, parser, or resolution result may gate attachment, sync, or the verb set. | The model needs no grammar to read text. `docs/LANGUAGE.md`. |
 | N11 | Classification is metadata, carried in `data` and artifacts, and never a filter. `unknown` is a valid language. | A bad result must be attributable to a bad classification, and nothing may be silently excluded. |
+| N12 | A partial report carries the answer **so far**, never a delta. | Replacing what is displayed with a cumulative value is idempotent: a lost, duplicated, or delayed report cannot corrupt the text a user is reading `[R13]`. |
 
 ---
 
@@ -164,6 +165,42 @@ Rules that follow, and are enforced by the streaming module:
 Path 1 is verified end to end against NVIM v0.12.5: `verify/probes/streaming.lua` drives a
 stub stdio server and asserts that the client-supplied token arrives in the request params
 and that `begin,report,end` arrives under it `[R12]`.
+
+#### 3.5.1 Partial results — the answer as it is written
+
+A prose answer is reported while it is being generated, under the same token, as `report`
+values that carry the text so far in `data`:
+
+```jsonc
+// server -> client
+{ "token": "meta:8f3c1d",
+  "value": { "kind": "report",
+             "message": "meta: explaining — 412 bytes",
+             "data": { "schema": "meta.artifact/1",
+                       "kind": "explanation",
+                       "partial": true,
+                       "markdown": "# Summary\n\n…" } } }
+```
+
+Rules:
+
+- **Cumulative, never deltas.** `data.markdown` is the whole answer so far. A lost, repeated,
+  or out-of-order report therefore cannot corrupt what the user is reading, and the client
+  writes by replacing, with no bookkeeping `[R13]`.
+- **`message` stays short and human.** Neovim's own progress UI renders it; the text travels
+  in `data`, which only the plugin reads.
+- **The response is authoritative.** The artifact in the response is the answer; a report is a
+  preview of it. A repair attempt means the preview may have shown a rejected first attempt —
+  which is why an *edit* is never streamed: half a JSON object is not a preview, and a
+  streamed edit is one nobody can stop.
+- **Silence is a defect.** Before the first token the server reports `waiting` on a slow
+  cadence, because the prefill and the reasoning phase are seconds long and an empty window
+  is indistinguishable from a hang. Measured: 4.6 s to a complete answer, of which the first
+  3 were reported as waiting.
+- **Only for a token the client issued** — §3.5 path 1, unchanged. Nothing is created.
+
+The client must tolerate `data` being absent: a report without it is ordinary progress and is
+rendered as a message.
 
 ---
 

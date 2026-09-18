@@ -446,6 +446,64 @@ async fn report(client: &Client, uri: &str, outcome: Result<Outcome, Failure>) {
     }
 }
 
+/// `$/progress` with a value we shape ourselves.
+///
+/// `ProgressParamsValue` in the pinned `lsp-types` has exactly one variant, and
+/// `WorkDoneProgressReport` has no room for the partial text that has to travel beside
+/// `message` (§3.5). Same method, same token, same rules — the value is ours.
+enum RawProgress {}
+
+impl tower_lsp::lsp_types::notification::Notification for RawProgress {
+    type Params = Value;
+    const METHOD: &'static str = "$/progress";
+}
+
+/// A partial result, under a token the client issued.
+///
+/// `message` stays short and human, because Neovim's own progress UI renders it; the text so
+/// far travels in `data`, which only the plugin reads. The artifact in the response remains
+/// the authoritative one — this is a preview, and a repair attempt means it may be a preview
+/// of an answer that was rejected.
+async fn partial_artifact(client: &Client, token: &ProgressToken, markdown: &str) {
+    let value = json!({
+        "kind": "report",
+        "message": format!("meta: explaining — {} bytes", markdown.len()),
+        "data": {
+            "schema": ARTIFACT_SCHEMA,
+            "kind": "explanation",
+            "partial": true,
+            "markdown": markdown,
+        },
+    });
+    client
+        .send_notification::<RawProgress>(json!({"token": token, "value": value}))
+        .await;
+}
+
+/// How often a streamed answer is forwarded. One notification per token would be hundreds of
+/// messages for one explanation; this is fast enough to look live and slow enough not to
+/// matter.
+const STREAM_FLUSH: std::time::Duration = std::time::Duration::from_millis(120);
+
+/// How often to say something while the model is still thinking: slow enough not to be noise,
+/// fast enough that a four-second prefill does not look like a hang.
+const STREAM_HEARTBEAT: std::time::Duration = std::time::Duration::from_millis(1000);
+
+/// Nothing to show yet, but the work is real and it is running.
+async fn nothing_yet(client: &Client, token: &ProgressToken, waited: std::time::Duration) {
+    let value = json!({
+        "kind": "report",
+        "message": format!(
+            "meta: explaining — waiting for the model ({:.0}s)",
+            waited.as_secs_f64()
+        ),
+        "data": { "partial": true, "markdown": "", "waiting": true },
+    });
+    client
+        .send_notification::<RawProgress>(json!({"token": token, "value": value}))
+        .await;
+}
+
 async fn progress(client: &Client, token: &ProgressToken, value: WorkDoneProgress) {
     client
         .send_notification::<Progress>(ProgressParams {
@@ -1080,9 +1138,70 @@ impl MetaServer {
                 };
                 let scope = self.engine.scope_at(&doc, line, None);
                 let (target, scope_for_call) = (doc.clone(), scope.clone());
+                // The answer as it arrives, for the client that asked to see it. The token is
+                // the one the client put in the request (§3.5 path 1), so no create request is
+                // made and nothing is sent for a token we were not given.
+                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                let forwarder = params
+                    .work_done_progress_params
+                    .work_done_token
+                    .clone()
+                    .map(|t| {
+                    let client = self.client.clone();
+                    tokio::spawn(async move {
+                        let mut so_far = String::new();
+                        let mut flushed = std::time::Instant::now();
+                        let started = std::time::Instant::now();
+                        let mut beat = std::time::Instant::now();
+                        // The model spends seconds before the first token — prefill, and
+                        // reasoning that never becomes part of the answer. Staying silent
+                        // until content arrives leaves that window empty, exactly where a
+                        // user is deciding whether this is working at all.
+                        loop {
+                            match tokio::time::timeout(STREAM_FLUSH, rx.recv()).await {
+                                Ok(Some(chunk)) => {
+                                    so_far.push_str(&chunk);
+                                    if flushed.elapsed() < STREAM_FLUSH {
+                                        continue;
+                                    }
+                                    flushed = std::time::Instant::now();
+                                    partial_artifact(&client, &t, &so_far).await;
+                                    beat = std::time::Instant::now();
+                                }
+                                Ok(None) => break, // work done, and the sender is gone
+                                Err(_) => {
+                                    if beat.elapsed() >= STREAM_HEARTBEAT {
+                                        beat = std::time::Instant::now();
+                                        if so_far.is_empty() {
+                                            nothing_yet(&client, &t, started.elapsed()).await;
+                                        } else {
+                                            partial_artifact(&client, &t, &so_far).await;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    })
+                });
                 let outcome = self
-                    .blocking(move |engine| engine.generate(&target, Verb::Explain, &scope_for_call, &[]))
+                    .blocking(move |engine| {
+                        let mut on_delta = move |delta: &str| {
+                            let _ = tx.send(delta.to_string());
+                        };
+                        engine.generate_streaming(
+                            &target,
+                            Verb::Explain,
+                            &scope_for_call,
+                            &[],
+                            Some(&mut on_delta),
+                        )
+                    })
                     .await;
+                // The sender lived inside the closure, so the channel closes when the work is
+                // done and the forwarder drains and returns.
+                if let Some(handle) = forwarder {
+                    let _ = handle.await;
+                }
                 match outcome {
                     Ok(Generated::Artifact(markdown)) => json!({
                         "schema": ARTIFACT_SCHEMA,

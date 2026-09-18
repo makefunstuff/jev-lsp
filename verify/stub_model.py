@@ -43,6 +43,15 @@ DELAY_MS = int(os.environ.get("STUB_DELAY_MS", "0"))
 _ANCHOR_RE = re.compile(r"\nCODE:\n(.*?)(?:\nCONTEXT \(do not modify\):|\Z)", re.S)
 
 
+# How long to wait between streamed pieces. Long enough that a server coalescing its output
+# still emits several partials, so a test can tell streaming from buffering.
+STREAM_DELAY_MS = int(os.environ.get("STUB_STREAM_DELAY_MS", "150"))
+
+# Answer a `stream: true` request with one ordinary JSON object, the way a server that does not
+# implement streaming does. The client must fall back rather than report an empty answer.
+IGNORE_STREAM = os.environ.get("STUB_IGNORE_STREAM") == "1"
+
+
 def anchor_from_request(body):
     """Pick an anchor that actually exists in the document under discussion.
 
@@ -186,6 +195,56 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_stream(self, content, source):
+        """Answer with SSE, the way llama.cpp does: `data:` events, a keep-alive comment, a
+        final usage chunk with no choices, then `[DONE]`.
+
+        Delimited by connection close (HTTP/1.1 allows it when `Connection: close` is sent), so
+        no chunked framing to get wrong here. The pieces are paced so a server coalescing its
+        output still produces more than one partial: with everything sent at once there would
+        be exactly one flush and the test could not tell streaming from buffering.
+        """
+        self.send_response(200)
+        self.send_header("content-type", "text/event-stream")
+        self.send_header("connection", "close")
+        self.close_connection = True
+        self.end_headers()
+
+        def event(payload):
+            self.wfile.write(b"data: " + json.dumps(payload).encode() + b"\n\n")
+            self.wfile.flush()
+
+        self.wfile.write(b": keep-alive\n\n")  # a comment line is not content
+        self.wfile.flush()
+
+        # Split on whitespace boundaries so each piece is a plausible token group.
+        words = content.split(" ")
+        pieces = [w + (" " if i < len(words) - 1 else "") for i, w in enumerate(words)]
+        step = max(1, len(pieces) // 4 or 1)
+        for i in range(0, len(pieces), step):
+            event(
+                {
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": "".join(pieces[i : i + step])},
+                            "finish_reason": None,
+                        }
+                    ]
+                }
+            )
+            time.sleep(STREAM_DELAY_MS / 1000.0)
+        event({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
+        event(
+            {
+                "choices": [],
+                "usage": {"prompt_tokens": 11, "completion_tokens": 7},
+                "_stub_source": source,
+            }
+        )
+        self.wfile.write(b"data: [DONE]\n\n")
+        self.wfile.flush()
+
     def do_GET(self):
         path = urlparse(self.path).path
         if path == "/__requests":
@@ -262,6 +321,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, {"error": "no anchor available"})
                 return
             content, source = choose(wants_findings, wants_markdown, anchor, wants_plan)
+            if body.get("stream") and not IGNORE_STREAM:
+                self._send_stream(content, source)
+                return
             self._send(
                 200,
                 {

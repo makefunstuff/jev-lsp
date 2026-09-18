@@ -99,6 +99,44 @@ function M.release_token(token)
   issued[token] = nil
 end
 
+--- The buffer a streamed answer is being written into, by the token carrying it.
+local streams = {} -- token -> bufnr
+
+--- Open the buffer an answer is written into *while* it is being written.
+---
+--- It is the artifact buffer from the start, not a placeholder that is replaced: the finished
+--- artifact lands in the same buffer, so the answer never moves when it completes.
+local function stream_open()
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.bo[bufnr].filetype = 'markdown'
+  vim.bo[bufnr].bufhidden = 'wipe'
+  -- Deliberately unnamed. Renaming an already-named buffer leaves a stub buffer holding the
+  -- old name — verified: create a buffer, name it, rename it, and a second empty buffer
+  -- appears under the first name. This one is named once, when it becomes the artifact.
+  vim.keymap.set('n', 'q', '<Cmd>close<CR>', { buffer = bufnr, desc = 'meta: close artifact' })
+  vim.cmd('sbuffer ' .. bufnr)
+  return bufnr
+end
+
+--- Write the text so far.
+---
+--- The server sends the whole answer so far, never deltas, so this replaces the buffer's
+--- contents and no bookkeeping is needed: a lost or repeated report is harmless.
+local function stream_write(token, markdown)
+  local bufnr = streams[token]
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+  local lines = vim.split(markdown, '\n', { plain = true })
+  vim.bo[bufnr].modifiable = true
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+  vim.bo[bufnr].modifiable = false
+  -- Follow the text as it grows, the way a terminal would.
+  for _, win in ipairs(vim.fn.win_findbuf(bufnr)) do
+    pcall(vim.api.nvim_win_set_cursor, win, { math.max(1, #lines), 0 })
+  end
+end
+
 --- `workspace/executeCommand` (PROTOCOL §6).
 ---
 --- The request carries its own `workDoneToken`: that is the first of the two legal token
@@ -107,9 +145,14 @@ end
 ---
 --- @param command string
 --- @param arguments? table
---- @param cb? fun(err: table?, result: any)  default: report the outcome
+--- `opts.stream` opens a buffer that the answer is written into as it arrives. Only prose
+--- streams: an edit is validated before anyone is allowed to see it, because half a JSON
+--- object is not a preview and a streamed edit is one nobody can stop.
+---
+--- @param cb? fun(err: table?, result: any, ctx: table?)  default: report the outcome
+--- @param opts? { stream?: boolean }
 --- @return integer? request_id
-function M.command(command, arguments, cb)
+function M.command(command, arguments, cb, opts)
   local c = client()
   if not c then
     vim.notify('meta: no server attached to this buffer', vim.log.levels.WARN)
@@ -117,6 +160,9 @@ function M.command(command, arguments, cb)
   end
   local bufnr = vim.api.nvim_get_current_buf()
   local token = M.issue_token()
+  if opts and opts.stream then
+    streams[token] = stream_open()
+  end
   local success, request_id = c:request('workspace/executeCommand', {
     command = command,
     arguments = arguments or {},
@@ -125,9 +171,24 @@ function M.command(command, arguments, cb)
     if ctx and ctx.request_id then
       inflight[ctx.request_id] = nil
     end
+    -- The token's life is the request's (§3.5): a report that arrives after this is for a
+    -- token we no longer own, and `stream_write` finds nothing to write.
+    local streamed = streams[token]
+    streams[token] = nil
+    if streamed ~= nil and (err ~= nil or (type(result) == 'table' and result.ok == false)) then
+      -- Nothing is coming that could fill it: an error is not a partial answer. Without this
+      -- a refused or cancelled request leaves an empty buffer behind, and the user is left
+      -- holding a window that says nothing.
+      if vim.api.nvim_buf_is_valid(streamed) then
+        pcall(vim.api.nvim_buf_delete, streamed, { force = true })
+      end
+      streamed = nil
+    end
     M.release_token(token)
     if cb then
-      cb(err, result)
+      ctx = ctx or {}
+      ctx.stream_bufnr = streamed
+      cb(err, result, ctx)
     else
       M.report(command, err, result)
     end
@@ -171,7 +232,7 @@ end
 ---
 --- @param cb? fun(err: table?, result: any)
 function M.explain(cb)
-  M.command('meta.explain', { cursor_scope() }, cb or function(err, result)
+  M.command('meta.explain', { cursor_scope() }, cb or function(err, result, ctx)
     if err or (type(result) == 'table' and result.ok == false) then
       M.report('meta.explain', err, result)
       return
@@ -180,8 +241,9 @@ function M.explain(cb)
       M.report('meta.explain', nil, result)
       return
     end
-    M.open_artifact(result)
-  end)
+    -- The buffer the stream was filling, so the finished answer does not move.
+    M.open_artifact(result, ctx and ctx.stream_bufnr)
+  end, { stream = true })
 end
 
 --- Render an artifact in a scratch buffer.
@@ -189,17 +251,23 @@ end
 --- `docs/UX.md` §6: `q` on a generated buffer leaves buffers, windows, and files exactly as
 --- they were — so the buffer is `nofile`, unlisted, wiped on close, and nothing is written.
 --- @param artifact table  `{ schema, kind, summary, markdown, … }` (PROTOCOL §7)
-function M.open_artifact(artifact)
-  local bufnr = vim.api.nvim_create_buf(false, true)
+--- @param bufnr? integer  an existing buffer to finish in (the one a stream filled)
+function M.open_artifact(artifact, bufnr)
+  if bufnr == nil or not vim.api.nvim_buf_is_valid(bufnr) then
+    bufnr = vim.api.nvim_create_buf(false, true)
+  end
+  vim.bo[bufnr].modifiable = true
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false,
     vim.split(artifact.markdown, '\n', { plain = true }))
   vim.bo[bufnr].filetype = 'markdown'
   vim.bo[bufnr].modifiable = false
   vim.bo[bufnr].bufhidden = 'wipe'
-  vim.api.nvim_buf_set_name(bufnr,
+  pcall(vim.api.nvim_buf_set_name, bufnr,
     ('meta://%s/%s'):format(artifact.kind or 'artifact', artifact.id or 'scratch'))
   vim.keymap.set('n', 'q', '<Cmd>close<CR>', { buffer = bufnr, desc = 'meta: close artifact' })
-  vim.cmd('sbuffer ' .. bufnr)
+  if vim.api.nvim_get_current_buf() ~= bufnr then
+    vim.cmd('sbuffer ' .. bufnr)
+  end
 end
 
 --- The scope argument `meta.plan`, `meta.review` and friends take (PROTOCOL §6): where the
@@ -216,7 +284,8 @@ end
 --- `:Meta plan [goal]` — `docs/UX.md` §1: free text enters here and nowhere else, because the
 --- protocol cannot ask for it ([R1]). With no goal argument the plugin prompts.
 ---
---- The server answers `not_implemented` in this version; that answer is reported as it is.
+--- The server returns a plan artifact (targets, per-step verbs, cost). There is no
+--- step-through plan buffer yet, so it arrives as a reported Result.
 --- @param goal? string
 function M.plan(goal)
   if goal ~= nil and vim.trim(goal) ~= '' then
@@ -566,7 +635,16 @@ function M.install_progress_tracker()
       local data = ev.data or {}
       local params = data.params or {}
       local token = params.token
-      local kind = type(params.value) == 'table' and params.value.kind
+      local value = type(params.value) == 'table' and params.value or nil
+      local kind = value and value.kind
+      -- A streamed answer under a token we issued. It is not server-initiated progress, so it
+      -- is handled before the guard that filters those out.
+      if token and kind == 'report' and type(value.data) == 'table'
+        and value.data.partial and type(value.data.markdown) == 'string'
+      then
+        stream_write(token, value.data.markdown)
+        return
+      end
       local c = data.client_id and vim.lsp.get_client_by_id(data.client_id)
       if not token or not c or c.name ~= M.name or issued[token] then
         return

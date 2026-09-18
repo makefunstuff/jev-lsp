@@ -14,11 +14,22 @@ inline annotation, or a key you already press.
 | Inline hint | `textDocument/inlayHint` | risk markers, off by default | never |
 | Plan buffer | plugin + `window/showDocument` | multi-step work, review, approval | once, on completion |
 | Statusline segment | `$/progress` via `LspProgress` | what is running, budget remaining | never |
+| Streamed answer | `$/progress` partial results (§3.5.1) | the answer written into its buffer as it arrives, and `waiting for the model (3s)` before the first token | never |
 | Pick list | `window/showMessageRequest` | a decision the server must have | once |
 | Text prompt | plugin `vim.ui.input` | the goal for `plan` | only when invoked |
 
 Free text appears exactly once, in `:Meta plan`, because the protocol cannot ask for text
 and because a goal is the only thing a picker cannot express.
+
+Three rows above describe surfaces that are designed and **not built**: the plan buffer, the
+inline annotation (`codeLens`), and the inline hint (`inlayHint`). They are in the table
+because they are the plan, and they are called out here so the table is not read as a
+description of what exists.
+
+A streamed answer is the one place the interface shows work *while* the model runs: the
+scope's explanation appears in its buffer a few words at a time, and the seconds before the
+first token are reported rather than left blank. Measured against the local model: 4.6 s to a
+complete answer, the first 3 of which are prefill and reasoning.
 
 ## 2. Keymaps and commands
 

@@ -888,6 +888,110 @@ do
   end
 end
 
+-- 9. A streamed answer arrives progressively ------------------------------------------------
+
+-- `meta.explain` asks for a stream, and the server reports the text *so far* under the token
+-- the plugin issued (PROTOCOL §3.5). What is asserted is what the user sees: the artifact
+-- buffer holds more than one distinct state while the request is still open, so the answer is
+-- being written rather than appearing at the end — and the buffer the partials filled is the
+-- buffer the finished artifact lands in, so nothing moves when it completes.
+do
+  if #vim.lsp.get_clients({ name = 'meta', bufnr = reject_bufnr }) == 0 then
+    skip('the streamed explanation', 'no meta client attached to the fixture')
+  else
+    local function stream_buffers()
+      local found = {}
+      for _, b in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.api.nvim_buf_is_valid(b)
+          and vim.api.nvim_buf_get_name(b):find('meta://', 1, true) ~= nil
+        then
+          found[#found + 1] = b
+        end
+      end
+      return found
+    end
+
+    for _, b in ipairs(stream_buffers()) do
+      vim.api.nvim_buf_delete(b, { force = true })
+    end
+
+    -- What this request creates, not what was already lying around: an earlier check stubs
+    -- `client.request` and never answers, and its buffers are none of this check's business.
+    local before_bufs = {}
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      before_bufs[b] = true
+    end
+    local function new_scratch_buffers()
+      local out = {}
+      for _, b in ipairs(vim.api.nvim_list_bufs()) do
+        if not before_bufs[b] and vim.api.nvim_buf_is_valid(b) and vim.bo[b].buftype == 'nofile' then
+          out[#out + 1] = b
+        end
+      end
+      return out
+    end
+
+    vim.api.nvim_set_current_buf(reject_bufnr)
+    local seen = {}
+    -- The *default* path: `M.explain()` with no callback, so the plugin renders the artifact
+    -- itself — a check that supplied its own callback would only be testing the callback.
+    require('meta').explain()
+
+    local deadline = vim.uv.now() + 30000
+    local finished, finished_name = false, nil
+    while vim.uv.now() < deadline do
+      for _, b in ipairs(new_scratch_buffers()) do
+        local text = table.concat(vim.api.nvim_buf_get_lines(b, 0, -1, false), '\n')
+        if text ~= '' then
+          seen[text] = true
+        end
+        local name = vim.api.nvim_buf_get_name(b)
+        if name:find('meta://explanation', 1, true) == 1 then
+          finished, finished_name = true, name
+        end
+      end
+      if finished then
+        break
+      end
+      vim.wait(20)
+    end
+
+    local count = 0
+    for _ in pairs(seen) do
+      count = count + 1
+    end
+    check(
+      count >= 2,
+      'the artifact buffer holds more than one state while the answer is written',
+      ('%d distinct state(s) seen'):format(count)
+    )
+    check(finished, 'the finished artifact lands in the buffer the stream filled')
+    check(
+      #new_scratch_buffers() == 1,
+      'one buffer, not two: the streamed buffer becomes the artifact buffer',
+      (function()
+        local names = {}
+        for _, b in ipairs(new_scratch_buffers()) do
+          names[#names + 1] = vim.api.nvim_buf_get_name(b)
+        end
+        return ('%d buffer(s): %s'):format(#names, table.concat(names, ' | '))
+      end)()
+    )
+    if finished_name ~= nil then
+      check(
+        finished_name:find('meta://explanation/', 1, true) == 1,
+        'and it is named for the artifact it now holds',
+        finished_name
+      )
+    end
+
+    for _, b in ipairs(stream_buffers()) do
+      vim.api.nvim_buf_delete(b, { force = true })
+    end
+    vim.cmd('silent! only')
+  end
+end
+
 -- Report ---------------------------------------------------------------------------------------
 
 for _, c in ipairs(vim.lsp.get_clients({ name = 'meta' })) do
