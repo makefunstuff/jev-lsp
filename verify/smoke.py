@@ -324,6 +324,10 @@ def main():
               "executeCommandProvider.workDoneProgress advertised")
         check(caps.get("codeLensProvider") is None and caps.get("inlayHintProvider") is None,
               "nothing unimplemented is advertised")
+        # Not just the top-level providers: a sub-capability we do not serve is just as much
+        # of a lie, and Neovim routes on this one.
+        check(caps.get("diagnosticProvider", {}).get("workspaceDiagnostics") is not True,
+              "workspaceDiagnostics is not advertised while only per-document pull is served")
         server.notify("initialized", {})
 
         print("[smoke] document sync + ambient analysis")

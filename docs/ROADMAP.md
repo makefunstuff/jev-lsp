@@ -6,8 +6,12 @@ staleness and latency — are exercised by unit 1, not discovered in unit 6.
 
 **Progress**: every unit built. U0–U8 done; U9 partly (cancellation, budgets and
 `:checkhealth` exist, the daemon does not). Two scoped gaps remain and are noted in their
-units: U2's treesitter scope is still structural-only with no dismissal file, and inline
-completion's ghost text is unverified in a headless harness (`docs/VERIFICATION.md` §9).
+units: U2's treesitter scope is still structural-only — grammars are a dependency decision,
+not an oversight, and `scope_source` reports the fallback honestly — and its dismissal file
+*is* implemented, in the plugin (`nvim/lua/meta/init.lua`: `:Meta dismiss` writes
+`<repo>/.git/meta/dismissed.json` and `filter_findings` drops dismissed ids from the pull).
+Inline completion's ghost text is unverified in a headless harness
+(`docs/VERIFICATION.md` §9).
 
 ## U0 — Scaffold ✅
 

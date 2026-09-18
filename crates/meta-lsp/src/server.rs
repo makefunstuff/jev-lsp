@@ -63,7 +63,13 @@ impl MetaServer {
             diagnostic_provider: Some(DiagnosticServerCapabilities::Options(DiagnosticOptions {
                 identifier: Some("meta".to_string()),
                 inter_file_dependencies: false,
-                workspace_diagnostics: true,
+                // Deliberately false, and it must stay false until `workspace/diagnostic` is
+                // implemented. Neovim's `on_refresh` checks this capability first and takes
+                // the *workspace* branch when it is set, so advertising it while serving only
+                // per-document diagnostics means every `workspace/diagnostic/refresh` is
+                // answered by a method that does not exist and the client never re-pulls:
+                // findings are cached by the server and never reach the sign column.
+                workspace_diagnostics: false,
                 work_done_progress_options: WorkDoneProgressOptions::default(),
             })),
             execute_command_provider: Some(ExecuteCommandOptions {

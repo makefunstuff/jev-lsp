@@ -46,11 +46,18 @@ Server capabilities returned from `initialize`:
       "source", "source.meta", "source.fixAll"
     ]
   },
-  "diagnosticProvider": { "identifier": "meta", "interFileDependencies": false, "workspaceDiagnostics": true },
+  "diagnosticProvider": { "identifier": "meta", "interFileDependencies": false, "workspaceDiagnostics": false },
   "inlineCompletionProvider": {},
   "executeCommandProvider": { "commands": [ /* §6 */ ], "workDoneProgress": true }
 }
 ```
+
+`workspaceDiagnostics` is `false` and must stay false until `workspace/diagnostic` is
+implemented here. Neovim's `on_refresh` checks that capability *first* and takes the
+**workspace** branch when it is set, so advertising it while serving only per-document pull
+means every `workspace/diagnostic/refresh` is answered by a method that does not exist: the
+server caches findings and nothing ever reaches the sign column. Measured, and fixed — see
+`docs/VERIFICATION.md` §8.
 
 `inlineCompletionProvider` is 3.18 draft and is **not expressible** by the `lsp-types` 0.94
 that tower-lsp 0.20 pins, so it is injected into the `initialize` response at the transport
@@ -460,6 +467,7 @@ Recorded so the refusals are not relitigated:
 | 2026-09-18 | **N10/N11 added**: support is unconditional and language is metadata. `language` and `scope_source` added to action `data` and to plan artifacts; `languages` config section added; filetype allowlists and grammar-gated verbs explicitly refused. Verified by `verify/probes/language.lua` — with `filetypes = nil` the client attaches 8 of 11 fixtures, leaving the unidentifiable ones to the plugin's attach pass. |
 | 2026-09-18 | **§2 rewritten around "advertise only what is served"**, with the advertised set reduced to the implemented providers. `explain` moved out of the code-action menu to the `meta.explain` command, because a resolved action's `command` is executed by the client by sending it back to the server, so it cannot open a buffer. `meta.recompute` added; `meta.plan`/`apply`/`revert` marked specified-but-unserved and unadvertised. Implementation: `crates/meta-lsp`. |
 | 2026-09-18 | **U5, U6 and U8 built**: `meta.plan`/`meta.apply`/`meta.revert` are served and advertised; a plan step is applied *by the server* through `workspace/applyEdit`, re-anchored against live content and refused as `stale` when the target moved. Multi-file edits (`resourceOperations: create`) verified end to end. Post-apply verification implemented: the server predicts what an applied edit will produce and publishes an `ERROR` diagnostic naming the divergence — the one legitimate use of `publishDiagnostics` (§9). The one-shot CLI (`crates/meta`) implements §11 with all five exit codes, and `verify/cli_parity.py` proves it produces identical findings and byte-identical edits to the LSP path. |
+| 2026-09-18 | **`workspaceDiagnostics` corrected from `true` to `false`.** It had been advertised since the first capability block while `workspace/diagnostic` was never implemented, and Neovim prefers the workspace branch on refresh when the flag is set — so the client stopped pulling per-document diagnostics entirely and findings never appeared. Fixed by not advertising what is not served, which is this document's own §2 rule. |
 | 2026-09-18 | **§6.1 added: the command error codes are named.** They were already contract in practice — the CLI maps them to exit codes and the plugin surfaces them verbatim — but only `not_implemented` and `unknown_edit` were written down, so a harness asserting the real codes could be broken by a rename the document never mentioned. |
 | 2026-09-18 | **Resolve timeout raised 30 s → 90 s, ceilings raised, repair widened.** Measured against a real reasoning model: an 8192-token answer took over 60 s on a Rust rewrite, so the old 30 s cap converted valid-but-slow answers into transport errors; and a rejected answer is often answered the same way again, so the repair budget went from one attempt to two. `MAX_REPAIR_ATTEMPTS` now covers *applicability* failures as well as JSON ones — an anchor that cannot be located, or a replacement that repeats lines it did not consume — which docs/MODEL.md §5 specified and the implementation had not. Over a nine-run soak on three languages: 8 applied, 0 left a file unparseable, against 2/6 and 8/12 before. |
 | 2026-09-18 | **U7 built.** Inline completion is served and advertised: `textDocument/inlineCompletion` is registered as a custom method (the pinned `lsp-types` has no handler for a 3.18-draft method) and `inlineCompletionProvider` is injected into the `initialize` response, because Neovim attaches its completor only for a client that advertises it. Gates: off by default, binary/size/ignore, a content-hash answer cache, a prefix floor that applies only to timed requests, and its own per-minute window so completions cannot starve explicit work. Also implemented `workspace/didChangeConfiguration`, without which the plugin's kill switch could never take effect. |

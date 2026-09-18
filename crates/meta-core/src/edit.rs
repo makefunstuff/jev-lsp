@@ -16,7 +16,12 @@ pub enum EditError {
     Overlap,
     BadPath { path: String },
     /// The answer covers more of the document than the anchor names.
-    ReemitsFollowing { lines: usize },
+    ReemitsFollowing {
+        lines: usize,
+        /// The first line of the enclosing block, so a retry can quote it instead of being
+        /// told in prose to "anchor on the larger block".
+        anchor_hint: String,
+    },
     Empty,
 }
 
@@ -38,11 +43,11 @@ impl std::fmt::Display for EditError {
                 "anchor kind {kind:?} is not one of function, method, class, struct, impl, mod, block, statement, file"
             ),
             EditError::Overlap => write!(f, "two replacements cover overlapping lines"),
-            EditError::ReemitsFollowing { lines } => write!(
+            EditError::ReemitsFollowing { lines, anchor_hint } => write!(
                 f,
                 "the replacement repeats {lines} line(s) that already follow the anchor, so the \
-                 answer covers more of the file than the anchor names. Emit a replacement for \
-                 exactly the anchored scope, or anchor on the larger block you mean to rewrite."
+                 answer covers more of the file than the anchor names. Anchor on the enclosing \
+                 block instead and rewrite that whole block, quoting {anchor_hint:?} as `match`."
             ),
             EditError::BadPath { path } => {
                 write!(f, "new file path {path:?} must be relative and must not contain `..`")
@@ -199,7 +204,17 @@ pub fn build_proposal(
 
         let (covered, duplicated) = extend_over_reemission(&lines, start_line, span, &replacement);
         if duplicated > 0 {
-            return Err(EditError::ReemitsFollowing { lines: duplicated });
+            let outer = scope::resolve(text, line, profile, None, opts.max_scope_lines);
+            let hint = lines
+                .get(outer.range.start_line as usize)
+                .copied()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            return Err(EditError::ReemitsFollowing {
+                lines: duplicated,
+                anchor_hint: hint,
+            });
         }
         let end_line = start_line + covered as u32 - 1;
 
@@ -431,8 +446,21 @@ mod tests {
         let src = r#"{"replacements":[{"anchor":{"kind":"statement","match":"b"},"replacement":"B\nx\nd"}]}"#;
         assert_eq!(
             build(src, doc).unwrap_err(),
-            EditError::ReemitsFollowing { lines: 1 }
+            EditError::ReemitsFollowing { lines: 1, anchor_hint: "a".to_string() }
         );
+    }
+
+    #[test]
+    fn the_rejection_tells_the_model_what_to_anchor_on_instead() {
+        // Prose advice ("anchor on the larger block") is not actionable for a model that has
+        // to emit a verbatim quote; the enclosing block's first line is.
+        // `d` appears both in the replacement's tail and further down the document, which is
+        // the shape that would duplicate a line if it were applied as written.
+        let doc = "a\nb\nc\nd\n";
+        let src = r#"{"replacements":[{"anchor":{"kind":"statement","match":"b"},"replacement":"B\nx\nd"}]}"#;
+        let rendered = build(src, doc).unwrap_err().to_string();
+        assert!(rendered.contains("quoting"), "{rendered}");
+        assert!(rendered.contains("\"a\""), "with a line to quote instead: {rendered}");
     }
 
     #[test]

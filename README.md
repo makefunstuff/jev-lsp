@@ -105,9 +105,9 @@ at a local llama.cpp OpenAI-compatible server, or set `api_key_env` for a remote
 
 | | |
 |---|---|
-| `cargo test` | 187 passing, warning-clean |
+| `cargo test` | 200 passing, warning-clean |
 | `cargo build --release` | no warnings |
-| `python3 verify/smoke.py` | 33/33 against the real binary |
+| `python3 verify/smoke.py` | 34/34 against the real binary |
 | `python3 verify/plan_test.py` | 35/35 — plan, apply, revert, staleness, divergence, multi-file |
 | `python3 verify/cli_parity.py` | 12/12 — the CLI and the LSP agree exactly |
 | `python3 verify/lsp_client.py --server …` | 27 ok, 0 FAIL (independent, spec-derived client) |
@@ -115,8 +115,9 @@ at a local llama.cpp OpenAI-compatible server, or set `api_key_env` for a remote
 | `nvim --headless -l verify/nvim_ui_test.lua` | 0 failures, 0 skips (picker, diff preview, statusline) |
 | `python3 verify/inline_test.py` | 14/14 — the capability, the handler, and every gate |
 | `nvim --headless -l verify/inline_live.lua` | 0 failures (ghost text itself needs an interactive session) |
+| `nvim --headless -l verify/dismiss_test.lua` | 9/9 — dismissal is recorded per repository and does not resurface |
 | `python3 verify/real_model.py` | 6/6 against **DeepSeek** — 1 finding, an edit, and a file that still parses, every run |
-| `python3 verify/soak.py` | **8/9** across Python, Rust and TypeScript against DeepSeek; 0 files left unparseable |
+| `python3 verify/soak.py` | **8/9** on DeepSeek, **6/6** on the local `llama.cpp` model; 0 files left unparseable either way |
 
 The last row is the one that matters: everything else uses a scripted endpoint. Real-model
 latency measured 2.2–3.1 s for the ambient pass and 1.1–5.1 s for `codeAction/resolve`, with

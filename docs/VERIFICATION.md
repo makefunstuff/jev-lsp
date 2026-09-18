@@ -14,6 +14,8 @@ not for the code they touch.
 | `verify/supersede_probe.py` | built | 7/7 — written independently by the verifier agent; control case plus a race case, and it asserts the race was actually set up |
 | `verify/plan_test.py` | built | 35/35 — the plan loop, server-side apply, revert, staleness, divergence, multi-file creation |
 | `verify/cli_parity.py` | built | 12/12 — the CLI and the LSP produce identical findings and byte-identical edits |
+| `verify/dismiss_test.lua` | built | 9/9 — a finding is dismissed, recorded per repository, and does not resurface |
+| `verify/harness_log.lua` | built | shared by the Lua harnesses: a red run prints the server's own log lines |
 | `verify/real_model.py` | built | real endpoint, reports rather than asserts; run against DeepSeek through the omp auth gateway |
 | `verify/soak.py` | built | several languages through the whole loop against a real endpoint; last result 8/9 applied, 0 unparseable |
 | `verify/stub_model.py` | built | scripted endpoint; no GPU, no network |
@@ -110,6 +112,7 @@ suite is the actual regression net; it is run in CI *and* as part of the design 
 | Support gated on a filetype allowlist | `verify/probes/language.lua` — with `filetypes = nil`, all 11 fixtures attach after the plugin pass |
 | An edit arriving while an analysis is in flight is dropped rather than queued | `verify/queue_test.py` — proven to fail with the old behaviour injected (0 refreshes, 0 findings) and pass when queued |
 | A superseded analysis emits no refresh | same test, first assertion |
+| A capability is advertised but not served (`workspaceDiagnostics`) | `verify/smoke.py` asserts the sub-capability, not only the top-level providers |
 | A client answering `workspace/configuration` with `{}` resets unrelated settings | `meta-core` `config::tests::an_empty_payload_changes_nothing` and `the_environment_wins_over_the_client_payload` |
 | A reasoning model exhausting its token budget returns nothing | `meta-core` `model::tests::a_reasoning_model_that_ran_out_of_budget_says_so` — the error must name `finish_reason=length` and the fix |
 | The model echoes the schema instead of filling it | `meta-core` `verbs::tests::the_schema_is_an_example_not_a_template_to_echo`; the schema is a concrete example plus an explicit "never use a field name as a value" rule |
@@ -171,7 +174,52 @@ This is what the fast path buys: the menu itself is still a cache read, and the 
 spent only after a pick. It also closed the last untested claim — every earlier result came
 from the scripted endpoint.
 
-## 8. What the real model found that the stub could not
+### Local model
+
+The same soak against the local `llama.cpp` server (`qwen3.6-35b-a3b-iq3xxs`,
+`127.0.0.1:37313`), two rounds over Python, Rust and TypeScript:
+
+| | cloud (`deepseek-flash`) | local (`qwen3.6-35b-a3b-iq3xxs`) |
+|---|---|---|
+| applied edits | 8/9 | **6/6** |
+| files left unparseable | 0 | 0 |
+| ambient pass | 1.5–7 s | 5.7–12.4 s |
+| `codeAction/resolve` | 1.5–31 s | 7.3–15.5 s |
+
+The local model was *more reliable* on this task and *slower*, and it produced none of the
+failures the cloud model did — no re-emission rejections, no exhausted ceilings. Its latency
+spread is also much tighter, which matters more than its median: a resolve that always takes
+twelve seconds is easier to design around than one that takes two or thirty.
+
+**`think: off` works here and does not on the gateway.** The tier default sends
+`chat_template_kwargs: { enable_thinking: false }`, which llama.cpp honours and the omp auth
+gateway ignores. A bare probe against the local server — same prompt, no template kwargs — took
+**47 s for 16 tokens and returned nothing but reasoning**; with the server's own request shape
+the same call answered in 0.9 s, then 0.3 s warm. That is the difference between a usable tier
+and an unusable one, and it is why the client-side control is not optional.
+
+## 8. The defect that passed every test
+
+`diagnosticProvider.workspaceDiagnostics` was advertised as `true` from the first capability
+block while `workspace/diagnostic` was never implemented. Neovim's `on_refresh` checks that
+capability **first** (`lsp/diagnostic.lua`) and takes the workspace branch when it is set, so
+every `workspace/diagnostic/refresh` was answered by a method that does not exist and the
+client never re-pulled per-document diagnostics. The server analysed, cached, and refreshed —
+and **nothing ever reached the sign column.**
+
+Every existing harness passed. The Python ones pull `textDocument/diagnostic` explicitly
+rather than relying on the refresh round trip, and the Neovim ones assert that a code action
+resolves, which reads the server's cache directly. The bug was found by writing a test for
+something else: dismissal needs a *displayed* diagnostic to dismiss.
+
+Two lessons, both now enforced:
+
+* **"Advertise only what is served" applies to sub-capabilities.** `verify/smoke.py` checks
+  the providers *and* `diagnosticProvider.workspaceDiagnostics`.
+* **A pull-based design has to be tested through the client's pull path.** Pulling by hand
+  from a harness proves the server answers; it does not prove the client ever asks.
+
+## 9. What the real model found that the stub could not
 
 Recorded because each was invisible to a scripted model, and each is now pinned by a test:
 
@@ -186,7 +234,7 @@ Recorded because each was invisible to a scripted model, and each is now pinned 
    that duplicated the body; truncated, it left an empty block. The replaced range now
    *absorbs* the lines the answer re-emits, bounded by the document.
 
-## 9. Known unverified
+## 10. Known unverified
 
 - **Undo granularity** of a client-applied `WorkspaceEdit` `[R10]`. Headless script
   execution cannot record undo blocks, so the probe was inconclusive. What *is* verified is
@@ -203,7 +251,7 @@ Recorded because each was invisible to a scripted model, and each is now pinned 
 - **Real-model latency.** The `codeAction` budget is asserted against the stub. What a
   7B–35B model costs on this machine in `codeAction/resolve` is unmeasured.
 
-## 10. Known limitations
+## 11. Known limitations
 
 Recorded because they are deliberate boundaries, not oversights:
 
