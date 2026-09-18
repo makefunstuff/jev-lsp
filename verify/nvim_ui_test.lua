@@ -1484,6 +1484,96 @@ do
   end
 end
 
+-- 15. A plan, as steps you approve ----------------------------------------------------------
+
+-- The one genuinely multi-step thing here. Each step is a line, `<CR>` applies that line's
+-- step, and the line says what happened — so approving a plan is reading it and pressing
+-- return, rather than holding `meta.apply {plan_id, steps:[2]}` in your head.
+do
+  local plan_bufnr, opened = nil, false
+  -- The concurrency guard covers model calls and this file has spent the last few seconds
+  -- filling it, so the request is retried rather than assumed to land first time.
+  for _ = 1, 10 do
+    require('meta').plan('add a docstring to the loader')
+    opened = vim.wait(4000, function()
+      for _, b in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.api.nvim_buf_is_valid(b)
+          and vim.api.nvim_buf_get_name(b):find('meta://plan/', 1, true)
+        then
+          plan_bufnr = b
+          return true
+        end
+      end
+      return false
+    end, 50)
+    if opened then
+      break
+    end
+  end
+  check(opened, 'a plan opens as a buffer')
+
+  if not opened or plan_bufnr == nil then
+    skip('stepping a plan', 'no plan buffer')
+  else
+    local lines = vim.api.nvim_buf_get_lines(plan_bufnr, 0, -1, false)
+    check(
+      lines[1]:find('Plan:', 1, true) ~= nil,
+      'the buffer is titled with the goal',
+      tostring(lines[1])
+    )
+    local step_line, step_text = nil, nil
+    for i, l in ipairs(lines) do
+      if l:match('^%d+%. %[') then
+        step_line, step_text = i, l
+        break
+      end
+    end
+    check(step_line ~= nil, 'each step is one line with its verb', step_text or 'no step lines')
+
+    if step_line == nil then
+      skip('applying a step', 'the plan has no steps')
+    else
+      local before = lines[step_line]
+
+      -- The mapping's own callback, looked up the way `:map` would find it. `feedkeys` in a
+      -- headless session does not reliably run buffer-local mappings, and a test that types a
+      -- bare return would be testing the cursor.
+      local mapped = vim.fn.maparg('<CR>', 'n', false, true)
+      check(
+        type(mapped) == 'table' and type(mapped.callback) == 'function',
+        'the plan buffer maps return to something',
+        vim.inspect(mapped and mapped.desc)
+      )
+      vim.api.nvim_set_current_buf(plan_bufnr)
+      vim.api.nvim_win_set_cursor(0, { step_line, 0 })
+      if type(mapped) == 'table' and type(mapped.callback) == 'function' then
+        mapped.callback()
+      end
+      local marked = vim.wait(15000, function()
+        local now = vim.api.nvim_buf_get_lines(plan_bufnr, step_line - 1, step_line, false)[1] or ''
+        return now:find('applied', 1, true) ~= nil or now:find('reverted', 1, true) ~= nil
+      end, 100)
+      local after = vim.api.nvim_buf_get_lines(plan_bufnr, step_line - 1, step_line, false)[1] or ''
+      check(
+        marked,
+        'return applies that step and the line says so',
+        ('before=%s | after=%s'):format(before, after)
+      )
+      check(
+        after:find('^%d+%. %[') ~= nil,
+        'and the step keeps its identity while it changes state',
+        after
+      )
+    end
+  end
+
+  for _, b in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find('meta://', 1, true) then
+      vim.api.nvim_buf_delete(b, { force = true })
+    end
+  end
+end
+
 -- Report ---------------------------------------------------------------------------------------
 
 -- Lens state first, and a settle before the stop. Neovim's lens provider schedules a

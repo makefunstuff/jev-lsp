@@ -12,7 +12,7 @@ inline annotation, or a key you already press.
 | Inline annotation | `textDocument/codeLens` | per-symbol affordances: "explain", "test", "+2 findings" | never |
 | Ghost text | `textDocument/inlineCompletion` | FIM completion | never |
 | Inline hint | `textDocument/inlayHint` | a `meta: N finding(s)` badge on a declaration that has findings, and nothing elsewhere | never |
-| Plan buffer | plugin + `window/showDocument` | multi-step work, review, approval | once, on completion |
+| Plan buffer | plugin + `window/showDocument` | multi-step work: a line per step, `<CR>` applies one, `a` the rest, `u` takes one back | once, on completion |
 | Statusline segment | `$/progress` via `LspProgress` | what is running, budget remaining | never |
 | Streamed answer | `$/progress` partial results (§3.5.1) | the answer written into its buffer as it arrives, and `waiting for the model (3s)` before the first token | never |
 | Pick list | `window/showMessageRequest` | a decision the server must have | once |
@@ -21,9 +21,11 @@ inline annotation, or a key you already press.
 Free text appears exactly once, in `:Meta plan`, because the protocol cannot ask for text
 and because a goal is the only thing a picker cannot express.
 
-One row above describes a surface that is designed and **not built**: the plan buffer. It is in
-the table because it is the plan, and it is called out here so the table is not read as a
-description of what exists.
+Every row above is built. The plan buffer came last: `:Meta plan <goal>` renders the plan the
+server verified as one line per step, `<CR>` applies the step on the cursor's line, `a` applies
+the rest, `u` takes the last one on that line back, and each line says what happened to it.
+Nothing is applied until asked (N8), which is why it is a buffer with keystrokes rather than a
+progress bar.
 
 The inline hint is built too (`textDocument/inlayHint`, §1 row 5): a `meta: N finding(s)`
 badge on a declaration that has findings, and silence everywhere else. It stays **off** by

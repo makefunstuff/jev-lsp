@@ -345,6 +345,146 @@ function M.explain(cb)
   end, { stream = true })
 end
 
+--- A plan, as steps you approve.
+---
+--- The server has produced and applied plans since U5; what was missing was a surface. A plan is
+--- the one thing here that is genuinely multi-step, and a multi-step thing rendered as a wall of
+--- Markdown asks the user to hold `meta.apply {plan_id, steps:[2]}` in their head. So each step
+--- is a line, the line says where it will work, `<CR>` applies that one step, `a` applies the
+--- rest, and `u` takes back the last one applied on that line. Nothing is applied until asked —
+--- N8 — which is why this is a buffer with keystrokes rather than a progress bar.
+local plans = {} -- bufnr -> { id, lines, applied }
+
+local function plan_text(plan)
+  local lines = {
+    ('# Plan: %s'):format(type(plan.goal) == 'string' and plan.goal or ''),
+    '',
+    ('_%d step(s) · %s_'):format(#(plan.steps or {}), type(plan.language) == 'string' and plan.language or ''),
+    '',
+  }
+  local at = {}
+  for _, step in ipairs(plan.steps or {}) do
+    local target = step.targets and step.targets[1]
+    local where = ''
+    if type(target) == 'table' and type(target.uri) == 'string' then
+      local line = target.range and target.range.start and target.range.start.line or 0
+      where = (' · %s:%d'):format(
+        vim.fn.fnamemodify(vim.uri_to_fname(target.uri), ':t'), line + 1
+      )
+    end
+    lines[#lines + 1] = ('%d. [%s] %s%s'):format(
+      step.n, step.verb or '?', step.title or '', where
+    )
+    -- Keyed to the step's own line, before the rationale adds another: the rationale is part
+    -- of the step, not the place the step starts.
+    at[#lines] = step.n
+    if type(step.rationale) == 'string' and step.rationale ~= '' then
+      lines[#lines + 1] = ('      %s'):format(step.rationale)
+    end
+  end
+  return lines, at
+end
+
+--- Write what happened to a step onto its own line.
+local function plan_mark(bufnr, n, what)
+  local plan = plans[bufnr]
+  if plan == nil or not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+  for line, step_n in pairs(plan.at) do
+    if step_n == n then
+      local current = vim.api.nvim_buf_get_lines(bufnr, line - 1, line, false)[1] or ''
+      current = current:gsub('%s+·%s+(applied|reverted)$', '')
+      vim.bo[bufnr].modifiable = true
+      vim.api.nvim_buf_set_lines(bufnr, line - 1, line, false, { current .. ' · ' .. what })
+      vim.bo[bufnr].modifiable = false
+    end
+  end
+end
+
+local function plan_apply(bufnr, steps)
+  local plan = plans[bufnr]
+  if plan == nil or #steps == 0 then
+    return
+  end
+  M.command('meta.apply', { { plan_id = plan.id, steps = steps } }, function(err, result)
+    if err or (type(result) == 'table' and result.ok == false) then
+      M.report('meta.apply', err, result)
+      return
+    end
+    local applied = (type(result) == 'table' and result.applied) or {}
+    for _, a in ipairs(applied) do
+      plan.applied[a.n] = a.edit_id
+      plan_mark(bufnr, a.n, 'applied')
+    end
+    local summary = applied[1] and applied[1].summary
+    vim.notify(
+      ('meta: %d step(s) applied%s'):format(#applied,
+        type(summary) == 'string' and (' — ' .. summary) or ''),
+      vim.log.levels.INFO
+    )
+  end)
+end
+
+--- `:Meta plan [goal]` — the goal is the only free text this interface asks for.
+function M.open_plan(plan)
+  if type(plan) ~= 'table' or type(plan.steps) ~= 'table' or #plan.steps == 0 then
+    M.report('meta.plan', nil, plan)
+    return
+  end
+  local lines, at = plan_text(plan)
+  local bufnr = M.open_artifact({
+    kind = 'plan',
+    id = type(plan.id) == 'string' and plan.id or 'plan',
+    markdown = table.concat(lines, '\n'),
+  })
+  if bufnr == nil then
+    return
+  end
+  plans[bufnr] = { id = plan.id, at = at, applied = {} }
+
+  --- The step on the cursor's line, if there is one.
+  local function step_here()
+    local plan_for_buffer = plans[bufnr]
+    return plan_for_buffer and plan_for_buffer.at[vim.api.nvim_win_get_cursor(0)[1]] or nil
+  end
+
+  vim.keymap.set('n', '<CR>', function()
+    local n = step_here()
+    if n ~= nil then
+      plan_apply(bufnr, { n })
+    end
+  end, { buffer = bufnr, desc = 'meta: apply this step' })
+
+  vim.keymap.set('n', 'a', function()
+    local remaining = {}
+    for _, step in ipairs(plan.steps) do
+      if plans[bufnr].applied[step.n] == nil then
+        remaining[#remaining + 1] = step.n
+      end
+    end
+    plan_apply(bufnr, remaining)
+  end, { buffer = bufnr, desc = 'meta: apply every step' })
+
+  vim.keymap.set('n', 'u', function()
+    local n = step_here()
+    local edit_id = n ~= nil and plans[bufnr].applied[n] or nil
+    if edit_id == nil then
+      return
+    end
+    M.command('meta.revert', { { edit_id = edit_id } }, function(err, result)
+      if err or (type(result) == 'table' and result.ok == false) then
+        M.report('meta.revert', err, result)
+        return
+      end
+      plans[bufnr].applied[n] = nil
+      plan_mark(bufnr, n, 'reverted')
+    end)
+  end, { buffer = bufnr, desc = 'meta: take back this step' })
+
+  vim.keymap.set('n', 'q', '<Cmd>close<CR>', { buffer = bufnr, desc = 'meta: close the plan' })
+end
+
 --- `:Meta session` — what this server has done here.
 ---
 --- The record is an append-only log under the repository root's `.git/meta/`, beside the
@@ -508,15 +648,24 @@ end
 --- step-through plan buffer yet, so it arrives as a reported Result.
 --- @param goal? string
 function M.plan(goal)
+  local function ask(text)
+    -- `arguments` is an LSP array, not a map: the server reads `arguments.first()`, and a map
+    -- is rejected in transport before the command runs.
+    M.command('meta.plan', { { goal = text, scope = cursor_scope() } }, function(err, result)
+      if err or (type(result) == 'table' and result.ok == false) then
+        M.report('meta.plan', err, result)
+        return
+      end
+      M.open_plan(result)
+    end)
+  end
   if goal ~= nil and vim.trim(goal) ~= '' then
-    -- `arguments` is an LSP array, not a map: the server reads `arguments.first()`, and a
-    -- map is rejected in transport before the command runs.
-    M.command('meta.plan', { { goal = vim.trim(goal), scope = cursor_scope() } })
+    ask(vim.trim(goal))
     return
   end
   vim.ui.input({ prompt = 'meta goal: ' }, function(input)
     if input ~= nil and vim.trim(input) ~= '' then
-      M.command('meta.plan', { { goal = vim.trim(input), scope = cursor_scope() } })
+      ask(vim.trim(input))
     end
   end)
 end

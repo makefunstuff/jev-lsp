@@ -164,10 +164,9 @@ buffer whatever mode it is in — two accidental edits to a real file before tha
 
 Stated so nothing here promises a surface that does not exist:
 
-- **Plans have no step-through buffer.** `:Meta plan` asks for a goal and the server returns a
-  verified plan artifact (targets, per-step verbs, cost), but nothing renders it or applies a
-  step: `meta.apply` / `meta.revert` are served and tested, and reachable from the CLI and a
-  harness, not from a keymap yet.
+- **Nothing else from `docs/UX.md` §1 is missing.** Plans have their step-through buffer
+  (`:Meta plan <goal>` or `<leader>Mp`): one line per step, `<CR>` applies that step, `a` the
+  rest, `u` takes one back, and the line says what happened to it.
 - **Code lens and inlay hints** are designed and not advertised.
 - **Scope resolution is structural**, not treesitter-backed: brace and indentation blocks with
   a whole-file fallback. It reports which it used.

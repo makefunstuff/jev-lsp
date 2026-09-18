@@ -4,11 +4,10 @@ Each unit is independently verifiable and ends with its own acceptance check. No
 starts before the previous one passes. Order is chosen so the two hard problems —
 staleness and latency — are exercised by unit 1, not discovered in unit 6.
 
-**Progress**: every unit built *except* one half of U5 and two parts of U9. U0–U8 done,
-with U5's *plugin* half missing: the server produces and applies plans (verified end to end by
-`verify/plan_test.py`), but there is no step-through plan buffer or apply keymap.
-U9 partly: cancellation is cooperative only, backpressure is the per-document queue, and the
-daemon is not built. Two scoped gaps remain and are noted in their
+**Progress**: every unit built, with two parts of U9 open. U0–U8 done, including U5's plugin
+half — the plan buffer renders the verified plan as steps, applies one at a time and takes them
+back (`nvim/lua/meta/init.lua`, `M.open_plan`). U9 partly: cancellation is cooperative only,
+backpressure is the per-document queue, and the daemon is not built. Two scoped gaps remain and are noted in their
 units: U2's treesitter scope is still structural-only — grammars are a dependency decision,
 not an oversight, and `scope_source` reports the fallback honestly — and its dismissal file
 *is* implemented, in the plugin (`nvim/lua/meta/init.lua`: `:Meta dismiss` writes
