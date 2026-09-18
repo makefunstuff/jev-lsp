@@ -659,6 +659,74 @@ function M.install_progress_tracker()
   })
 end
 
+--- Code lenses: one affordance per declaration, written on the declaration.
+---
+--- This is the surface that does not have to be remembered. A clean declaration offers
+--- `meta: explain`; one with findings offers `meta: N finding(s) · fix`. The commands are the
+--- plugin's own namespace, because opening a buffer is a client decision — the server cannot
+--- open one, and `window/showDocument` needs a URI an explanation does not have.
+---
+--- `vim.lsp.codelens.run()` re-requests the lenses and then sends the command to the
+--- *server*, so it is wrapped: ours are handled here, everything else passes through
+--- untouched.
+local lenses_wrapped = false
+local lens_teardown_installed = false
+
+function M.install_lenses()
+  vim.api.nvim_create_autocmd('LspAttach', {
+    callback = function(ev)
+      local client = vim.lsp.get_client_by_id(ev.data.client_id)
+      if client and client.name == M.name and client:supports_method('textDocument/codeLens') then
+        vim.lsp.codelens.enable(true, { bufnr = ev.buf, client_id = ev.data.client_id })
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd('LspDetach', {
+    callback = function(ev)
+      local client = vim.lsp.get_client_by_id(ev.data.client_id)
+      if client and client.name == M.name then
+        pcall(vim.lsp.codelens.enable, false, { bufnr = ev.buf, client_id = ev.data.client_id })
+      end
+    end,
+  })
+  -- Stop asking for lenses for a client that has gone. Neovim's lens provider keeps the
+  -- client id per buffer and asserts that it still exists when a debounced request fires
+  -- (`runtime/lua/vim/lsp/codelens.lua:143`); `enable(false)` does not purge that state, so a
+  -- stop within the 200 ms debounce window can still trip the assertion inside the editor.
+  -- That is Neovim's, and out of reach here — what this can do is make sure no *new* request
+  -- is scheduled for a client that is no longer there.
+  vim.api.nvim_create_autocmd('LspDetach', {
+    callback = function(ev)
+      local client = vim.lsp.get_client_by_id(ev.data.client_id)
+      if client and client.name == M.name then
+        pcall(vim.lsp.codelens.enable, false, { bufnr = ev.buf, client_id = ev.data.client_id })
+      end
+    end,
+  })
+  if lenses_wrapped then
+    return
+  end
+  lenses_wrapped = true
+  local stock = vim.lsp.codelens.run
+  vim.lsp.codelens.run = function(opts)
+    local bufnr = vim.api.nvim_get_current_buf()
+    local row = vim.api.nvim_win_get_cursor(0)[1]
+    for _, entry in ipairs(vim.lsp.codelens.get({ bufnr = bufnr })) do
+      local lens = entry.lens
+      local command = (lens.command and lens.command.command) or ''
+      if command:sub(1, 12) == 'meta.plugin.' and lens.range.start.line + 1 == row then
+        if command == 'meta.plugin.pick' then
+          picker.action()
+        else
+          M.explain()
+        end
+        return
+      end
+    end
+    return stock(opts)
+  end
+end
+
 --- The default keymaps, `docs/UX.md` §2. `<leader>ms` and `<leader>mS` are different keys:
 --- `s` is status, `S` is the kill switch, which must be reachable in one mapping without
 --- opening anything. `<leader>mG` starts again.
@@ -700,6 +768,9 @@ function M.keymaps(prefix)
     end },
     { 'd', { 'n' }, 'dismiss finding at cursor', function()
       M.dismiss()
+    end },
+    { 'l', { 'n' }, 'run the lens on this line', function()
+      vim.lsp.codelens.run()
     end },
     { 's', { 'n' }, 'status: queue, budgets, cache hit rate', function()
       M.status()
@@ -826,6 +897,7 @@ function M.setup(opts)
   vim.lsp.enable(M.name)
   attach.start()
 
+  M.install_lenses()
   M.install_progress_tracker()
   M.install_snapshot_hook()
   -- The picker's own surfaces: the attempt at the `window/showMessage` dedupe (PROTOCOL §4 —

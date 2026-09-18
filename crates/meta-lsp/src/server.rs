@@ -72,6 +72,12 @@ impl MetaServer {
                 workspace_diagnostics: false,
                 work_done_progress_options: WorkDoneProgressOptions::default(),
             })),
+            // Fully-formed lenses, no `resolve`: the title carries the finding count and the
+            // command carries its own arguments, so a lens costs one request per document and
+            // none per lens. `workspace/codeLens/refresh` after an analysis updates the titles.
+            code_lens_provider: Some(CodeLensOptions {
+                resolve_provider: Some(false),
+            }),
             execute_command_provider: Some(ExecuteCommandOptions {
                 commands: COMMANDS.iter().map(|c| c.to_string()).collect(),
                 work_done_progress_options: WorkDoneProgressOptions {
@@ -130,6 +136,15 @@ impl MetaServer {
                 // Always signal, even when superseded or failed: the client re-pulls and
                 // sees whatever the cache currently holds for the document.
                 if state.doc(&uri).is_some() {
+                    // The lenses carry a finding count, so a new analysis changes them.
+                    if client.code_lens_refresh().await.is_err() {
+                        client
+                            .log_message(
+                                MessageType::LOG,
+                                "meta: client does not serve workspace/codeLens/refresh",
+                            )
+                            .await;
+                    }
                     if client.workspace_diagnostic_refresh().await.is_err() {
                         client
                             .log_message(
@@ -852,6 +867,77 @@ impl LanguageServer for MetaServer {
                 },
             }),
         ))
+    }
+
+    /// One lens per declaration at the left margin (docs/UX.md §1, "inline annotation").
+    ///
+    /// The lens is the affordance that does not have to be remembered: the work available on a
+    /// declaration is visible on it. Nothing here may be slow — the client asks for every
+    /// visible document — so it reads the cache and never calls a model. A scope with findings
+    /// offers the fix; a clean one offers the explanation.
+    async fn code_lens(&self, params: CodeLensParams) -> RpcResult<Option<Vec<CodeLens>>> {
+        let uri = params.text_document.uri.to_string();
+        let Some(doc) = self.state.doc(&uri) else {
+            return Ok(None);
+        };
+        let cfg = self.state.config();
+        if !cfg.enabled {
+            return Ok(None);
+        }
+        // The same gates the analysis applies: offering an affordance that the server would
+        // then refuse is worse than offering nothing.
+        if meta_core::gates::evaluate(
+            &doc.text,
+            &doc.path,
+            cfg.languages.max_file_bytes,
+            cfg.languages.max_scope_lines,
+            &cfg.languages.ignore,
+        )
+        .is_some()
+        {
+            return Ok(None);
+        }
+
+        let profile = meta_core::lang::profile(&doc.language.name);
+        let (findings, _) = self.findings_for(&doc);
+        let lenses = meta_core::scope::blocks(&doc.text, &profile, cfg.languages.max_scope_lines)
+            .into_iter()
+            .map(|block| {
+                let line = block.range.start_line;
+                let in_scope = findings
+                    .iter()
+                    .filter(|f| f.line >= block.range.start_line && f.line <= block.range.end_line)
+                    .count();
+                let (title, command) = if in_scope > 0 {
+                    (
+                        format!(
+                            "meta: {} finding{} · fix",
+                            in_scope,
+                            if in_scope == 1 { "" } else { "s" }
+                        ),
+                        "meta.plugin.pick",
+                    )
+                } else {
+                    ("meta: explain".to_string(), "meta.plugin.explain")
+                };
+                CodeLens {
+                    range: Range {
+                        start: Position { line, character: 0 },
+                        end: Position { line, character: 0 },
+                    },
+                    command: Some(Command {
+                        title,
+                        // The plugin owns these, because opening a buffer is a client
+                        // decision (PROTOCOL §6, §7): `window/showDocument` is for artifacts
+                        // the server has a URI for, and an explanation has none.
+                        command: command.to_string(),
+                        arguments: Some(vec![json!({ "uri": uri, "line": line })]),
+                    }),
+                    data: None,
+                }
+            })
+            .collect::<Vec<_>>();
+        Ok(Some(lenses))
     }
 
     async fn execute_command(

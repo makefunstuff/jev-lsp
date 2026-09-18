@@ -143,7 +143,12 @@ do
 end
 
 local meta = require('meta')
-meta.setup({ cmd = { BIN } })
+-- A generous budget: this file makes many model calls in a minute and is not the place that
+-- tests the ceiling (verify/queue_test.py and the budget unit tests are).
+meta.setup({
+  cmd = { BIN },
+  settings = { budget = { max_calls_per_min = 120, max_calls_per_hour = 600 } },
+})
 vim.cmd('filetype on')
 
 -- The surface this unit touched: `<leader>ma` changes implementation and `<leader>mv` is new.
@@ -992,8 +997,85 @@ do
   end
 end
 
+-- 10. Code lenses ---------------------------------------------------------------------------
+
+-- One affordance per declaration, written where the work is — the surface that does not have
+-- to be remembered. `blocks()` offers only what the server would accept, and running a lens
+-- goes through the plugin, because opening a buffer is a client decision.
+do
+  local lens_bufnr, lens_attached = open_fixture('lenses.py', {
+    'import json',
+    '',
+    '',
+    'def alpha(path):',
+    '    f = open(path)',
+    '    return json.load(f)',
+    '',
+    '',
+    'def beta(x):',
+    '    return x + 1',
+  })
+  check(lens_attached, 'the plugin attached a client to the lens fixture')
+
+  local arrived = vim.wait(20000, function()
+    return #vim.lsp.codelens.get({ bufnr = lens_bufnr }) > 0
+  end, 50)
+  local titles, explain_line = {}, nil
+  for _, entry in ipairs(vim.lsp.codelens.get({ bufnr = lens_bufnr })) do
+    local command = entry.lens.command or {}
+    titles[#titles + 1] = command.title or '?'
+    if command.command == 'meta.plugin.explain' then
+      explain_line = entry.lens.range.start.line
+    end
+  end
+  check(
+    arrived and #titles == 2,
+    'one lens per declaration at the left margin, and none for the import',
+    table.concat(titles, ' | ')
+  )
+
+  -- What is displayed is verified live, in a real terminal: Neovim draws lenses through a
+  -- decoration provider, which a headless session does not run. Here the question is whether
+  -- the client asked and kept the answer, which is what the drawing needs.
+  check(
+    #vim.lsp.codelens.get({ bufnr = lens_bufnr }) == 2,
+    'the client keeps one stored lens per declaration',
+    tostring(#vim.lsp.codelens.get({ bufnr = lens_bufnr }))
+  )
+
+  if explain_line == nil then
+    skip('running a lens', 'no explain lens arrived')
+  else
+    vim.api.nvim_set_current_buf(lens_bufnr)
+    vim.api.nvim_win_set_cursor(0, { explain_line + 1, 0 })
+    vim.lsp.codelens.run()
+    local opened = vim.wait(30000, function()
+      for _, b in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.api.nvim_buf_is_valid(b)
+          and vim.api.nvim_buf_get_name(b):find('meta://explanation', 1, true)
+        then
+          return true
+        end
+      end
+      return false
+    end, 50)
+    check(opened, 'running a lens opens what it promised')
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find('meta://', 1, true) then
+        vim.api.nvim_buf_delete(b, { force = true })
+      end
+    end
+  end
+end
+
 -- Report ---------------------------------------------------------------------------------------
 
+-- Lens state first, and a settle before the stop. Neovim's lens provider schedules a
+-- request on a 200 ms debounce and asserts that the client still exists when it fires
+-- (`lsp/codelens.lua:143`); `enable(false)` does not purge the stored client id, so the
+-- pending request has to be allowed to run while the client is still there.
+pcall(vim.lsp.codelens.enable, false)
+vim.wait(400)
 for _, c in ipairs(vim.lsp.get_clients({ name = 'meta' })) do
   c:stop(true)
 end

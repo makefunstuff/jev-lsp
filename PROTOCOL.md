@@ -129,6 +129,28 @@ Only from the verified set `[R1]`:
 | `client/registerCapability` | `workspace/didChangeWatchedFiles` watchers. |
 | `textDocument/publishDiagnostics` | Only for findings the plugin has explicitly requested as push (edits made *by* the server). |
 
+### 3.4.1 `codeLens` — and who runs its command
+
+Lenses are returned fully formed: one per declaration at the left margin, `resolveProvider` is
+false, so a document costs one request and no lens costs a request of its own. The title is
+deterministic and never model output — `meta: explain` for a clean declaration, `meta: N
+finding(s) · fix` for one with cached findings, where "cached" is the same cache the sign
+column reads.
+
+The `command.command` of every lens is in the reserved namespace **`meta.plugin.`**, which the
+plugin handles in-process and never sends to the server:
+
+| Command | What the client does |
+|---|---|
+| `meta.plugin.explain` | the plugin's own explain flow, at the cursor the lens was run from |
+| `meta.plugin.pick` | the plugin's action picker, same flow as `<leader>ma` |
+
+The reason is §7: **the server never learns a buffer exists.** An explanation has no URI, so
+`window/showDocument` cannot open it, and a lens that is rendered but cannot do anything is
+worse than no lens. `vim.lsp.codelens.run()` re-requests and then sends the command to the
+server, so the plugin wraps `run` and dispatches its own namespace locally; every other
+command passes through untouched `[R14]`.
+
 ### 3.5 Progress tokens — the two legal sources
 
 The server MUST NOT send `$/progress` for a token it did not receive or create `[R12]`.

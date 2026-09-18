@@ -21,10 +21,15 @@ inline annotation, or a key you already press.
 Free text appears exactly once, in `:Meta plan`, because the protocol cannot ask for text
 and because a goal is the only thing a picker cannot express.
 
-Three rows above describe surfaces that are designed and **not built**: the plan buffer, the
-inline annotation (`codeLens`), and the inline hint (`inlayHint`). They are in the table
-because they are the plan, and they are called out here so the table is not read as a
-description of what exists.
+Two rows above describe surfaces that are designed and **not built**: the plan buffer and the
+inline hint (`inlayHint`). They are in the table because they are the plan, and they are
+called out here so the table is not read as a description of what exists.
+
+The inline annotation is built (`textDocument/codeLens`, §1 row 3): a clean declaration shows
+`meta: explain`, one with cached findings shows `meta: N finding(s) · fix`, and running it is
+`<leader>ml` at the cursor or `:lua vim.lsp.codelens.run()`. The command never reaches the
+server — the plugin handles its own `meta.plugin.` namespace, because opening a buffer is the
+client's decision (PROTOCOL §3.4.1).
 
 A streamed answer is the one place the interface shows work *while* the model runs: the
 scope's explanation appears in its buffer a few words at a time, and the seconds before the
@@ -38,6 +43,7 @@ complete answer, the first 3 of which are prefill and reasoning.
 <leader>ma   code action (native menu, always available)
 <leader>mp   plan for a goal              -- :Meta plan
 <leader>me   explain scope                -- :Meta explain
+<leader>ml   run the lens on this line     -- vim.lsp.codelens.run()
 <leader>mr   review this file
 <leader>mt   add tests for scope
 <leader>md   dismiss finding at cursor

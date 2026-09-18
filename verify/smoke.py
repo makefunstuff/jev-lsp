@@ -327,8 +327,10 @@ def main():
               "diagnosticProvider.identifier == meta")
         check(caps.get("executeCommandProvider", {}).get("workDoneProgress") is True,
               "executeCommandProvider.workDoneProgress advertised")
-        check(caps.get("codeLensProvider") is None and caps.get("inlayHintProvider") is None,
-              "nothing unimplemented is advertised")
+        check(caps.get("inlayHintProvider") is None,
+              "a capability that is not served is not advertised (inlayHintProvider)")
+        check(caps.get("codeLensProvider", {}).get("resolveProvider") is False,
+              "codeLensProvider advertised, fully formed, so no per-lens resolve round trip")
         # Not just the top-level providers: a sub-capability we do not serve is just as much
         # of a lie, and Neovim routes on this one.
         check(caps.get("diagnosticProvider", {}).get("workspaceDiagnostics") is not True,

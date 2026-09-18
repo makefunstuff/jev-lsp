@@ -221,6 +221,54 @@ fn clamp_lines(text: &str) -> Vec<&str> {
     }
 }
 
+/// Every declaration at the left margin, in document order, with the extent the same rules
+/// give a cursor placed inside it.
+///
+/// `resolve` answers "what is under this cursor". An editor affordance needs the converse: a
+/// list to hang one annotation per declaration on, which is what a code lens is. Two
+/// deliberate narrowings:
+///
+///  * only declarations starting at the left margin are returned — a nested one belongs to
+///    its parent, and a lens per nested function is noise, not information;
+///  * a declaration whose extent cannot be established is skipped rather than guessed, and
+///    one longer than `max_lines` is skipped because every caller anchors work the server
+///    would refuse anyway. An affordance that cannot do anything is a lie.
+pub fn blocks(text: &str, profile: &Profile, max_lines: u32) -> Vec<Resolved> {
+    let lines = clamp_lines(text);
+    let max = max_lines as usize;
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < lines.len() {
+        if indent_width(lines[i]) == 0 {
+            let stripped = strip_code(lines[i], profile);
+            if let Some((kind, name)) = parse_decl(&stripped, profile) {
+                let end = if profile.braces {
+                    find_brace_end(&lines, i, profile).unwrap_or_else(|| find_indent_end(&lines, i))
+                } else {
+                    find_indent_end(&lines, i)
+                };
+                let end = end.max(i);
+                if end - i + 1 <= max {
+                    out.push(Resolved {
+                        range: LineRange {
+                            start_line: i as u32,
+                            end_line: end as u32,
+                        },
+                        kind,
+                        source: ScopeSource::Structural,
+                        name,
+                        truncated: false,
+                    });
+                }
+                i = end + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
 /// Resolve the scope around a cursor line.
 pub fn resolve(
     text: &str,
@@ -366,6 +414,57 @@ pub fn line_len(text: &str, line: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::lang;
+
+    const PY: &str = "import json\n\n\ndef alpha(x):\n    def inner(y):\n        return y\n    return inner(x)\n\n\ndef beta(x):\n    return x\n";
+
+    #[test]
+    fn blocks_enumerate_top_level_declarations_in_order() {
+        let p = lang::profile("python");
+        let found = blocks(PY, &p, 200);
+        let names: Vec<_> = found.iter().map(|b| b.name.clone().unwrap_or_default()).collect();
+        assert_eq!(names, vec!["alpha", "beta"], "nested declarations belong to their parent");
+        assert_eq!(found[0].range.start_line, 3);
+        assert_eq!(found[0].range.end_line, 6, "alpha ends after its nested def");
+        assert_eq!(found[1].range.start_line, 9);
+    }
+
+    #[test]
+    fn blocks_skip_a_declaration_longer_than_the_cap() {
+        let mut text = String::from("def big():\n");
+        for i in 0..40 {
+            text.push_str(&format!("    x{i} = 1\n"));
+        }
+        text.push_str("\ndef small():\n    return 1\n");
+        let p = lang::profile("python");
+        assert!(blocks(&text, &p, 200).iter().any(|b| b.name.as_deref() == Some("big")));
+        let capped = blocks(&text, &p, 10);
+        assert!(
+            capped.iter().all(|b| b.name.as_deref() != Some("big")),
+            "an affordance the server would refuse is not offered"
+        );
+        assert!(capped.iter().any(|b| b.name.as_deref() == Some("small")));
+    }
+
+    #[test]
+    fn blocks_are_empty_when_nothing_is_declared() {
+        let p = lang::profile("python");
+        assert!(blocks("x = 1\ny = 2\n", &p, 200).is_empty());
+        assert!(blocks("", &p, 200).is_empty());
+    }
+
+    #[test]
+    fn blocks_handle_brace_languages() {
+        let p = lang::profile("rust");
+        let text = "impl Thing {\n    fn a(&self) {}\n}\n\nfn standalone() {\n    let x = 1;\n}\n";
+        let found = blocks(text, &p, 200);
+        let names: Vec<_> = found.iter().map(|b| b.name.clone().unwrap_or_default()).collect();
+        assert_eq!(names, vec!["Thing", "standalone"]);
+        assert_eq!(found[0].range.end_line, 2);
+        assert_eq!(found[1].range.end_line, 6);
+    }
+
     use super::*;
     use crate::lang::profile;
 

@@ -232,6 +232,12 @@ end
 
 -- Report --------------------------------------------------------------------------------------
 
+-- Lens state first, and a settle before the stop. Neovim's lens provider schedules a
+-- request on a 200 ms debounce and asserts that the client still exists when it fires
+-- (`lsp/codelens.lua:143`); `enable(false)` does not purge the stored client id, so the
+-- pending request has to be allowed to run while the client is still there.
+pcall(vim.lsp.codelens.enable, false)
+vim.wait(400)
 for _, c in ipairs(vim.lsp.get_clients({ name = 'meta' })) do
   c:stop(true)
 end
