@@ -720,6 +720,28 @@ function M.install_progress_tracker()
   })
 end
 
+--- Inlay hints: a badge on a declaration that has findings, and nothing anywhere else.
+---
+--- Off unless asked for, and the reason is concrete rather than taste: Neovim enables inlay
+--- hints **per buffer, not per client** (`lsp/inlay_hint.lua`), so switching them on for this
+--- badge also switches on every other server's hints in that buffer — rust-analyzer's type
+--- hints, clangd's parameter hints. That is a decision for the user, not a side effect of
+--- installing this. `<leader>Mh` toggles it for the buffer so it can be tried in one keystroke.
+function M.hints(on)
+  local bufnr = vim.api.nvim_get_current_buf()
+  local enable = on
+  if enable == nil then
+    enable = not vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr })
+  end
+  local ok, err = pcall(vim.lsp.inlay_hint.enable, enable, { bufnr = bufnr })
+  if not ok then
+    vim.notify('meta: inlay hints are not available here: ' .. tostring(err), vim.log.levels.WARN)
+    return enable
+  end
+  vim.notify(('meta: inlay hints %s'):format(enable and 'on' or 'off'), vim.log.levels.INFO)
+  return enable
+end
+
 --- Code lenses: one affordance per declaration, written on the declaration.
 ---
 --- This is the surface that does not have to be remembered. A clean declaration offers
@@ -833,6 +855,9 @@ function M.keymaps(prefix)
     { 'l', { 'n' }, 'run the lens on this line', function()
       vim.lsp.codelens.run()
     end },
+    { 'h', { 'n' }, 'toggle inlay hints (off by default)', function()
+      M.hints()
+    end },
     { 's', { 'n' }, 'status: queue, budgets, cache hit rate', function()
       M.status()
     end },
@@ -875,6 +900,9 @@ M.subcommands = {
   end,
   recompute = function()
     M.recompute()
+  end,
+  hints = function(arg)
+    M.hints(arg == 'on' and true or (arg == 'off' and false or nil))
   end,
   review = function()
     M.review()

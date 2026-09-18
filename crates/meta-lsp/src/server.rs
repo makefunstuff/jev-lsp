@@ -72,6 +72,14 @@ impl MetaServer {
                 workspace_diagnostics: false,
                 work_done_progress_options: WorkDoneProgressOptions::default(),
             })),
+            // Only when there is something to say: a hint on every declaration that says
+            // "clean" is noise on the surface most likely to become noise.
+            inlay_hint_provider: Some(OneOf::Right(InlayHintServerCapabilities::Options(
+                InlayHintOptions {
+                    resolve_provider: Some(false),
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                },
+            ))),
             // Fully-formed lenses, no `resolve`: the title carries the finding count and the
             // command carries its own arguments, so a lens costs one request per document and
             // none per lens. `workspace/codeLens/refresh` after an analysis updates the titles.
@@ -136,7 +144,16 @@ impl MetaServer {
                 // Always signal, even when superseded or failed: the client re-pulls and
                 // sees whatever the cache currently holds for the document.
                 if state.doc(&uri).is_some() {
-                    // The lenses carry a finding count, so a new analysis changes them.
+                    // The lenses and the hints both carry a finding count, so a new analysis
+                    // changes them.
+                    if client.inlay_hint_refresh().await.is_err() {
+                        client
+                            .log_message(
+                                MessageType::LOG,
+                                "meta: client does not serve workspace/inlayHint/refresh",
+                            )
+                            .await;
+                    }
                     if client.code_lens_refresh().await.is_err() {
                         client
                             .log_message(
@@ -159,6 +176,28 @@ impl MetaServer {
                 }
             }
         });
+    }
+
+    /// The checks every read-only surface shares: the server is on, and this is a document the
+    /// analysis would accept. A surface that offers what the analysis would then refuse is
+    /// worse than one that offers nothing.
+    fn analysable(&self, doc: &meta_core::Document) -> Option<meta_core::config::Config> {
+        let cfg = self.state.config();
+        if !cfg.enabled {
+            return None;
+        }
+        if meta_core::gates::evaluate(
+            &doc.text,
+            &doc.path,
+            cfg.languages.max_file_bytes,
+            cfg.languages.max_scope_lines,
+            &cfg.languages.ignore,
+        )
+        .is_some()
+        {
+            return None;
+        }
+        Some(cfg)
     }
 
     fn findings_for(&self, doc: &meta_core::Document) -> (Vec<Finding>, bool) {
@@ -888,6 +927,65 @@ impl LanguageServer for MetaServer {
         ))
     }
 
+    /// A badge at the head of a declaration that has findings, and nothing anywhere else.
+    ///
+    /// Inlay hints sit inside the text, so this is the quietest of the surfaces and the one
+    /// that has to earn its place: only a declaration with cached findings gets a hint, and
+    /// the label is the count. Silence is the default, not a state to be reported.
+    async fn inlay_hint(&self, params: InlayHintParams) -> RpcResult<Option<Vec<InlayHint>>> {
+        let uri = params.text_document.uri.to_string();
+        let Some(doc) = self.state.doc(&uri) else {
+            return Ok(None);
+        };
+        let Some(cfg) = self.analysable(&doc) else {
+            return Ok(None);
+        };
+        let (findings, _) = self.findings_for(&doc);
+        if findings.is_empty() {
+            return Ok(None);
+        }
+
+        let profile = meta_core::lang::profile(&doc.language.name);
+        let first = params.range.start.line;
+        let last = params.range.end.line;
+        let lines: Vec<&str> = doc.text.lines().collect();
+        let hints = meta_core::scope::blocks(&doc.text, &profile, cfg.languages.max_scope_lines)
+            .into_iter()
+            .filter(|block| block.range.start_line >= first && block.range.start_line <= last)
+            .filter_map(|block| {
+                let here: Vec<&Finding> = findings
+                    .iter()
+                    .filter(|f| f.line >= block.range.start_line && f.line <= block.range.end_line)
+                    .collect();
+                if here.is_empty() {
+                    return None;
+                }
+                // Byte offset, because this server speaks utf-8 (N1).
+                let head = lines.get(block.range.start_line as usize)?;
+                Some(InlayHint {
+                    position: Position {
+                        line: block.range.start_line,
+                        character: head.len() as u32,
+                    },
+                    label: InlayHintLabel::String(format!(
+                        "meta: {} finding{}",
+                        here.len(),
+                        if here.len() == 1 { "" } else { "s" }
+                    )),
+                    kind: None,
+                    text_edits: None,
+                    tooltip: Some(InlayHintTooltip::String(
+                        here.iter().map(|f| f.label.clone()).collect::<Vec<_>>().join("; "),
+                    )),
+                    padding_left: Some(true),
+                    padding_right: None,
+                    data: None,
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(if hints.is_empty() { None } else { Some(hints) })
+    }
+
     /// One lens per declaration at the left margin (docs/UX.md §1, "inline annotation").
     ///
     /// The lens is the affordance that does not have to be remembered: the work available on a
@@ -899,23 +997,9 @@ impl LanguageServer for MetaServer {
         let Some(doc) = self.state.doc(&uri) else {
             return Ok(None);
         };
-        let cfg = self.state.config();
-        if !cfg.enabled {
+        let Some(cfg) = self.analysable(&doc) else {
             return Ok(None);
-        }
-        // The same gates the analysis applies: offering an affordance that the server would
-        // then refuse is worse than offering nothing.
-        if meta_core::gates::evaluate(
-            &doc.text,
-            &doc.path,
-            cfg.languages.max_file_bytes,
-            cfg.languages.max_scope_lines,
-            &cfg.languages.ignore,
-        )
-        .is_some()
-        {
-            return Ok(None);
-        }
+        };
 
         let profile = meta_core::lang::profile(&doc.language.name);
         let (findings, _) = self.findings_for(&doc);

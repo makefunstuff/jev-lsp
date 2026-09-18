@@ -151,6 +151,27 @@ worse than no lens. `vim.lsp.codelens.run()` re-requests and then sends the comm
 server, so the plugin wraps `run` and dispatches its own namespace locally; every other
 command passes through untouched `[R14]`.
 
+### 3.4.2 `inlayHint` — the badge, and why it is off
+
+One hint per declaration that has **cached findings**, at the end of the declaration's head
+line: `meta: N finding(s)`, with the labels in the tooltip. Nothing anywhere else. Silence is
+the default rather than a state to be reported — a hint reading "clean" on every function in a
+file would be the most intrusive surface in the editor, and hints sit inside the text where
+they cannot be skimmed past.
+
+- `resolveProvider: false`; the label and the tooltip are complete on arrival.
+- The character is a **byte offset** into that line, because this server speaks utf-8 (N1).
+- Gated exactly as the analysis is: `enabled`, and the same binary/size/ignore refusals. An
+  affordance for work the server would refuse is worse than none.
+- `workspace/inlayHint/refresh` after an analysis, so a badge appears and disappears with the
+  findings it counts.
+
+The client decides whether to draw any of this, and the plugin keeps it **off** by default for
+a reason of Neovim's rather than a matter of taste: `vim.lsp.inlay_hint.enable` switches hints
+on **per buffer, not per client**, so turning it on for this badge turns on every other
+server's hints in that buffer too. `<leader>Mh` toggles it for the buffer, and
+`:Meta hints on|off` does the same.
+
 ### 3.5 Progress tokens — the two legal sources
 
 The server MUST NOT send `$/progress` for a token it did not receive or create `[R12]`.

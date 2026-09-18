@@ -11,7 +11,7 @@ inline annotation, or a key you already press.
 | Lightbulb / code action menu | `textDocument/codeAction` | all explicit intents | only when invoked |
 | Inline annotation | `textDocument/codeLens` | per-symbol affordances: "explain", "test", "+2 findings" | never |
 | Ghost text | `textDocument/inlineCompletion` | FIM completion | never |
-| Inline hint | `textDocument/inlayHint` | risk markers, off by default | never |
+| Inline hint | `textDocument/inlayHint` | a `meta: N finding(s)` badge on a declaration that has findings, and nothing elsewhere | never |
 | Plan buffer | plugin + `window/showDocument` | multi-step work, review, approval | once, on completion |
 | Statusline segment | `$/progress` via `LspProgress` | what is running, budget remaining | never |
 | Streamed answer | `$/progress` partial results (§3.5.1) | the answer written into its buffer as it arrives, and `waiting for the model (3s)` before the first token | never |
@@ -21,9 +21,15 @@ inline annotation, or a key you already press.
 Free text appears exactly once, in `:Meta plan`, because the protocol cannot ask for text
 and because a goal is the only thing a picker cannot express.
 
-Two rows above describe surfaces that are designed and **not built**: the plan buffer and the
-inline hint (`inlayHint`). They are in the table because they are the plan, and they are
-called out here so the table is not read as a description of what exists.
+One row above describes a surface that is designed and **not built**: the plan buffer. It is in
+the table because it is the plan, and it is called out here so the table is not read as a
+description of what exists.
+
+The inline hint is built too (`textDocument/inlayHint`, §1 row 5): a `meta: N finding(s)`
+badge on a declaration that has findings, and silence everywhere else. It stays **off** by
+default — Neovim switches inlay hints on per *buffer*, not per client, so enabling it for this
+badge also enables every other server's hints in that buffer. `<leader>Mh` toggles it, and
+`:Meta hints on|off` does the same.
 
 The inline annotation is built (`textDocument/codeLens`, §1 row 3): a clean declaration shows
 `meta: explain`, one with cached findings shows `meta: N finding(s) · fix`, and running it is

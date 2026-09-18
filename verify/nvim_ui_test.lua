@@ -186,8 +186,15 @@ end
 local function open_fixture(name, body)
   local path = root .. '/' .. name
   vim.fn.writefile(body, path)
-  vim.cmd('silent edit ' .. vim.fn.fnameescape(path))
+  -- `edit!` and a check on the result: without the bang a buffer that cannot be abandoned
+  -- makes the edit a silent no-op, and then a check quietly tests the wrong buffer.
+  vim.cmd('silent! edit! ' .. vim.fn.fnameescape(path))
   local bufnr = vim.api.nvim_get_current_buf()
+  local opened = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bufnr), ':p')
+  assert(
+    opened == vim.fn.fnamemodify(path, ':p'),
+    ('open_fixture: wanted %s, holding %s'):format(path, opened)
+  )
   local attached = vim.wait(15000, function()
     return #vim.lsp.get_clients({ bufnr = bufnr, name = 'meta' }) > 0
   end, 25)
@@ -1155,6 +1162,109 @@ do
       if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find('meta://', 1, true) then
         vim.api.nvim_buf_delete(b, { force = true })
       end
+    end
+  end
+end
+
+-- 12. Inlay hints --------------------------------------------------------------------------
+
+-- Silence by default and a badge where it matters: a declaration with findings gets one, a
+-- document with nothing cached gets none. And the toggle, because Neovim turns hints on per
+-- buffer rather than per client, so this is the user's decision.
+do
+  local hint_path = root .. '/hints.py'
+  local BODY = {
+    'import json',
+    '',
+    '',
+    'def alpha(path):',
+    '    f = open(path)',
+    '    return json.load(f)',
+    '',
+    '',
+    'def beta(x):',
+    '    return x + 1',
+  }
+  -- Opened by path every time it is needed: buffer numbers are reused once a buffer is gone,
+  -- and a check that holds one across a dozen awaits can end up talking about another buffer.
+  local function open()
+    vim.fn.writefile(BODY, hint_path)
+    vim.cmd('silent! edit! ' .. vim.fn.fnameescape(hint_path))
+    return vim.api.nvim_get_current_buf()
+  end
+
+  local hint_bufnr = open()
+  local attached = vim.wait(15000, function()
+    return #vim.lsp.get_clients({ bufnr = hint_bufnr, name = 'meta' }) > 0
+  end, 25)
+  check(attached, 'the plugin attached a client to the hints fixture')
+
+  local client = vim.lsp.get_clients({ bufnr = hint_bufnr, name = 'meta' })[1]
+  if client == nil then
+    skip('inlay hints', 'no client on the hints fixture')
+  else
+    local function hints_for(bufnr)
+      return client:request_sync('textDocument/inlayHint', {
+        textDocument = { uri = vim.uri_from_bufnr(bufnr) },
+        range = {
+          start = { line = 0, character = 0 },
+          ['end'] = { line = 1000, character = 0 },
+        },
+      }, 5000, bufnr)
+    end
+
+    -- Nothing cached yet: silence, not a "clean" label on every function.
+    local before = hints_for(hint_bufnr)
+    check(
+      before == nil or before.result == nil or #before.result == 0,
+      'a document with nothing analysed gets no hints',
+      vim.inspect(before and before.result)
+    )
+
+    -- Saving once is not enough: the concurrency guard covers model calls, and the checks
+    -- before this one leave explain and preview calls running.
+    local analysed = false
+    for _ = 1, 12 do
+      local bufnr = open()
+      pcall(vim.cmd, 'write')
+      analysed = vim.wait(3000, function()
+        return #vim.diagnostic.get(bufnr) > 0
+      end, 50)
+      if analysed then
+        hint_bufnr = bufnr
+        break
+      end
+    end
+    check(analysed, 'the fixture is analysed, so a hint has something to report')
+
+    if analysed then
+      local after = hints_for(hint_bufnr)
+      local list = (after and after.result) or {}
+      check(#list >= 1, 'a declaration with findings gets a hint', vim.inspect(list))
+      if #list >= 1 then
+        local label = type(list[1].label) == 'string' and list[1].label
+          or (list[1].label and list[1].label.value)
+        check(
+          type(label) == 'string' and label:find('meta:', 1, true) ~= nil
+            and label:find('finding', 1, true) ~= nil,
+          'the label says what it is counting',
+          tostring(label)
+        )
+        check(
+          list[1].position.line == 3,
+          'and it sits on the declaration it describes',
+          tostring(list[1].position.line)
+        )
+      end
+    end
+
+    local stock = vim.lsp.inlay_hint.is_enabled({ bufnr = hint_bufnr })
+    require('meta').hints(true)
+    check(vim.lsp.inlay_hint.is_enabled({ bufnr = hint_bufnr }), 'the toggle turns them on')
+    require('meta').hints(false)
+    check(not vim.lsp.inlay_hint.is_enabled({ bufnr = hint_bufnr }), 'and off again')
+    if stock then
+      require('meta').hints(true)
     end
   end
 end
