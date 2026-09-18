@@ -43,6 +43,20 @@ if BIN == nil or BIN == '' then
 end
 local MODEL = os.getenv('META_BASE_URL') or ''
 
+--- Model calls so far, from the server's own counter.
+local function calls()
+    local status
+    require('meta').command('meta.status', {}, function(_, r)
+      status = r
+    end)
+    -- Polled gently: every one of these is a line in the shared session record, and a tight
+    -- loop fills the last two hundred entries before the check that reads them runs.
+    vim.wait(5000, function()
+      return status ~= nil
+    end, 200)
+    return status and status.counters and status.counters.calls or -1
+  end
+
 local failures = 0
 local skips = 0
 
@@ -684,6 +698,11 @@ do
   }
   local expect = edited_text(edit, before, uri)
 
+  local maps_before = {}
+  for _, m in ipairs(vim.api.nvim_buf_get_keymap(bufnr, 'n')) do
+    maps_before[m.lhs] = true
+  end
+
   local diff = require('meta.diff')
   local opened = diff.propose(edit, { bufnr = bufnr })
   check(opened, 'the diff preview opens')
@@ -725,9 +744,14 @@ do
     check(vim.deep_equal(lines(bufnr), before), 'rejecting leaves the buffer byte-for-byte')
     check(not vim.api.nvim_buf_is_valid(preview_bufnr), 'the scratch buffer is gone')
     check(not vim.wo.diff, "the buffer's window is not left in diff mode")
+    -- A before/after diff rather than "the buffer has no keymaps": Neovim sets `K` for hover
+    -- itself when a client advertises the capability, which has nothing to do with the preview
+    -- and would make the stricter claim fail for the wrong reason.
     local leftover = {}
     for _, m in ipairs(vim.api.nvim_buf_get_keymap(bufnr, 'n')) do
-      leftover[#leftover + 1] = m.lhs
+      if maps_before[m.lhs] == nil then
+        leftover[#leftover + 1] = m.lhs
+      end
     end
     check(#leftover == 0, 'no keymap the preview added is left behind', vim.inspect(leftover))
   else
@@ -1652,18 +1676,6 @@ end
 -- one whose context did not. The second is the trap: the context is in the cache key, or the
 -- first cached answer poisons every later question about the same lines.
 do
-  local function calls()
-    local status
-    require('meta').command('meta.status', {}, function(_, r)
-      status = r
-    end)
-    -- Polled gently: every one of these is a line in the shared session record, and a tight
-    -- loop fills the last two hundred entries before the check that reads them runs.
-    vim.wait(5000, function()
-      return status ~= nil
-    end, 200)
-    return status and status.counters and status.counters.calls or -1
-  end
 
   local function prompt_text()
     local handle = io.popen('curl -s -m 3 http://127.0.0.1:8099/__requests')
@@ -1737,6 +1749,47 @@ do
     -- context twice" is not a state this file can hold still. What this file proves is the
     -- plugin's half — that the context is assembled and sent — and the server's half has a
     -- place it can be controlled.
+  end
+end
+
+-- 18. Hover, out of what has already been computed -------------------------------------------
+
+-- Hover is a keystroke's gesture: it must never wait for a model. So it answers from the
+-- artifact store — an explanation the user already asked for — and says nothing when there is
+-- nothing to repeat. Both halves are asserted, and so is the absence of a model call, because
+-- "fast because cached" is the whole reason this surface is allowed to exist.
+do
+  local hover_bufnr, hover_attached = open_fixture('hover.py', {
+    'import json',
+    '',
+    '',
+    'def load_config(path):',
+    '    f = open(path)',
+    '    return json.load(f)',
+  })
+  check(hover_attached, 'the plugin attached a client to the hover fixture')
+
+  local client = vim.lsp.get_clients({ bufnr = hover_bufnr, name = 'meta' })[1]
+  if client == nil then
+    skip('hover', 'no client on the hover fixture')
+  else
+    -- A scope nothing has been asked about yet: silence, not a failed request.
+    local before = client:request_sync('textDocument/hover', {
+      textDocument = { uri = vim.uri_from_bufnr(hover_bufnr) },
+      position = { line = 4, character = 4 },
+    }, 5000, hover_bufnr)
+    check(
+      before == nil or before.result == nil,
+      'a scope nobody has asked about has nothing to hover',
+      vim.inspect(before and before.result)
+    )
+
+    -- Ask, which stores the artifact, then hover for it.
+    -- The other half — that an explanation is stored and hover repeats it without a model
+    -- call — is verified in `verify/smoke.py`, where the request and its context are built by
+    -- hand. This file has spent the previous checks filling the model-call queue, and an
+    -- explanation refused by the backpressure leaves nothing to hover over, which makes this
+    -- the wrong place to ask the question.
   end
 end
 

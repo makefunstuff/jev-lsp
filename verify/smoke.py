@@ -539,6 +539,40 @@ def main():
         check(bad_args.get("ok") is False and bad_args.get("error", {}).get("code") == "bad_arguments",
               f"a served command with missing arguments is refused clearly: {bad_args.get('error')}")
 
+        print("[smoke] hover repeats what has already been computed, for free")
+        # Hover is a keystroke's gesture and must never wait for a model, so it answers from the
+        # artifact store and says nothing when there is nothing to repeat. Both halves, and the
+        # absence of a model call: "fast because cached" is the whole reason it exists.
+        #
+        # Line 9 is the fixture's second function, which nothing has asked about; line 1 was
+        # explained by the check above, so hovering it costs a lookup and no model call.
+        silent = server.request("textDocument/hover", {
+            "textDocument": {"uri": uri},
+            "position": {"line": 9, "character": 4},
+        }, timeout=10)
+        check(silent.get("result") is None,
+              f"a scope nobody has asked about has nothing to hover (got {silent.get('result')})")
+
+        calls_before = len(stub.requests()["requests"])
+        hovered = server.request("textDocument/hover", {
+            "textDocument": {"uri": uri},
+            "position": {"line": 1, "character": 4},
+        }, timeout=10)
+        result = hovered.get("result")
+        value = None
+        if isinstance(result, dict):
+            contents = result.get("contents")
+            if isinstance(contents, dict):
+                value = contents.get("value")
+            elif isinstance(contents, list) and contents:
+                first = contents[0]
+                value = first.get("value") if isinstance(first, dict) else first
+        check(isinstance(value, str) and len(value) > 0, f"an explained scope hovers (got {value!r})")
+        check(
+            len(stub.requests()["requests"]) == calls_before,
+            f"and costs no model call ({calls_before} -> {len(stub.requests()['requests'])})",
+        )
+
         print("[smoke] shutdown")
         server.request("shutdown", None)
         server.notify("exit", None)

@@ -83,6 +83,9 @@ impl MetaServer {
             // Fully-formed lenses, no `resolve`: the title carries the finding count and the
             // command carries its own arguments, so a lens costs one request per document and
             // none per lens. `workspace/codeLens/refresh` after an analysis updates the titles.
+            // Simple: the contents are complete on arrival, from what has already been
+            // computed. A hover is a keystroke's gesture and must never wait for a model.
+            hover_provider: Some(HoverProviderCapability::Simple(true)),
             code_lens_provider: Some(CodeLensOptions {
                 resolve_provider: Some(false),
             }),
@@ -1065,6 +1068,41 @@ impl LanguageServer for MetaServer {
         Ok(if hints.is_empty() { None } else { Some(hints) })
     }
 
+    /// What is already known about the scope under the cursor.
+    ///
+    /// Reads the artifact store — explanations and answers the user has already asked for —
+    /// and never calls a model. Empty when there is nothing to repeat, which the client
+    /// renders as no hover rather than as a failed one.
+    async fn hover(&self, params: HoverParams) -> RpcResult<Option<Hover>> {
+        let pos = params.text_document_position_params;
+        let uri = pos.text_document.uri.to_string();
+        let line = pos.position.line;
+        let Some(doc) = self.state.doc(&uri) else {
+            return Ok(None);
+        };
+        if self.analysable(&doc).is_none() {
+            return Ok(None);
+        }
+        // Any artifact that *covers* this line, not only one whose extent matches exactly: the
+        // explanation was about the scope the user asked from, and hovering anywhere inside it
+        // is the same question. The content hash still has to match — a stale explanation shown
+        // against lines it was not written about is worse than none.
+        let Some((start, end, markdown)) = self.state.artifact_covering(&uri, line, &doc.hash)
+        else {
+            return Ok(None);
+        };
+        Ok(Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: markdown,
+            }),
+            range: Some(Range {
+                start: Position { line: start, character: 0 },
+                end: Position { line: end, character: 0 },
+            }),
+        }))
+    }
+
     /// One lens per declaration at the left margin (docs/UX.md §1, "inline annotation").
     ///
     /// The lens is the affordance that does not have to be remembered: the work available on a
@@ -1531,14 +1569,23 @@ impl MetaServer {
                     )
                     .await;
                 match outcome {
-                    Ok(Generated::Artifact(markdown)) => json!({
+                    Ok(Generated::Artifact(markdown)) => {
+                        self.state.note_artifact(
+                            &uri,
+                            scope.range.start_line,
+                            scope.range.end_line,
+                            &doc.hash,
+                            &markdown,
+                        );
+                        json!({
                         "schema": ARTIFACT_SCHEMA,
                         "kind": "explanation",
                         "id": ActionData::make_id(Verb::Explain, &doc_ref(&doc), &data_scope(&scope), None),
                         "language": doc.language.name,
                         "summary": action_title(Verb::Explain, &scope),
                         "markdown": markdown,
-                    }),
+                        })
+                    }
                     Ok(Generated::Edit(_)) => result_err("unexpected", "explain produced an edit"),
                     Err(f) => result_err(f.code(), &f.message()),
                 }

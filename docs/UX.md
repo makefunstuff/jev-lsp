@@ -15,6 +15,7 @@ inline annotation, or a key you already press.
 | Plan buffer | plugin + `window/showDocument` | multi-step work: a line per step, `<CR>` applies one, `a` the rest, `u` takes one back | once, on completion |
 | Statusline segment | `$/progress` via `LspProgress` | what is running, budget remaining | never |
 | Streamed answer | `$/progress` partial results (§3.5.1) | the answer written into its buffer as it arrives, and `waiting for the model (3s)` before the first token | never |
+| Hover | `textDocument/hover` | what has already been explained about this scope, instantly and never from a model | never |
 | Pick list | `window/showMessageRequest` | a decision the server must have | once |
 | Text prompt | plugin `vim.ui.input` | the goal for `plan` | only when invoked |
 

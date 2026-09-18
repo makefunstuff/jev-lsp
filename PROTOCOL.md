@@ -240,6 +240,23 @@ Kinds are the client's words; the server renders them and orders them. `imports`
 `test` and `sibling` are what the plugin sends today, and an unknown kind is rendered as
 `context` rather than refused.
 
+### 3.4.5 `hover` — what has already been said about a scope
+
+Hover shows the answer to a question the user has already asked. `meta.explain` and
+`meta.followup` store what they produced, keyed by document and scope, and hover returns it:
+
+- **No model call, ever.** A hover is a keystroke's gesture; one that waits ten seconds is one
+  nobody uses. `resolveProvider` is therefore not advertised — the contents are complete.
+- **Covering, not equal.** Any stored artifact whose extent contains the hovered line answers
+  it. Requiring the two sides to agree on an exact extent would make hover work only when a
+  parser and a scan resolve a declaration the same way, which is not the same question.
+- **The content hash still has to match.** A stale explanation shown against lines it was not
+  written about is worse than none.
+- **Silence when there is nothing.** An empty result, not an error: the client renders no hover
+  rather than a failed one.
+
+The store holds sixty-four artifacts, oldest out.
+
 ### 3.5 Progress tokens — the two legal sources
 
 The server MUST NOT send `$/progress` for a token it did not receive or create `[R12]`.

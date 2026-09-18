@@ -48,6 +48,17 @@ pub struct ClientDefinition {
     pub name: Option<String>,
 }
 
+/// The last artifact produced for a scope.
+///
+/// Hover reads this and never calls a model. A hover that waits ten seconds is one nobody
+/// uses, and an explanation the user already asked for is worth showing again — on the symbol
+/// they are pointing at, with no key to remember.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StoredArtifact {
+    pub content_hash: String,
+    pub markdown: String,
+}
+
 pub struct AppState {
     docs: RwLock<HashMap<String, Document>>,
     /// Per-document generation counter, so a slow analysis cannot publish over a newer one.
@@ -61,6 +72,8 @@ pub struct AppState {
     /// to take the *oldest*: a plan a user is reading should not disappear while a newer one
     /// arrives, and a map's iteration order cannot promise that.
     plans: Mutex<Vec<meta_core::types::Plan>>,
+    /// Explanations and answers, oldest first, so hover can repeat one for free.
+    artifacts: Mutex<Vec<(String, StoredArtifact)>>,
     /// Declarations the client sent, by uri, with the document version they describe.
     definitions: Mutex<std::collections::HashMap<String, (i32, Vec<ClientDefinition>)>>,
     /// What each applied edit replaced, for `meta.revert`.
@@ -94,6 +107,7 @@ impl AppState {
             analysis: Mutex::new(HashMap::new()),
             plans: Mutex::new(Vec::new()),
             definitions: Mutex::new(std::collections::HashMap::new()),
+            artifacts: Mutex::new(Vec::new()),
             applied: Mutex::new(HashMap::new()),
             predictions: Mutex::new(HashMap::new()),
             fim: crate::inline::FimLimiter::new(),
@@ -198,6 +212,55 @@ impl AppState {
             plans.remove(0);
         }
         plans.push(plan);
+    }
+
+    /// Key for a scope: the document, and the lines the artifact covers.
+    ///
+    /// `uri` can contain `|`, so the parts are split from the right.
+    fn artifact_key(uri: &str, start: u32, end: u32) -> String {
+        format!("{uri}|{start}|{end}")
+    }
+
+    fn split_artifact_key(key: &str) -> Option<(String, u32, u32)> {
+        let mut parts = key.rsplitn(3, '|');
+        let end: u32 = parts.next()?.parse().ok()?;
+        let start: u32 = parts.next()?.parse().ok()?;
+        Some((parts.next()?.to_string(), start, end))
+    }
+
+    /// Remember an artifact, replacing whatever was there for that exact scope.
+    pub fn note_artifact(&self, uri: &str, start: u32, end: u32, content_hash: &str, markdown: &str) {
+        let key = Self::artifact_key(uri, start, end);
+        let mut artifacts = self.artifacts.lock();
+        artifacts.retain(|(k, _)| k != &key);
+        while artifacts.len() >= 64 {
+            artifacts.remove(0);
+        }
+        artifacts.push((
+            key,
+            StoredArtifact {
+                content_hash: content_hash.to_string(),
+                markdown: markdown.to_string(),
+            },
+        ));
+    }
+
+    /// The newest artifact that *covers* a line, while it still describes this content.
+    ///
+    /// Covering, not equal: an explanation was asked for about a scope, and hovering anywhere
+    /// inside that scope is the same question. Requiring the two sides to agree on an exact
+    /// extent would make hover work only when a parser and a scan resolve a declaration the
+    /// same way, which is not the same thing at all. The content hash still has to match — a
+    /// stale explanation shown against lines it was not written about is worse than none.
+    pub fn artifact_covering(&self, uri: &str, line: u32, content_hash: &str) -> Option<(u32, u32, String)> {
+        self.artifacts.lock().iter().rev().find_map(|(key, a)| {
+            let (stored_uri, start, end) = Self::split_artifact_key(key)?;
+            if stored_uri == uri && a.content_hash == content_hash && start <= line && line <= end {
+                Some((start, end, a.markdown.clone()))
+            } else {
+                None
+            }
+        })
     }
 
     /// Record what the client's parser found, for one document version.
