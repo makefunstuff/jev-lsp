@@ -9,9 +9,10 @@ in `crates/` and `nvim/`; verification in `verify/`.
 **Next action**: the review's recall is now measured rather than asserted — 4/4 planted defects
 caught, 4/5 precision, zero discards, with the local model — and the one open question about it is
 whether the defect classes added to the prompt this session are *why*, which needs an A/B against
-the prompt as it was. Otherwise: an interactive check of inline-completion ghost text, which
-headless Neovim cannot fire the insert-mode events for, and which is the only surface never driven
-live.
+the prompt as it was. Nothing else is open: inline-completion ghost text *was* driven live in a
+PTY when it was built — Neovim fires the insert-mode events headless withholds, and that run also
+caught a defect the headless tests had missed — so every surface has been exercised live at least
+once, and the suite covers all of them on every change.
 
 **Previously**: everything in the roadmap is built. The next useful step is a longer
 real-model soak — the six runs so far are one language on one model, and the last three
