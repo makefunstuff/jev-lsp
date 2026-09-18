@@ -25,9 +25,16 @@ pub struct Resolved {
     pub truncated: bool,
 }
 
+/// Words that can stand between the left margin and the keyword that opens a declaration.
+///
+/// Found by measuring: on a real 249-line Lua file this list was missing `local`, and five of
+/// the twelve top-level functions were invisible — no lens, no hint, nothing. The list is a
+/// guess by construction, which is why a *parser* answers this question when the client has
+/// one (`TS_SCOPE_NODES` in the plugin); this is what serves clients that do not.
 const MODIFIERS: &[&str] = &[
     "pub", "async", "unsafe", "extern", "export", "default", "static", "public", "private",
     "protected", "internal", "final", "abstract", "inline", "const", "mut", "override",
+    "local", "declare", "virtual", "sealed", "partial", "global", "nonlocal",
 ];
 
 fn indent_width(line: &str) -> usize {
@@ -452,6 +459,17 @@ mod tests {
         let p = lang::profile("python");
         assert!(blocks("x = 1\ny = 2\n", &p, 200).is_empty());
         assert!(blocks("", &p, 200).is_empty());
+    }
+
+    #[test]
+    fn a_modifier_before_the_keyword_does_not_hide_a_declaration() {
+        // The case that was measured: `local function` was invisible, so five of twelve
+        // declarations in a real file had no lens and no hint.
+        let p = lang::profile("lua");
+        let text = "local function one()\n  return 1\nend\n\nfunction two()\n  return 2\nend\n";
+        let found = blocks(text, &p, 200);
+        let names: Vec<_> = found.iter().map(|b| b.name.clone().unwrap_or_default()).collect();
+        assert_eq!(names, vec!["one", "two"], "both declarations are seen");
     }
 
     #[test]
