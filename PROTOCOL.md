@@ -205,6 +205,41 @@ on **per buffer, not per client**, so turning it on for this badge turns on ever
 server's hints in that buffer too. `<leader>Mh` toggles it for the buffer, and
 `:Meta hints on|off` does the same.
 
+### 3.4.4 Project context — what the editor sends with a request
+
+The server has no parser, no other language servers, and no idea what the user has been
+reading. The client has all three, so it may attach what it found to any request that
+generates:
+
+```jsonc
+{ "command": "meta.explain",
+  "arguments": [ { "uri": "…", "line": 40,
+    "context": [ { "kind": "imports",   "uri": "…", "start_line": 0, "end_line": 12, "text": "…" },
+                 { "kind": "reference", "uri": "…", "start_line": 88, "end_line": 92, "text": "…" },
+                 { "kind": "test",      "uri": "…", "text": "…" },
+                 { "kind": "sibling",   "uri": "…", "text": "…" } ] } ] }
+```
+
+Rules, each of which exists because of a specific way this could go wrong:
+
+- **Bounded here, not trusted.** At most four documents, forty lines each, enforced by the
+  server: an over-eager client cannot flood the prompt.
+- **Ordered by kind, then by uri.** The client's order within a kind is kept; across kinds it
+  is not. The same project state must produce the same prompt, or the cache is a coin toss.
+- **In the cache key.** What the client sent is hashed into it. Two requests differing only in
+  their context are two different questions, and answering the second from the first's cache
+  entry is the failure mode that would make everything here a lie.
+- **Text travels in the request.** Nothing is read from disk by the server: no index, no
+  watcher, and the server hashes exactly what it was given.
+- **Not on the fast paths.** Context goes with the request that *generates* — the explain, the
+  follow-up, the `codeAction/resolve` — never with `textDocument/codeAction`, which answers
+  from cache and must stay in single-digit milliseconds (N2, N3). A resolve may take 300 ms to
+  ask another language server for references; a menu must not.
+
+Kinds are the client's words; the server renders them and orders them. `imports`, `reference`,
+`test` and `sibling` are what the plugin sends today, and an unknown kind is rendered as
+`context` rather than refused.
+
 ### 3.5 Progress tokens — the two legal sources
 
 The server MUST NOT send `$/progress` for a token it did not receive or create `[R12]`.

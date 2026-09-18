@@ -473,6 +473,15 @@ local function run(c, bufnr, action, opts)
     )
     return
   end
+  -- What the editor can see goes with the resolve, which is the request that generates: the
+  -- fast paths stay fast, and the model sees imports, callers and the covering test instead of
+  -- guessing at them. `data` is ours to extend — the client round-trips it and the server owns
+  -- the shape (`PROTOCOL.md` §6.1).
+  local row = vim.api.nvim_win_get_cursor(0)
+  local provided = require('meta.context').for_position(bufnr, row[1] - 1, row[2])
+  if #provided > 0 and type(action.data) == 'table' then
+    action.data.context = provided
+  end
   local token = plugin().issue_token()
   local stop = spin(token, action.title or 'the action')
   local sent = c:request('codeAction/resolve', action, function(err, resolved)

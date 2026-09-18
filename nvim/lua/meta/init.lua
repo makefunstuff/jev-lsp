@@ -16,6 +16,7 @@
 --- @module 'meta'
 
 local attach = require('meta.attach')
+local context = require('meta.context')
 local picker = require('meta.picker')
 local statusline = require('meta.statusline')
 
@@ -461,7 +462,16 @@ end
 ---
 --- @param cb? fun(err: table?, result: any)
 function M.explain(cb)
-  M.command('meta.explain', { cursor_scope() }, cb or function(err, result, ctx)
+  local scope = cursor_scope()
+  local provided = context.for_position(
+    vim.api.nvim_get_current_buf(),
+    scope.line,
+    vim.api.nvim_win_get_cursor(0)[2]
+  )
+  if #provided > 0 then
+    scope.context = provided
+  end
+  M.command('meta.explain', { scope }, cb or function(err, result, ctx)
     render_artifact('meta.explain', err, result, ctx)
   end, { stream = true })
 end
@@ -717,6 +727,13 @@ function M.followup(question)
     local range = treesitter_scope(bufnr, line)
     if range ~= nil then
       arg.range = range
+    end
+    -- What the editor can see and the server cannot: imports, what refers to this, the test
+    -- that covers it, and the buffers the user has been in. Sent with the question, because a
+    -- question about code is worth more when the project is in front of the model.
+    local provided = context.for_position(bufnr, line, vim.api.nvim_win_get_cursor(0)[2])
+    if #provided > 0 then
+      arg.context = provided
     end
     local id = finding_at(bufnr, line)
     if id ~= nil then

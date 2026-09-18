@@ -400,6 +400,57 @@ def main():
         check(after_calls > before_calls,
               f"a 600-line file reaches the model ({before_calls} -> {after_calls} calls)")
 
+        print("[smoke] project context is in the prompt, and in the cache key")
+        # Two things at once. The context the client sends must reach the model, and a request
+        # whose context differs must not be answered from the cache of one whose context did
+        # not — otherwise the first answer about a file poisons every later question about the
+        # same lines.
+        ctx_uri = "file://" + os.path.join(workdir, "elsewhere.py")
+        with open(os.path.join(workdir, "elsewhere.py"), "w") as fh:
+            fh.write("# SENTINEL_ALPHA\ndef other():\n    return 1\n")
+        explain = {
+            "command": "meta.explain",
+            "arguments": [{"uri": uri, "line": 4}],
+        }
+
+        def explain_with(sentinel):
+            args = dict(explain["arguments"][0])
+            args["context"] = [
+                {"kind": "sibling", "uri": ctx_uri, "start_line": 0, "end_line": 2,
+                 "text": sentinel},
+            ]
+            return server.request("workspace/executeCommand",
+                                  {"command": "meta.explain", "arguments": [args]}, timeout=30)
+
+        before = len(stub.requests()["requests"])
+        explain_with("# SENTINEL_ALPHA")
+        first = len(stub.requests()["requests"])
+        check(first > before, "the request is generated")
+
+        body = " ".join(
+            m.get("content", "")
+            for r in stub.requests()["requests"]
+            for m in r.get("messages", [])
+            if isinstance(m, dict)
+        )
+        check("SENTINEL_ALPHA" in body, "the client's context reaches the model")
+        check("PROJECT CONTEXT" in body,
+              "and is labelled as the editor's contribution, not the file's own code")
+
+        explain_with("# SENTINEL_ALPHA")
+        check(
+            len(stub.requests()["requests"]) == first,
+            f"the same question with the same context is answered from the cache "
+            f"({first} -> {len(stub.requests()['requests'])} calls)",
+        )
+
+        explain_with("# SENTINEL_BETA")
+        check(
+            len(stub.requests()["requests"]) > first,
+            "and a changed context is a new question, not a stale hit "
+            f"({first} -> {len(stub.requests()['requests'])} calls)",
+        )
+
         print("[smoke] code actions")
         actions = server.request("textDocument/codeAction", {
             "textDocument": {"uri": uri},

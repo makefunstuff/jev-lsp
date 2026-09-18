@@ -97,7 +97,24 @@ pub fn findings_key(content_hash: &str) -> String {
 /// A generated edit or artifact is per verb, per scope, and per prompt revision — a
 /// change to the wording must not serve stale conclusions (PROTOCOL.md §5 gate 1).
 pub fn op_key(verb: &str, prompt_version: &str, content_hash: &str, start_line: u32, end_line: u32) -> String {
-    format!("op|{verb}|{prompt_version}|{content_hash}|{start_line}|{end_line}")
+    op_key_with_context(verb, prompt_version, content_hash, start_line, end_line, "")
+}
+
+/// The same, with the context the client sent folded in.
+///
+/// `context_digest` is empty when nothing was provided, which keeps every existing key
+/// byte-identical. When it is not empty, a request whose project context differs is a
+/// different request — answering it from the cache would be answering a question that was
+/// never asked.
+pub fn op_key_with_context(
+    verb: &str,
+    prompt_version: &str,
+    content_hash: &str,
+    start_line: u32,
+    end_line: u32,
+    context_digest: &str,
+) -> String {
+    format!("op|{verb}|{prompt_version}|{content_hash}|{start_line}|{end_line}|{context_digest}")
 }
 
 #[cfg(test)]

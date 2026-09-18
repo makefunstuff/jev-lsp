@@ -145,13 +145,15 @@ def main():
                     "range": {"start": {"line": 4, "character": 0}, "end": {"line": 5, "character": 0}},
                     "context": {"diagnostics": []},
                 },
-                timeout=10,
+                timeout=30,
                 poll=0.0002,
             ),
         )
 
         # Give the background analysis time to finish, then time the paths that the editor
-        # walks on its own schedule.
+        # walks on its own schedule. The `timeout=` on each request is liveness — a machine
+        # under load should not be mistaken for a regression — while the *budget* below is the
+        # assertion: 150 ms, an order of magnitude under the model delay.
         server.notify("textDocument/didSave", doc)
         time.sleep(3.0)
 
@@ -164,7 +166,7 @@ def main():
                     "range": {"start": {"line": 4, "character": 0}, "end": {"line": 5, "character": 0}},
                     "context": {"diagnostics": []},
                 },
-                timeout=10,
+                timeout=30,
                 poll=0.0002,
             ),
         )
@@ -178,7 +180,7 @@ def main():
             lambda: server.request(
                 "textDocument/inlayHint",
                 {"textDocument": {"uri": uri}, "range": whole},
-                timeout=10,
+                timeout=30,
                 poll=0.0002,
             ),
         )
@@ -191,7 +193,7 @@ def main():
                     "position": {"line": 5, "character": 0},
                     "context": {"triggerKind": 1},
                 },
-                timeout=10,
+                timeout=30,
                 poll=0.0002,
             ),
             budget=MODEL_DELAY_MS - 500,
@@ -201,7 +203,7 @@ def main():
             lambda: server.request(
                 "workspace/executeCommand",
                 {"command": "meta.status", "arguments": []},
-                timeout=10,
+                timeout=30,
                 poll=0.0002,
             ),
         )
@@ -210,7 +212,7 @@ def main():
             lambda: server.request(
                 "workspace/executeCommand",
                 {"command": "meta.session", "arguments": [{"limit": 50}]},
-                timeout=10,
+                timeout=30,
                 poll=0.0002,
             ),
         )

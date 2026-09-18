@@ -1426,13 +1426,21 @@ do
 
   if on_disk ~= '' and vim.fn.filereadable(on_disk) == 1 then
     local lines = vim.fn.readfile(on_disk)
-    local parsed = 0
-    for _, l in ipairs(lines) do
-      if pcall(vim.json.decode, l) then
-        parsed = parsed + 1
+    -- "Every line on disk parses" is too strong for a file any process may append to: a line
+    -- torn by a process that died mid-write is expected, and the reader skips it. What matters
+    -- is that everything the server reads *back* is a whole entry.
+    local entries = (type(reported) == 'table' and reported.entries) or {}
+    local whole = 0
+    for _, e in ipairs(entries) do
+      if type(e) == 'table' and type(e.kind) == 'string' then
+        whole = whole + 1
       end
     end
-    check(parsed == #lines and parsed > 0, 'every line is one JSON entry', ('%d/%d'):format(parsed, #lines))
+    check(
+      whole == #entries and whole > 0,
+      'every entry the server reads back is a whole one',
+      ('%d/%d entries, %d lines on disk'):format(whole, #entries, #lines)
+    )
     check(#lines > 0, 'and it has entries', ('%d line(s)'):format(#lines))
   end
 
@@ -1449,13 +1457,19 @@ do
   if session_buf == nil then
     skip('walking the record', 'no session buffer')
   else
-    local here, entry = nil, nil
+    local here, entry, wanted = nil, nil, nil
     for i, l in ipairs(vim.api.nvim_buf_get_lines(session_buf, 0, -1, false)) do
-      if l:find('ask.py', 1, true) and l:find(':', 1, true) then
-        here, entry = i, l
+      -- The rendered jump target: `… · name.ext:12`.
+      local name = l:match('·%s*([%w_%.%-]+):%d+%s*$')
+      if name ~= nil then
+        here, entry, wanted = i, l, name
       end
     end
-    check(here ~= nil, 'an entry names where it happened', entry or 'no line mentions ask.py')
+    check(
+      here ~= nil,
+      'an entry names where it happened',
+      entry or 'no entry in the buffer carries a place'
+    )
 
     if here ~= nil then
       vim.api.nvim_set_current_buf(session_buf)
@@ -1463,9 +1477,9 @@ do
       local keys = vim.api.nvim_replace_termcodes('<CR>', true, false, true)
       vim.api.nvim_feedkeys(keys, 'x', false)
       vim.wait(500)
-      local landed = vim.api.nvim_buf_get_name(0)
+      local landed = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ':t')
       check(
-        landed:find('ask.py', 1, true) ~= nil,
+        wanted ~= nil and landed == wanted,
         'and <CR> walks there',
         ('landed in %s at line %d'):format(landed, vim.api.nvim_win_get_cursor(0)[1])
       )
@@ -1627,6 +1641,102 @@ do
       'and on the right lines, struct included',
       ('lines %s'):format(table.concat(lines, ','))
     )
+  end
+end
+
+-- 17. What the editor can see ---------------------------------------------------------------
+
+-- The client assembles project context — imports, references, the covering test, the buffers
+-- the user has been in — and sends it with the request that generates. Two things have to hold:
+-- the model sees it, and a request whose context differs is **not** answered from the cache of
+-- one whose context did not. The second is the trap: the context is in the cache key, or the
+-- first cached answer poisons every later question about the same lines.
+do
+  local function calls()
+    local status
+    require('meta').command('meta.status', {}, function(_, r)
+      status = r
+    end)
+    -- Polled gently: every one of these is a line in the shared session record, and a tight
+    -- loop fills the last two hundred entries before the check that reads them runs.
+    vim.wait(5000, function()
+      return status ~= nil
+    end, 200)
+    return status and status.counters and status.counters.calls or -1
+  end
+
+  local function prompt_text()
+    local handle = io.popen('curl -s -m 3 http://127.0.0.1:8099/__requests')
+    local body = handle and handle:read('*a') or ''
+    if handle then
+      handle:close()
+    end
+    local ok, decoded = pcall(vim.json.decode, body)
+    if not ok or type(decoded) ~= 'table' then
+      return ''
+    end
+    local out = {}
+    for _, req in ipairs(decoded.requests or {}) do
+      for _, msg in ipairs(req.messages or {}) do
+        out[#out + 1] = type(msg.content) == 'string' and msg.content or ''
+      end
+    end
+    return table.concat(out, '\n')
+  end
+
+  -- A buffer the user "has been in", marked so its text is findable in the prompt.
+  local first_sibling = open_fixture('context_sibling_a.py', {
+    '# MARKER_SIBLING_A',
+    'def helper():',
+    '    return 1',
+  })
+  vim.api.nvim_set_current_buf(first_sibling)
+  vim.api.nvim_exec_autocmds('BufEnter', { buffer = first_sibling })
+
+  local target = open_fixture('context_target.py', {
+    'import json',
+    '',
+    '',
+    'def load_config(path):',
+    '    f = open(path)',
+    '    return json.load(f)',
+  })
+  vim.api.nvim_set_current_buf(target)
+  vim.api.nvim_win_set_cursor(0, { 5, 0 })
+
+  local attached = vim.wait(15000, function()
+    return #vim.lsp.get_clients({ bufnr = target, name = 'meta' }) > 0
+  end, 25)
+  check(attached, 'the plugin attached a client to the context fixture')
+
+  if not attached then
+    skip('project context', 'no client on the context fixture')
+  else
+    vim.wait(1000)
+
+    local before = calls()
+    require('meta').explain()
+    vim.wait(20000, function()
+      return calls() > before
+    end, 100)
+    check(calls() > before, 'the request is generated', ('calls %d -> %d'):format(before, calls()))
+
+    local prompt = prompt_text()
+    check(
+      prompt:find('MARKER_SIBLING_A', 1, true) ~= nil,
+      'the model is shown the buffer the user was in',
+      prompt:sub(1, 120):gsub('\n', ' ')
+    )
+    check(
+      prompt:find('PROJECT CONTEXT', 1, true) ~= nil,
+      'and it is labelled as the editor\'s contribution, not the file\'s own code'
+    )
+
+    -- The cache-key rule is verified in `verify/smoke.py`, where the request and its context
+    -- are built by hand: here the buffer set churns as the run opens fixtures, so "the same
+    -- context twice" is not a state this file can hold still. What this file proves is the
+    -- plugin's half — that the context is assembled and sent — and the server's half has a
+    -- place it can be controlled.
   end
 end
 

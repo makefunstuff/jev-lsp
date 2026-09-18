@@ -11,6 +11,91 @@ use crate::types::Finding;
 /// Lines of context shown immediately before and after the scope.
 pub const AROUND_LINES: u32 = 5;
 
+/// How much *project* context the client may contribute, enforced here rather than trusted.
+///
+/// The client decides what it can see — it is the side with a parser, the other language
+/// servers, and the list of buffers the user has touched — and the server decides how much of
+/// it reaches the prompt. These bounds are the same discipline `AROUND_LINES` follows: the
+/// model never chooses what it sees, and neither does an over-eager client.
+pub const MAX_PROVIDED_DOCS: usize = 4;
+pub const MAX_PROVIDED_LINES: usize = 40;
+
+/// A document the client sent with the request (`PROTOCOL.md` §6.1).
+///
+/// `text` travels in the request rather than being read from disk: no index, no watcher, and
+/// the server hashes exactly what it was given.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Provided {
+    /// What this is, in the client's words: `imports`, `reference`, `sibling`, `test`.
+    #[serde(default)]
+    pub kind: String,
+    pub uri: String,
+    #[serde(default)]
+    pub start_line: u32,
+    #[serde(default)]
+    pub end_line: u32,
+    pub text: String,
+}
+
+/// The order kinds are rendered in, so the same request always produces the same prompt.
+fn kind_rank(kind: &str) -> u8 {
+    match kind {
+        "imports" => 0,
+        "reference" => 1,
+        "test" => 2,
+        "sibling" => 3,
+        _ => 4,
+    }
+}
+
+/// Trim to the bounds, keeping the client's order within a kind.
+fn bounded(provided: &[Provided]) -> Vec<Provided> {
+    let mut kept: Vec<Provided> = provided
+        .iter()
+        .take(MAX_PROVIDED_DOCS * 4)
+        .map(|p| {
+            let lines: Vec<&str> = p.text.lines().collect();
+            let text = if lines.len() > MAX_PROVIDED_LINES {
+                lines[..MAX_PROVIDED_LINES].join("\n")
+            } else {
+                p.text.clone()
+            };
+            Provided {
+                text,
+                ..p.clone()
+            }
+        })
+        .collect();
+    kept.sort_by(|a, b| {
+        kind_rank(&a.kind)
+            .cmp(&kind_rank(&b.kind))
+            .then_with(|| a.uri.cmp(&b.uri))
+            .then_with(|| a.start_line.cmp(&b.start_line))
+    });
+    kept.truncate(MAX_PROVIDED_DOCS);
+    kept
+}
+
+/// A digest of the provided context, for the cache key.
+///
+/// Without this the cache would answer a request about one project state with an answer
+/// computed from another, which is the failure mode that makes caching a lie.
+pub fn provided_digest(provided: &[Provided]) -> String {
+    use sha2::{Digest as _, Sha256};
+    let mut hasher = Sha256::new();
+    for p in bounded(provided) {
+        hasher.update(p.kind.as_bytes());
+        hasher.update([0]);
+        hasher.update(p.uri.as_bytes());
+        hasher.update([0]);
+        hasher.update(p.start_line.to_le_bytes());
+        hasher.update(p.end_line.to_le_bytes());
+        hasher.update(p.text.as_bytes());
+        hasher.update([0xff]);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Context {
     pub path: String,
@@ -23,6 +108,8 @@ pub struct Context {
     pub code: String,
     pub around: Option<String>,
     pub findings: Vec<Finding>,
+    /// What the client could see that this side cannot (PROTOCOL §6.1), bounded and ordered.
+    pub provided: Vec<Provided>,
     /// The scope could not be shown whole and was narrowed to one statement.
     pub truncated: bool,
 }
@@ -41,6 +128,17 @@ pub fn build(
     scope: &Resolved,
     findings: &[Finding],
     max_findings: usize,
+) -> Context {
+    build_with(doc, scope, findings, max_findings, &[])
+}
+
+/// The same, with what the client sent.
+pub fn build_with(
+    doc: &Document,
+    scope: &Resolved,
+    findings: &[Finding],
+    max_findings: usize,
+    provided: &[Provided],
 ) -> Context {
     let start = scope.range.start_line;
     let end = scope.range.end_line;
@@ -94,6 +192,7 @@ pub fn build(
         code,
         around,
         findings: in_scope,
+        provided: bounded(provided),
         truncated: scope.truncated,
     }
 }
@@ -116,6 +215,19 @@ pub fn render_block(ctx: &Context) -> String {
         ctx.scope_start + 1,
         ctx.scope_end + 1
     ));
+    if !ctx.provided.is_empty() {
+        out.push_str("\nPROJECT CONTEXT (provided by the editor, not chosen by you):\n");
+        for p in &ctx.provided {
+            out.push_str(&format!(
+                "  ({kind}) {uri} lines {start}..{end}:\n{text}\n",
+                kind = if p.kind.is_empty() { "context" } else { &p.kind },
+                uri = p.uri,
+                start = p.start_line + 1,
+                end = p.end_line + 1,
+                text = p.text,
+            ));
+        }
+    }
     if ctx.truncated {
         out.push_str(
             "NOTE: the enclosing declaration is larger than the configured limit, so only \
@@ -146,6 +258,66 @@ pub fn render_block(ctx: &Context) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn provided(kind: &str, uri: &str, lines: usize) -> Provided {
+        Provided {
+            kind: kind.to_string(),
+            uri: uri.to_string(),
+            start_line: 0,
+            end_line: lines.saturating_sub(1) as u32,
+            text: (0..lines).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n"),
+        }
+    }
+
+    #[test]
+    fn provided_context_is_bounded_and_ordered() {
+        let many: Vec<Provided> = (0..10)
+            .map(|i| provided("sibling", &format!("file:///{i}.rs"), 5))
+            .collect();
+        let kept = bounded(&many);
+        assert_eq!(kept.len(), MAX_PROVIDED_DOCS, "a client cannot flood the prompt");
+        assert_eq!(kept[0].uri, "file:///0.rs", "the client's order within a kind");
+
+        let long = bounded(&[provided("imports", "file:///a.py", 500)]);
+        assert_eq!(
+            long[0].text.lines().count(),
+            MAX_PROVIDED_LINES,
+            "and one document cannot either"
+        );
+
+        // Kinds are rendered in a fixed order whatever order they arrived in.
+        let mixed = bounded(&[
+            provided("sibling", "file:///s.rs", 2),
+            provided("imports", "file:///i.py", 2),
+            provided("reference", "file:///r.py", 2),
+            provided("test", "file:///t.py", 2),
+        ]);
+        let kinds: Vec<&str> = mixed.iter().map(|p| p.kind.as_str()).collect();
+        assert_eq!(kinds, vec!["imports", "reference", "test", "sibling"]);
+    }
+
+    #[test]
+    fn the_same_context_digests_the_same_and_a_different_one_does_not() {
+        let a = vec![provided("imports", "file:///i.py", 3)];
+        let same = vec![provided("imports", "file:///i.py", 3)];
+        let other_text = vec![Provided {
+            text: "different".to_string(),
+            ..provided("imports", "file:///i.py", 3)
+        }];
+        assert_eq!(provided_digest(&a), provided_digest(&same));
+        assert_ne!(
+            provided_digest(&a),
+            provided_digest(&other_text),
+            "the text is part of what was asked"
+        );
+        assert_eq!(
+            provided_digest(&[]),
+            provided_digest(&[]),
+            "no context is a stable answer too"
+        );
+    }
+
     use super::*;
     use crate::lang::Language;
     use crate::scope::{self};

@@ -472,6 +472,18 @@ struct Span {
     end_line: u32,
 }
 
+/// What the client sent about the project, from an argument or from a code action's `data`.
+///
+/// `data` is round-tripped by the client, so the context for a *resolve* rides there: the
+/// request that generates is the slow one by design (N3), and the fast paths stay fast because
+/// nothing else carries context.
+fn provided_context(source: Option<&Value>) -> Vec<meta_core::context::Provided> {
+    source
+        .and_then(|v| v.get("context"))
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default()
+}
+
 /// A value from the first argument, or from `scope` inside it.
 ///
 /// Commands put the anchor at the top level (`meta.explain`) or under `scope` (`meta.plan`),
@@ -856,6 +868,9 @@ impl LanguageServer for MetaServer {
         let Some(raw) = action.data.clone() else {
             return Ok(action);
         };
+        // Read before the raw value is consumed: the client round-trips `data`, so the
+        // context it attached for this resolve is in there.
+        let provided = provided_context(Some(&raw));
         let Ok(mut data) = serde_json::from_value::<ActionData>(raw) else {
             return Ok(action);
         };
@@ -908,7 +923,9 @@ impl LanguageServer for MetaServer {
         // The document is still needed afterwards, to stamp the edit.
         let target = doc.clone();
         let outcome = self
-            .blocking(move |engine| engine.generate(&target, verb, &scope, &in_scope))
+            .blocking(move |engine| {
+                engine.generate_with_context(&target, verb, &scope, &in_scope, &provided, None)
+            })
             .await;
         match outcome {
             Ok(Generated::Edit(proposal)) => {
@@ -1132,10 +1149,15 @@ impl LanguageServer for MetaServer {
         // record is never read back to decide anything (N9); a read-only checkout that cannot
         // be written to is not a reason to fail a request over a convenience.
         //
-        // `meta.definitions` is left out on purpose: it is the client telling the server what
-        // it already knows, sent on every change, and recording it would bury the work the
-        // record exists to show.
-        if command != "meta.definitions" {
+        // Three commands are left out on purpose, for the same reason: they are not work.
+        // `meta.definitions` is the client telling the server what it already knows, sent on
+        // every change; `meta.status` and `meta.session` are polls — the statusline asks for
+        // the first every few seconds and the session buffer for the second. Recording polls
+        // fills the record with the act of reading it and buries the work it exists to show,
+        // which is exactly what happened: a day of testing left ninety-five megabytes of
+        // `meta.status` behind and nothing else in the last two hundred entries.
+        let recorded = !matches!(command.as_str(), "meta.definitions" | "meta.status" | "meta.session");
+        if recorded {
         if let Some(root) = self.state.root() {
             let _ = crate::trace::append(
                 &root,
@@ -1482,6 +1504,7 @@ impl MetaServer {
                     return result_err("bad_arguments", "meta.explain needs {uri, line}");
                 };
                 let explicit = explicit_scope(arg);
+                let provided = provided_context(Some(arg));
                 let uri = arg.get("uri").and_then(|v| v.as_str()).unwrap_or_default().to_string();
                 let line = arg.get("line").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                 let Some(doc) = self.state.doc(&uri) else {
@@ -1496,11 +1519,12 @@ impl MetaServer {
                     .streaming(
                         params.work_done_progress_params.work_done_token.clone(),
                         move |engine, delta| {
-                            engine.generate_streaming(
+                            engine.generate_with_context(
                                 &target,
                                 Verb::Explain,
                                 &scope_for_call,
                                 &[],
+                                &provided,
                                 Some(delta),
                             )
                         },
@@ -1631,6 +1655,7 @@ impl MetaServer {
                     ),
                     question
                 );
+                let provided = provided_context(Some(arg));
                 let asked = question.clone();
                 let outcome = self
                     .streaming(
@@ -1640,6 +1665,7 @@ impl MetaServer {
                                 &target,
                                 &scope_for_call,
                                 &about,
+                                &provided,
                                 &key,
                                 |ctx| meta_core::verbs::follow_up(ctx, &asked),
                                 Some(delta),

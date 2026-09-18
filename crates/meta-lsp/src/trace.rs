@@ -18,10 +18,22 @@ pub fn path_for(root: &str) -> PathBuf {
     Path::new(root).join(".git").join("meta").join("session.jsonl")
 }
 
-/// Append one entry.
+/// How large the record is allowed to get before the oldest lines are dropped.
+///
+/// A log with no bound is a disk filling up slowly. Found the hard way: a day of testing
+/// polled `meta.status` in a loop and left ninety-five megabytes of it behind. One megabyte is
+/// a few thousand entries — more than anyone reads back — and staying small is what keeps the
+/// session buffer instant.
+const MAX_BYTES: u64 = 1024 * 1024;
+
+/// What to keep when the record is trimmed: the newest lines, this many bytes' worth.
+const KEEP_BYTES: usize = 256 * 1024;
+
+/// Append one entry, trimming the record if it has grown past its bound.
 ///
 /// A single `O_APPEND` write of a line this size is atomic on Linux, so two processes sharing
-/// a root interleave lines rather than characters, and a reader never sees half of one.
+/// a root interleave lines rather than characters. A line can still be torn if the process is
+/// killed mid-write, which is why `tail` skips what it cannot parse.
 pub fn append(root: &str, entry: &Value) -> std::io::Result<()> {
     let path = path_for(root);
     if let Some(dir) = path.parent() {
@@ -30,9 +42,34 @@ pub fn append(root: &str, entry: &Value) -> std::io::Result<()> {
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path)?;
+        .open(path.clone())?;
     writeln!(file, "{entry}")?;
+    drop(file);
+
+    // Checked after the write rather than before: the size is only interesting once it has
+    // grown, and a `stat` per append is cheaper than a trim per append.
+    if std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) > MAX_BYTES {
+        trim(&path);
+    }
     Ok(())
+}
+
+/// Keep the newest complete lines, in place.
+fn trim(path: &std::path::Path) {
+    let Ok(raw) = std::fs::read(path) else {
+        return;
+    };
+    let keep_from = raw.len().saturating_sub(KEEP_BYTES);
+    // Start at a line boundary: a tail that begins mid-line is not an entry.
+    let start = raw[keep_from..]
+        .iter()
+        .position(|b| *b == b'\n')
+        .map(|offset| keep_from + offset + 1)
+        .unwrap_or(keep_from);
+    if start >= raw.len() {
+        return;
+    }
+    let _ = std::fs::write(path, &raw[start..]);
 }
 
 /// The last `limit` entries, oldest first.
@@ -107,6 +144,34 @@ mod tests {
         let all = tail(&root, 10);
         assert_eq!(all.len(), 2, "the good entries survive a half-written one");
         assert_eq!(all[1]["n"], 2);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_record_is_bounded_and_keeps_the_newest() {
+        let root = root("bounded");
+        // Enough to pass the bound, each entry big enough that this stays quick.
+        let filler = "x".repeat(4096);
+        for i in 0..400 {
+            append(&root, &json!({"n": i, "pad": filler})).expect("append");
+        }
+        let path = path_for(&root);
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        assert!(
+            size <= MAX_BYTES + 8192,
+            "the record does not grow without bound: {size} bytes"
+        );
+        let kept = tail(&root, 10_000);
+        assert!(!kept.is_empty(), "and it still reads back");
+        assert_eq!(
+            kept.last().and_then(|e| e["n"].as_u64()),
+            Some(399),
+            "the newest entry is the one still there"
+        );
+        assert!(
+            kept.iter().all(|e| e.get("n").is_some()),
+            "every line that survives is a whole entry"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

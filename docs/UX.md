@@ -21,6 +21,13 @@ inline annotation, or a key you already press.
 Free text appears exactly once, in `:Meta plan`, because the protocol cannot ask for text
 and because a goal is the only thing a picker cannot express.
 
+**Context the model is shown is the editor's, not the server's** (PROTOCOL §3.4.4). When a
+request generates — an explanation, a question about a finding, a resolved action — the plugin
+attaches the imports at the top of the file, what the *other* language servers say refers to
+the symbol, the test that covers it, and the other buffers that are open. The server bounds
+that (four documents, forty lines each), orders it, and folds it into the cache key, so the
+same question about the same state is still answered once.
+
 Every row above is built. The plan buffer came last: `:Meta plan <goal>` renders the plan the
 server verified as one line per step, `<CR>` applies the step on the cursor's line, `a` applies
 the rest, `u` takes the last one on that line back, and each line says what happened to it.

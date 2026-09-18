@@ -7,7 +7,7 @@ use crate::state::AppState;
 use meta_core::budget::{Budget, Refusal};
 use meta_core::cache::{self, Conclusion};
 use meta_core::config::Config;
-use meta_core::context;
+use meta_core::context::{self, Provided};
 use meta_core::contract;
 use meta_core::document::Document;
 use meta_core::edit::{self, BuildOptions};
@@ -295,7 +295,7 @@ impl Engine {
         scope: &Resolved,
         findings_in_scope: &[Finding],
     ) -> Result<Generated, Failure> {
-        self.generate_streaming(doc, verb, scope, findings_in_scope, None)
+        self.generate_with_context(doc, verb, scope, findings_in_scope, &[], None)
     }
 
     /// The same generation, with the answer reported as it arrives.
@@ -304,12 +304,17 @@ impl Engine {
     /// returns, and a repair attempt — which only ever happens for artifacts — means the
     /// preview was the first, rejected attempt. The Result is authoritative; the stream is
     /// what makes the wait visible.
-    pub fn generate_streaming(
+    /// The same, with whatever the editor could see that this side cannot (PROTOCOL §6.1).
+    ///
+    /// The context is hashed into the cache key: two requests that differ only in what the
+    /// client sent are two different questions.
+    pub fn generate_with_context(
         &self,
         doc: &Document,
         verb: Verb,
         scope: &Resolved,
         findings_in_scope: &[Finding],
+        provided: &[Provided],
         mut delta: Delta<'_>,
     ) -> Result<Generated, Failure> {
         let cfg = self.config();
@@ -325,12 +330,13 @@ impl Engine {
             return Err(Failure::Skipped(skip.reason()));
         }
 
-        let key = cache::op_key(
+        let key = cache::op_key_with_context(
             verb.as_str(),
             PROMPT_VERSION,
             &doc.hash,
             scope.range.start_line,
             scope.range.end_line,
+            &context::provided_digest(provided),
         );
         if let Some(hit) = self.state.cache.get(&key) {
             if let Some(p) = &hit.edit {
@@ -341,7 +347,7 @@ impl Engine {
             }
         }
 
-        let ctx = context::build(doc, scope, findings_in_scope, 12);
+        let ctx = context::build_with(doc, scope, findings_in_scope, 12, provided);
 
         let generated = match verb.output() {
             meta_core::types::Output::Artifact => {
@@ -421,6 +427,7 @@ impl Engine {
         doc: &Document,
         scope: &Resolved,
         findings_in_scope: &[Finding],
+        provided: &[Provided],
         cache_key: &str,
         render_prompt: impl Fn(&context::Context) -> verbs::PromptSpec,
         mut delta: Delta<'_>,
@@ -443,7 +450,7 @@ impl Engine {
             }
         }
 
-        let ctx = context::build(doc, scope, findings_in_scope, 12);
+        let ctx = context::build_with(doc, scope, findings_in_scope, 12, provided);
         let (raw, _usage) = self.with_repair(
             &cfg,
             Tier::Reason,
