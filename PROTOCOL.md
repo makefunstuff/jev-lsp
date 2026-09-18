@@ -550,7 +550,13 @@ Recorded so the refusals are not relitigated:
 - **Model-generated action titles on the fast path.** Non-deterministic labels destroy
   muscle memory.
 - **Server-side session or conversation memory.** The plan artifact is the continuation.
-- **`willSaveWaitUntil` by default.** Blocking writes on a model call.
+- **`willSaveWaitUntil` by default.** Blocking writes on a model call. With N8 in force it
+  could only ever return edits nobody approved, so the honest version of this hook is one that
+  returns nothing — which is a no-op with a 1 s tax on every save.
+- **`relatedDocuments` on a finding.** The diagnostic provider advertises
+  `interFileDependencies: false`: nothing here is computed across files, so the field would
+  carry an empty map on every finding. It becomes meaningful the day cross-file analysis does,
+  and not before.
 - **Auto-apply beyond `fixAll`/`fix` with explicit opt-in.**
 - **A filetype or language allowlist as the attachment mechanism.** Every comparable
   project gates support this way (`docs/research/prior-art.md` §4); it contradicts N10.

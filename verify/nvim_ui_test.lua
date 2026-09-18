@@ -1366,7 +1366,6 @@ end
 -- repository root's `.git/`, so it survives a restart and never shows up in `git status`. It is
 -- a record, not memory: nothing consults it to decide anything.
 do
-  local session_dir = root .. '/.git/meta'
   require('meta').session()
   local opened = vim.wait(10000, function()
     for _, b in ipairs(vim.api.nvim_list_bufs()) do
@@ -1399,7 +1398,9 @@ do
     text:sub(-120):gsub('\n', ' ')
   )
 
-  -- The count the server reports and the lines the buffer shows are two views of one record.
+  -- What the server reports, asked for once: the path it keeps the record at, and how many
+  -- entries it holds. The root is whatever the client told the server it was, so the path is
+  -- the server's answer rather than a guess made here.
   local reported = nil
   require('meta').command('meta.session', { { limit = 200 } }, function(_, r)
     reported = r
@@ -1407,15 +1408,23 @@ do
   vim.wait(5000, function()
     return reported ~= nil
   end, 25)
+
+  check(
+    type(reported) == 'table' and type(reported.path) == 'string' and reported.path ~= ''
+      and vim.fn.filereadable(reported.path) == 1,
+    'the record is on disk at the path the server reports',
+    vim.inspect(reported and reported.path)
+  )
+  local on_disk = type(reported) == 'table' and reported.path or ''
+
+  -- The count and the lines the buffer shows are two views of one record.
   check(
     type(reported) == 'table' and type(reported.count) == 'number' and reported.count >= 1,
     'and the server reports at least one entry',
     vim.inspect(reported and reported.count)
   )
 
-  local on_disk = session_dir .. '/session.jsonl'
-  check(vim.fn.filereadable(on_disk) == 1, 'the record is on disk, under the root', on_disk)
-  if vim.fn.filereadable(on_disk) == 1 then
+  if on_disk ~= '' and vim.fn.filereadable(on_disk) == 1 then
     local lines = vim.fn.readfile(on_disk)
     local parsed = 0
     for _, l in ipairs(lines) do
