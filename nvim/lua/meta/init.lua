@@ -474,6 +474,40 @@ end
 --- The one argument is the position itself: `[{ uri, line }]`, line 0-based.
 ---
 --- @param cb? fun(err: table?, result: any)
+--- Ask a question: about this file, or about nothing in particular.
+---
+--- Not a verb and not a scope: the question decides. With a file open the server is handed the
+--- enclosing scope, because that is what makes "this API" or "this method" concrete; with none
+--- the question stands alone. With `opts.web` the answer may ask for a page to be fetched —
+--- https only, one page, size- and time-capped — and the artifact says which url was read.
+--- @param question string? asked interactively when absent
+--- @param opts? { web?: boolean }
+function M.ask(question, opts)
+  opts = opts or {}
+  if question == nil or question == '' then
+    vim.ui.input({ prompt = opts.web and 'meta: ask (web) › ' or 'meta: ask › ' }, function(text)
+      if text ~= nil and text ~= '' then
+        M.ask(text, opts)
+      end
+    end)
+    return
+  end
+  local args = { question = question, web = opts.web == true }
+  local bufnr = vim.api.nvim_get_current_buf()
+  if vim.api.nvim_buf_get_name(bufnr) ~= '' and vim.bo[bufnr].buftype == '' then
+    local scope = cursor_scope()
+    args.uri = scope.uri
+    args.line = scope.line
+    local provided = context.for_position(bufnr, scope.line, vim.api.nvim_win_get_cursor(0)[2])
+    if #provided > 0 then
+      args.context = provided
+    end
+  end
+  M.command('meta.ask', { args }, function(err, result, ctx)
+    render_artifact('meta.ask', err, result, ctx)
+  end)
+end
+
 function M.explain(cb)
   local scope = cursor_scope()
   local provided = context.for_position(
@@ -1231,7 +1265,17 @@ function M.hints(on)
   if enable == nil then
     enable = not vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr })
   end
-  local ok, err = pcall(vim.lsp.inlay_hint.enable, enable, { bufnr = bufnr })
+  -- Scoped to this server's client. Without `client_id`, Neovim enables hints for *every*
+  -- client attached to the buffer, so pressing this key turned on clangd's hints as well — and
+  -- a hint request carries no document version, so a reply computed before the edit is applied
+  -- to the edited buffer and `nvim_buf_set_extmark` rejects the column. That is a decoration
+  -- provider error on every redraw, from a key that is supposed to be about this server.
+  local client = vim.lsp.get_clients({ bufnr = bufnr, name = M.name })[1]
+  if client == nil then
+    vim.notify('meta: no server attached to this buffer', vim.log.levels.WARN)
+    return enable
+  end
+  local ok, err = pcall(vim.lsp.inlay_hint.enable, enable, { bufnr = bufnr, client_id = client.id })
   if not ok then
     vim.notify('meta: inlay hints are not available here: ' .. tostring(err), vim.log.levels.WARN)
     return enable
@@ -1323,6 +1367,37 @@ end
 --- that does not exist — `<leader>mt` still filters the *native* menu to the `test` verb's
 --- family, which is prefix-matched by the client (`[R4]`).
 --- @param prefix? string  default `'<leader>m'`
+--- Make `<Tab>` accept the ghost text, and leave `<Tab>` doing what it already did otherwise.
+---
+--- Neovim renders the candidate as overlay text and hands the key to the plugin: without a
+--- mapping, `vim.lsp.inline_completion.get()` is never called and nothing is ever accepted,
+--- however good the completion was. `docs/UX.md` §3.4 promised this key; nothing implemented
+--- it until now.
+---
+--- The fallback matters more than the accept. Neovim 0.12 binds `<Tab>` itself
+--- (`vim/_core/defaults.lua`: `vim.snippet.jump` when a snippet is active, the key's ordinary
+--- behaviour otherwise), and so does any completion plugin. Reinstating a literal `<Tab>` when
+--- there is nothing to accept throws that away and leaves a key that reindents code, which is
+--- precisely what happened. The binding is captured *before* this map exists — afterwards
+--- `maparg` returns this map — and called directly when there is no candidate.
+--- @param bufnr integer
+function M.accept_keymap(bufnr)
+  local previous = vim.fn.maparg('<Tab>', 'i', false, true)
+  vim.keymap.set('i', '<Tab>', function()
+    if vim.lsp.inline_completion.get({ bufnr = bufnr }) then
+      return ''
+    end
+    if previous and type(previous.callback) == 'function' then
+      local out = previous.callback()
+      return type(out) == 'string' and out or ''
+    end
+    if previous and previous.rhs and previous.rhs ~= '' then
+      return vim.api.nvim_replace_termcodes(previous.rhs, true, false, true)
+    end
+    return vim.api.nvim_replace_termcodes('<Tab>', true, false, true)
+  end, { buffer = bufnr, expr = true, desc = 'meta: accept the inline completion' })
+end
+
 function M.keymaps(prefix)
   prefix = prefix or '<leader>m'
   local maps = {
@@ -1352,6 +1427,12 @@ function M.keymaps(prefix)
       -- (docs/ROADMAP.md U4) selects a verb, the native menu is filtered to that family;
       -- kind filtering is prefix-based on `.`, so nothing else matches.
       vim.lsp.buf.code_action({ context = { only = { 'refactor.rewrite.meta' } } })
+    end },
+    { 'q', { 'n' }, 'ask a question', function()
+      M.ask()
+    end },
+    { 'W', { 'n' }, 'ask a question, allowing a documentation fetch', function()
+      M.ask(nil, { web = true })
     end },
     { 'd', { 'n' }, 'dismiss finding at cursor', function()
       M.dismiss()
@@ -1387,6 +1468,9 @@ end
 --- command line reach the same things; no keymap's meaning depends on model state.
 --- @type table<string, fun(arg: string|nil)>
 M.subcommands = {
+  ask = function(arg)
+    M.ask(arg ~= '' and arg or nil)
+  end,
   cancel = function()
     M.cancel()
   end,
@@ -1482,13 +1566,22 @@ function M.setup(opts)
     and install.settings.inline_completion
     and install.settings.inline_completion.enabled
   if inline then
+    -- Enabled once, unfiltered, *before* any client attaches.
+    --
+    -- Per-buffer calls from `LspAttach` do not take. `vim.lsp._capability.enable` walks the
+    -- client's `attached_buffers` when it is given a buffer, and that table is not yet
+    -- populated while the attach event is being handled: the loop runs zero times, no
+    -- capability is created, and nothing errors — the completor is simply never installed and
+    -- no completion is ever requested. Neovim's own quickstart calls this unfiltered for the
+    -- same reason, and clients attaching later pick the marker up.
+    vim.lsp.inline_completion.enable(true)
     vim.api.nvim_create_autocmd('LspAttach', {
       callback = function(ev)
         local client = vim.lsp.get_client_by_id(ev.data.client_id)
         if client and client.name == M.name
           and client:supports_method('textDocument/inlineCompletion')
         then
-          vim.lsp.inline_completion.enable(true, { bufnr = ev.buf, client_id = ev.data.client_id })
+          M.accept_keymap(ev.buf)
         end
       end,
     })

@@ -369,6 +369,8 @@ impl Engine {
                 let profile = meta_core::lang::profile(&doc.language.name);
                 let opts = BuildOptions {
                     max_scope_lines: cfg.languages.max_scope_lines,
+                    // The user selected a scope; the answer stays inside it or it is repaired.
+                    scope_lines: Some((scope.range.start_line, scope.range.end_line)),
                 };
                 // Both kinds of failure are repaired, within one shared budget: the response
                 // not being valid JSON, and the answer not being applicable to this document
@@ -423,6 +425,19 @@ impl Engine {
     ///
     /// The follow-up is a question rather than an action, so it has no verb — and this is what
     /// keeps it from being a second implementation of everything an artifact needs.
+    /// One model call for a question, returning the text as it came.
+    ///
+    /// Not an artifact: a question may be answered by asking for a page to be fetched, and that
+    /// request is a single line rather than a document. The caller decides what the answer means.
+    pub fn ask_round(&self, spec: verbs::PromptSpec) -> Result<String, Failure> {
+        let cfg = self.config();
+        if !cfg.enabled {
+            return Err(Failure::Skipped("meta is stopped".to_string()));
+        }
+        let response = self.chat_with(&cfg, Tier::Reason, spec, None, None)?;
+        Ok(response.text)
+    }
+
     pub fn artifact_for(
         &self,
         doc: &Document,
@@ -635,6 +650,19 @@ impl Engine {
         let prefix = &doc.text[..offset];
         let suffix = &doc.text[offset..];
 
+        // Never complete in the middle of a word. Asked at `res|ult` the model continues the
+        // *token*, which is byte-correct and useless: measured against the live endpoint, that
+        // position produced `rn result` and `ult += value`. No editor's completion engine fires
+        // there, and neither does this one — the request is not made at all.
+        if let (Some(before), Some(after)) = (prefix.chars().next_back(), suffix.chars().next()) {
+            let word = |c: char| c.is_alphanumeric() || c == '_';
+            if word(before) && word(after) {
+                return Err(Failure::Skipped(
+                    "the cursor is inside a word".to_string(),
+                ));
+            }
+        }
+
         // Do not fire on trivial context: a completion for every keystroke is noise.
         let non_whitespace = prefix
             .chars()
@@ -690,6 +718,11 @@ impl Engine {
             None,
         )?;
         let text = clean_completion(&response.text);
+        if verbs::opens_a_new_definition(prefix, &text) {
+            return Err(Failure::Skipped(
+                "the completion started a new definition instead of continuing this one".to_string(),
+            ));
+        }
         self.state.cache.put(
             &key,
             Conclusion {

@@ -395,6 +395,7 @@ fn action(
                 .map_err(|e| Failure::Contract(e.to_string()))?;
             let options = BuildOptions {
                 max_scope_lines: config.languages.max_scope_lines,
+                scope_lines: Some((prepared.scope.range.start_line, prepared.scope.range.end_line)),
             };
             let proposal = edit::build_proposal(
                 &prepared.doc.text,

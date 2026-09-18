@@ -118,7 +118,7 @@ impl MetaServer {
         tokio::spawn(async move {
             // A save that lands during startup must not be analysed against the built-in
             // defaults: wait for the client's settings, then proceed.
-            state.await_config(std::time::Duration::from_secs(5)).await;
+            state.await_config(CONFIG_GRACE).await;
             let mut wait = debounce;
             loop {
                 if let Some(d) = wait.take() {
@@ -165,8 +165,11 @@ impl MetaServer {
                 // sees whatever the cache currently holds for the document.
                 if state.doc(&uri).is_some() {
                     // The lenses and the hints both carry a finding count, so a new analysis
-                    // changes them.
-                    if client.inlay_hint_refresh().await.is_err() {
+                    // changes them — but only refresh what someone is displaying. The client
+                    // broadcasts this to every attached server, and a hint answer carries no
+                    // version, so refreshing hints nobody asked for is how an unrelated server
+                    // ends up returning positions that no longer exist.
+                    if state.hints_are_wanted() && client.inlay_hint_refresh().await.is_err() {
                         client
                             .log_message(
                                 MessageType::LOG,
@@ -324,6 +327,7 @@ const COMMANDS: &[&str] = &[
     "meta.recompute",
     "meta.review",
     "meta.explain",
+    "meta.ask",
     "meta.followup",
     "meta.document",
     "meta.session",
@@ -633,6 +637,12 @@ async fn partial_artifact(client: &Client, token: &ProgressToken, markdown: &str
 /// How often a streamed answer is forwarded. One notification per token would be hundreds of
 /// messages for one explanation; this is fast enough to look live and slow enough not to
 /// matter.
+/// How long model work waits for the client's settings before proceeding on the defaults.
+///
+/// The round trip is local and takes milliseconds; the limit exists for a client that never
+/// answers, which must not stall the server forever.
+const CONFIG_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
 const STREAM_FLUSH: std::time::Duration = std::time::Duration::from_millis(120);
 
 /// How often to say something while the model is still thinking: slow enough not to be noise,
@@ -1015,6 +1025,7 @@ impl LanguageServer for MetaServer {
     /// that has to earn its place: only a declaration with cached findings gets a hint, and
     /// the label is the count. Silence is the default, not a state to be reported.
     async fn inlay_hint(&self, params: InlayHintParams) -> RpcResult<Option<Vec<InlayHint>>> {
+        self.state.mark_hints_asked();
         let uri = params.text_document.uri.to_string();
         let Some(doc) = self.state.doc(&uri) else {
             return Ok(None);
@@ -1379,6 +1390,11 @@ impl MetaServer {
         F: FnOnce(Engine) -> Result<T, Failure> + Send + 'static,
         T: Send + 'static,
     {
+        // Model work started before the client's settings arrive would run against the
+        // built-in defaults: the wrong endpoint, the wrong limits, the wrong model. A request
+        // that lands during startup waits here instead of answering from a configuration the
+        // user never chose.
+        self.state.await_config(CONFIG_GRACE).await;
         let state = self.state.clone();
         tokio::task::spawn_blocking(move || work(Engine::new(state)))
             .await
@@ -1395,6 +1411,9 @@ impl MetaServer {
         F: FnOnce(Engine, &mut dyn FnMut(&str)) -> Result<T, Failure> + Send + 'static,
         T: Send + 'static,
     {
+        // Same gate as `blocking`: a plan or a review started during startup must not be
+        // produced by a configuration the client never sent.
+        self.state.await_config(CONFIG_GRACE).await;
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let forwarder = token.map(|t| {
             let client = self.client.clone();
@@ -1497,6 +1516,9 @@ impl MetaServer {
                     .await;
             }
         }
+        // Applied, refused, null, or impossible: the answer has arrived, and every model path
+        // that waits on this gate may proceed instead of waiting out CONFIG_GRACE.
+        self.state.mark_config_ready();
     }
 
     async fn run_command(&self, params: &ExecuteCommandParams) -> Value {
@@ -1672,6 +1694,132 @@ impl MetaServer {
                         .as_deref()
                         .map(|r| crate::trace::path_for(r).to_string_lossy().to_string()),
                 }))
+            }
+            "meta.ask" => {
+                let arg = params.arguments.first().cloned().unwrap_or_else(|| json!({}));
+                let question = arg
+                    .get("question")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                if question.is_empty() {
+                    return result_err("bad_arguments", "meta.ask needs a question");
+                }
+                // Reaching the network happens only when the caller allows it, and only to a
+                // url the answer names in full — a model that could pull arbitrary bytes into
+                // its own prompt is a prompt-injection path, and a user who cannot see which
+                // page was read cannot judge the answer.
+                let web = arg.get("web").and_then(|v| v.as_bool()).unwrap_or(false);
+
+                // Context is optional and never wider than what the client named: a question
+                // about an API has no file at all, and a question about a function is not handed
+                // the whole project because the cursor happened to be somewhere.
+                let uri = arg.get("uri").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                let held = arg
+                    .get("line")
+                    .and_then(|v| v.as_u64())
+                    .and_then(|line| {
+                        self.state.doc(&uri).map(|doc| {
+                            let scope = self.engine.scope_at(&doc, line as u32, None);
+                            (doc, scope)
+                        })
+                    });
+                let ctx = held.as_ref().map(|(doc, scope)| {
+                    meta_core::context::build_with(
+                        doc,
+                        scope,
+                        &[],
+                        12,
+                        &provided_context(Some(&arg)),
+                    )
+                });
+
+                let cfg = self.state.config();
+                let key = meta_core::cache::op_key_for(
+                    "ask",
+                    meta_core::types::PROMPT_VERSION,
+                    &cfg.models.reason.model,
+                    &format!("{question}|{web}"),
+                    0,
+                    0,
+                    "",
+                );
+                if let Some(hit) = self.state.cache.get(&key) {
+                    if let Some(markdown) = &hit.artifact {
+                        return result_ok(json!({"markdown": markdown, "cached": true}));
+                    }
+                }
+
+                let spec = meta_core::verbs::ask(ctx.as_ref(), &question, web);
+                let first = match self.blocking(move |engine| engine.ask_round(spec)).await {
+                    Ok(text) => text,
+                    Err(f) => return result_err("failed", &f.message()),
+                };
+
+                let url = if web {
+                    meta_core::verbs::fetch_request(&first).map(|u| u.to_string())
+                } else {
+                    None
+                };
+                let (answer, fetched) = match url {
+                    None => (first, None),
+                    Some(url) => {
+                        let page = tokio::task::spawn_blocking({
+                            let url = url.clone();
+                            move || meta_core::fetch::page(&url)
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(format!("the fetch task failed: {e}")));
+                        match page {
+                            Ok(text) => {
+                                let grounded = format!(
+                                    "{question}\n\nDOCUMENTATION FETCHED FROM {url}:\n\n{text}"
+                                );
+                                let spec = meta_core::verbs::ask(ctx.as_ref(), &grounded, false);
+                                let grounded_answer =
+                                    match self.blocking(move |engine| engine.ask_round(spec)).await {
+                                        Ok(text) => text,
+                                        Err(f) => return result_err("failed", &f.message()),
+                                    };
+                                (grounded_answer, Some(url))
+                            }
+                            Err(why) => {
+                                return result_err(
+                                    "fetch_failed",
+                                    &format!("{url} could not be read: {why}"),
+                                );
+                            }
+                        }
+                    }
+                };
+
+                // The model is shown an artifact schema either way, so an answer that is JSON
+                // is one — parse it whatever round it came from. Measured: the first round,
+                // asked not to be JSON, answered with an artifact anyway, and the raw object was
+                // handed to the user as the answer.
+                let markdown = match meta_core::contract::parse_artifact(&answer) {
+                    Ok(raw) => raw.markdown,
+                    Err(_) if fetched.is_some() => {
+                        return result_err(
+                            "bad_answer",
+                            "the answer after reading a page was not usable",
+                        )
+                    }
+                    Err(_) => answer,
+                };
+                let markdown = match &fetched {
+                    Some(url) => format!("_Read: <{url}>_\n\n{markdown}"),
+                    None => markdown,
+                };
+                self.state.cache.put(
+                    &key,
+                    meta_core::cache::Conclusion {
+                        artifact: Some(markdown.clone()),
+                        ..Default::default()
+                    },
+                );
+                result_ok(json!({"markdown": markdown, "fetched": fetched}))
             }
             "meta.followup" => {
                 let Some(arg) = params.arguments.first() else {

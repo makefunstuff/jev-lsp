@@ -11,6 +11,7 @@ pub mod context;
 pub mod contract;
 pub mod document;
 pub mod edit;
+pub mod fetch;
 pub mod findings;
 pub mod gates;
 pub mod lang;

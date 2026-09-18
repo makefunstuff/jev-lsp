@@ -101,6 +101,13 @@ pub struct AppState {
     pub cache: Cache,
     pub budget: Budget,
     config: RwLock<Config>,
+    /// Set once a client has asked for inlay hints at least once.
+    ///
+    /// `workspace/inlayHint/refresh` is broadcast by the client to *every* attached server, and
+    /// an inlay-hint request carries no document version — so a refresh sent for hints nobody
+    /// displays is a chance for an unrelated server to answer with positions from before the
+    /// edit. Nothing is refreshed until something has been asked for.
+    hints_asked: AtomicBool,
     /// Set once the client's `meta` section has been read.
     ///
     /// A buffer saved during startup can be analysed before the first
@@ -128,6 +135,7 @@ impl AppState {
             cache: Cache::new(512),
             budget: Budget::new(2),
             config: RwLock::new(config),
+            hints_asked: AtomicBool::new(false),
             config_ready: AtomicBool::new(false),
             config_notify: tokio::sync::Notify::new(),
             backend,
@@ -152,9 +160,18 @@ impl AppState {
         };
         next.apply_env_overrides();
         *self.config.write() = next;
-        self.config_ready.store(true, Ordering::Release);
-        self.config_notify.notify_waiters();
+        self.mark_config_ready();
         None
+    }
+
+    /// True once a client has asked this server for inlay hints.
+    pub fn hints_are_wanted(&self) -> bool {
+        self.hints_asked.load(Ordering::Acquire)
+    }
+
+    /// Note that hints were asked for, so refreshing them is worth doing.
+    pub fn mark_hints_asked(&self) {
+        self.hints_asked.store(true, Ordering::Release);
     }
 
     /// True once the client's settings have been read at least once.
@@ -168,7 +185,28 @@ impl AppState {
         if self.config_is_ready() {
             return;
         }
-        let _ = tokio::time::timeout(limit, self.config_notify.notified()).await;
+        // Subscribe *before* the second check. `notified()` only registers when it is first
+        // polled, so a configuration landing between the check above and that first poll would
+        // miss the wake and stall for the whole limit: five seconds of delay on a save that
+        // should have been analysed the moment it was written.
+        let notified = self.config_notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if self.config_is_ready() {
+            return;
+        }
+        let _ = tokio::time::timeout(limit, notified).await;
+    }
+
+    /// The client has been asked for its settings and has answered — or cannot answer at all.
+    /// Either way there is nothing left to wait for.
+    ///
+    /// Called on failure too: a `meta` block that will not merge is reported as an error, and
+    /// leaving the gate shut would make every model call afterwards wait out the limit. The
+    /// defaults are the truth from that moment; they were going to be anyway.
+    pub fn mark_config_ready(&self) {
+        self.config_ready.store(true, Ordering::Release);
+        self.config_notify.notify_waiters();
     }
 
     pub fn doc(&self, uri: &str) -> Option<Document> {

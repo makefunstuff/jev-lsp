@@ -19,6 +19,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tower::Service;
+use serde_json;
 use tower_lsp::jsonrpc::{Request, Response};
 
 /// Wraps the LSP service and adds `inlineCompletionProvider` to the `initialize` result.

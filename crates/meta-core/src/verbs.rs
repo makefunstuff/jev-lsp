@@ -174,7 +174,31 @@ const COMPLETION_RULES: &str = "\
 Rules:
 - Return only the text that belongs at the cursor. No prose, no code fences, no repetition
   of what is already there.
-- If nothing sensible belongs there, return an empty string.";
+- If nothing sensible belongs there, return an empty string.
+- Continue what the cursor is in. Never start a new definition, declaration, or import: the
+  answer is the rest of the current statement or block, not the next thing in the file.";
+
+/// True when a completion opens a new top-level definition while the cursor sits inside a block.
+///
+/// Measured against the live endpoint, at the end of an indented line the chat-shaped prompt
+/// produced `def save_config(path, config):` followed by a full body — plausible code, and not
+/// a completion: the model had started writing the *next* thing in the file. On a top-level
+/// line the same answer is exactly what a user wants, which is why the indentation of the
+/// cursor decides rather than the text alone.
+pub fn opens_a_new_definition(prefix: &str, completion: &str) -> bool {
+    let Some(current) = prefix.rsplit('\n').next() else {
+        return false;
+    };
+    if !(current.starts_with(' ') || current.starts_with('\t')) {
+        return false;
+    }
+    let first = completion.trim_start_matches(['\n', '\r']);
+    if first.starts_with(' ') || first.starts_with('\t') {
+        return false;
+    }
+    const HEADS: [&str; 6] = ["def ", "class ", "async def ", "import ", "from ", "func "];
+    HEADS.iter().any(|head| first.starts_with(head))
+}
 
 /// Render a fill-in-the-middle completion prompt (docs/MODEL.md, tier `fim`).
 ///
@@ -237,6 +261,54 @@ pub fn render(verb: Verb, ctx: &Context) -> PromptSpec {
     }
 }
 
+/// A question that may be answered from the codebase, or after reading documentation.
+///
+/// The same shape as `follow_up`, with two differences: there may be no code to show at all (a
+/// question about an API is asked with no file open), and the model may ask for a page to be
+/// fetched. That request is the *only* thing it may put in its answer, so reaching the network
+/// stays visible and bounded instead of happening inside prose.
+///
+/// With `web` the first round is plain text — a one-line fetch request is not an artifact — and
+/// the caller answers again, artifact-shaped, once the page is in hand. Without `web` there is
+/// one round and it is the artifact, exactly like a follow-up.
+pub fn ask(ctx: Option<&Context>, question: &str, web: bool) -> PromptSpec {
+    let body = match ctx {
+        Some(ctx) => format!("{}\n", render_block(ctx)),
+        None => String::new(),
+    };
+    let flavour = ctx.map(|c| c.flavour.as_str()).unwrap_or("text");
+    PromptSpec {
+        system: format!("{}\n{ASK_RULES}\n", system(flavour, Verb::Explain)),
+        user: if web {
+            format!("QUESTION: {question}\n\n{body}{FETCH_RULES}\n")
+        } else {
+            format!("QUESTION: {question}\n\n{body}\n")
+        },
+        json: !web,
+        max_tokens: 2048,
+    }
+}
+
+const ASK_RULES: &str = "\
+Answer the question. Prefer what the material shows over what is generally true, and say when\
+the material does not contain the answer. Never invent an API, a signature, or a file path.";
+
+const FETCH_RULES: &str = "\
+If the material does not answer this and public documentation would, reply with exactly one line\
+and nothing else:\n\nFETCH <https url>\n\nAnything else you write is your answer.";
+
+/// The URL a model asked to have fetched, if that is all it asked for.
+///
+/// One line, https only: this runs on a URL a model chose, so the shape is deliberately narrow.
+/// Anything else in the answer is treated as the answer.
+pub fn fetch_request(answer: &str) -> Option<&str> {
+    let url = answer.trim().strip_prefix("FETCH ")?.trim();
+    if url.split_whitespace().count() != 1 || !url.starts_with("https://") {
+        return None;
+    }
+    Some(url)
+}
+
 /// A question about code the model has already been shown.
 ///
 /// Not a verb: the verb taxonomy is the model's action set (PROTOCOL §4.1), and a question is
@@ -252,6 +324,74 @@ pub fn follow_up(ctx: &Context, question: &str) -> PromptSpec {
         user: format!("QUESTION: {question}\n\n{}\n", render_block(ctx)),
         json: true,
         max_tokens: 2048,
+    }
+}
+
+#[cfg(test)]
+mod ask_tests {
+    use super::{ask, fetch_request};
+
+    #[test]
+    fn a_bare_fetch_line_is_a_request_and_nothing_else_is() {
+        assert_eq!(fetch_request("FETCH https://example.com/docs"), Some("https://example.com/docs"));
+        assert_eq!(fetch_request("  FETCH https://example.com/docs  "), Some("https://example.com/docs"));
+        assert_eq!(fetch_request("FETCH http://example.com"), None, "plain http is refused");
+        assert_eq!(fetch_request("I will fetch https://example.com"), None);
+        assert_eq!(fetch_request("FETCH https://a.example and https://b.example"), None);
+        assert_eq!(fetch_request("The answer is 42."), None);
+    }
+
+    #[test]
+    fn asking_without_a_file_still_asks_the_question() {
+        let p = ask(None, "what does zstd level 3 buy me?", false);
+        assert!(p.user.contains("zstd level 3"), "the question reaches the prompt");
+        assert!(p.json, "without web the answer is the artifact");
+        assert!(!p.user.contains("FETCH"), "no fetch offered when the caller did not allow it");
+    }
+
+    #[test]
+    fn asking_with_web_offers_a_fetch_and_asks_plainly_first() {
+        let p = ask(None, "what is this API?", true);
+        assert!(p.user.contains("FETCH <https url>"), "the fetch is offered as its own shape");
+        assert!(!p.json, "a one-line fetch request is not an artifact");
+    }
+}
+
+#[cfg(test)]
+mod definition_tests {
+    use super::opens_a_new_definition;
+
+    #[test]
+    fn an_indented_cursor_does_not_get_a_new_definition() {
+        assert!(opens_a_new_definition(
+            "def report(path):\n    cfg = load(path)\n    return json.load(fh)\n    ",
+            "def save_config(path, config):\n    with open(path, \"w\") as fh:\n        json.dump(config, fh)"
+        ));
+    }
+
+    #[test]
+    fn a_top_level_cursor_may_be_given_one() {
+        assert!(!opens_a_new_definition(
+            "import json\n\n",
+            "def save_config(path, config):\n    ..."
+        ));
+    }
+
+    #[test]
+    fn continuing_the_block_is_not_a_new_definition() {
+        assert!(!opens_a_new_definition(
+            "def total(values):\n    result = 0\n    ",
+            "result += value"
+        ));
+        assert!(!opens_a_new_definition(
+            "def total(values):\n    for value in values:\n        ",
+            "print(value)"
+        ));
+    }
+
+    #[test]
+    fn an_import_after_an_indented_statement_is_still_a_new_definition() {
+        assert!(opens_a_new_definition("def f():\n    x = 1\n    ", "import os\n"));
     }
 }
 

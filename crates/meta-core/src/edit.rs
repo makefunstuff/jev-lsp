@@ -13,6 +13,13 @@ pub enum EditError {
     AnchorNotFound { needle: String },
     AnchorAmbiguous { needle: String, count: usize },
     UnknownAnchorKind { kind: String },
+    /// The answer reaches outside the scope the user asked about.
+    OutsideScope {
+        scope_start: u32,
+        scope_end: u32,
+        edit_start: u32,
+        edit_end: u32,
+    },
     Overlap,
     BadPath { path: String },
     /// The answer covers more of the document than the anchor names.
@@ -41,6 +48,15 @@ impl std::fmt::Display for EditError {
             EditError::UnknownAnchorKind { kind } => write!(
                 f,
                 "anchor kind {kind:?} is not one of function, method, class, struct, impl, mod, block, statement, file"
+            ),
+            EditError::OutsideScope {
+                scope_start,
+                scope_end,
+                edit_start,
+                edit_end,
+            } => write!(
+                f,
+                "the edit covers lines {edit_start}-{edit_end}, outside the scope (lines {scope_start}-{scope_end}) the user selected; change only lines inside that scope"
             ),
             EditError::Overlap => write!(f, "two replacements cover overlapping lines"),
             EditError::ReemitsFollowing { lines, anchor_hint } => write!(
@@ -72,12 +88,20 @@ fn truncate(s: &str) -> String {
 pub struct BuildOptions {
     /// Largest scope the model may be asked to rewrite (docs/LANGUAGE.md §4).
     pub max_scope_lines: u32,
+    /// The lines the user asked about, when the caller knows them.
+    ///
+    /// The scope is the unit of change: a fix requested for one function may not rewrite the
+    /// file. Measured: a proposal whose ops spanned the document was applied, and the user
+    /// watched their whole buffer be replaced instead of the selection being edited. Nothing
+    /// checked this; the check turns it into a repair the model can be asked to redo.
+    pub scope_lines: Option<(u32, u32)>,
 }
 
 impl Default for BuildOptions {
     fn default() -> Self {
         BuildOptions {
             max_scope_lines: 400,
+            scope_lines: None,
         }
     }
 }
@@ -253,6 +277,19 @@ pub fn build_proposal(
 
     if ops.is_empty() && new_files.is_empty() {
         return Err(EditError::Empty);
+    }
+
+    if let Some((scope_start, scope_end)) = opts.scope_lines {
+        for op in &ops {
+            if op.start_line < scope_start || op.end_line > scope_end {
+                return Err(EditError::OutsideScope {
+                    scope_start,
+                    scope_end,
+                    edit_start: op.start_line,
+                    edit_end: op.end_line,
+                });
+            }
+        }
     }
 
     Ok(Proposal {
