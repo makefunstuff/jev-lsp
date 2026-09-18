@@ -117,6 +117,7 @@ at a local llama.cpp OpenAI-compatible server, or set `api_key_env` for a remote
 | `nvim --headless -l verify/nvim_live.lua` | 0 failures, 0 skips (real plugin, real server) |
 | `nvim --headless -l verify/nvim_ui_test.lua` | 0 failures, 0 skips (picker, diff preview, lenses, hints, streaming, plan, session) |
 | `python3 verify/inline_test.py` | 14/14 — the capability, the handler, and every gate |
+| `python3 verify/quality_eval.py --base-url … --model …` | recall, precision and noise on a labelled defect set — the only harness that answers "is the review right", and it needs a real model |
 | `python3 verify/latency.py` | 8/8 — every editor-driven path under 1 ms against a model made **2 s** slow, which is how the bench tells "fast" from "cached" |
 | `python3 verify/queue_test.py` | 5/5 — the mid-flight-edit race, with a stalled model |
 | `python3 verify/config_race_test.py` | 3/3 — a save during startup is not analysed against the defaults |

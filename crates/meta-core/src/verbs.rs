@@ -68,6 +68,11 @@ The example above shows the SHAPE of an answer. It is not content: never copy it
 never use a field name as a value, and never emit a placeholder.
 Rules:
 - Report only defects you can point at with an exact `match` from CODE.
+- Look in particular for: a resource opened and never closed; an exception caught and silently
+  ignored; a mutable default argument or shared mutable state; an index or key used without
+  checking the collection is non-empty; a value compared without handling the case it is absent;
+  a bound that is off by one. These are the defects a reviewer blocks a change on, and they are
+  easy to walk past when the task only says to find problems.
 - Prefer few, high-confidence findings over many speculative ones. Zero findings is a valid answer.
 - Severity is `warning` for a real defect and `information` for a suggestion. Never `error`.
 - `label` states the defect, not the fix.";
