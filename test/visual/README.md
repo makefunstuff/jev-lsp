@@ -39,10 +39,16 @@ whether inline completion is advertised.
 | `<leader>md` on a finding | it disappears, and stays gone after a re-save |
 | `i` then type inside a function | ghost text after ~0.4 s idle; `<Tab>` accepts, `<C-e>` dismisses |
 | `:Meta status` | queue, budgets, cache counters, and which endpoints are in force |
+| `<leader>mf` with the cursor on a finding | it asks you a question, then the answer arrives in a buffer a few words at a time |
+| `<leader>mp`, type a goal | a plan opens as one line per step; `<CR>` applies that step, `a` the rest, `u` takes one back |
+| `<leader>ml` on a function | runs the code lens there — `meta: explain`, or `meta: N finding(s) · fix` |
+| `:Meta session` | what this server has done here; `<CR>` on an entry opens the file and line it names |
 
 `<leader>mr` (review the file now — the findings come back in the Result rather than waiting for
 the next save), `<leader>ms` (status), `<leader>mx` (cancel), `<leader>mS` (stop — the kill
-switch, no prompt), `<leader>mG` (start again) are also wired.
+switch, no prompt), `<leader>mG` (start again) are also wired. `<leader>mh` toggles inlay hints,
+which are off by default: Neovim switches hints on per *buffer*, not per client, so turning them
+on for meta's badge would turn on every other server's hints in that buffer too.
 
 ## 3. On your own files
 
