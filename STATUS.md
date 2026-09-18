@@ -6,7 +6,14 @@ the background and proposing work through native surfaces — rather than a prom
 **State**: working and verified end to end. Design frozen in `PROTOCOL.md`; implementation
 in `crates/` and `nvim/`; verification in `verify/`.
 
-**Next action**: everything in the roadmap is built. The next useful step is a longer
+**Next action**: the review's recall is now measured rather than asserted — 4/4 planted defects
+caught, 4/5 precision, zero discards, with the local model — and the one open question about it is
+whether the defect classes added to the prompt this session are *why*, which needs an A/B against
+the prompt as it was. Otherwise: an interactive check of inline-completion ghost text, which
+headless Neovim cannot fire the insert-mode events for, and which is the only surface never driven
+live.
+
+**Previously**: everything in the roadmap is built. The next useful step is a longer
 real-model soak — the six runs so far are one language on one model, and the last three
 defects were all real-model-only — and an interactive check of inline-completion ghost text,
 which a headless harness cannot drive.
