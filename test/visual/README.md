@@ -40,8 +40,9 @@ whether inline completion is advertised.
 | `i` then type inside a function | ghost text after ~0.4 s idle; `<Tab>` accepts, `<C-e>` dismisses |
 | `:Meta status` | queue, budgets, cache counters, and which endpoints are in force |
 
-`<leader>ms` (status), `<leader>mx` (cancel), `<leader>mS` (stop — the kill switch, no prompt),
-`<leader>mG` (start again) are also wired.
+`<leader>mr` (review the file now — the findings come back in the Result rather than waiting for
+the next save), `<leader>ms` (status), `<leader>mx` (cancel), `<leader>mS` (stop — the kill
+switch, no prompt), `<leader>mG` (start again) are also wired.
 
 ## 3. On your own files
 
@@ -54,21 +55,32 @@ The config opens its fixture on startup, so pass `-c 'edit your/file'` afterward
 open files normally — the plugin attaches to any file buffer, including files Neovim cannot
 identify.
 
-## 4. In your real Neovim (optional)
+## 4. In your own configuration
 
-I have not touched your configuration. If you want it there:
+Verified against a real config (lazy.nvim, pylsp, blink.cmp): the server attaches, the save
+triggers an analysis, and the finding lands. No change to your configuration:
+
+```sh
+cd /data/jpl/Work/meta-lsp
+nvim -c 'luafile test/visual/rc.lua' path/to/your/file.py
+```
+
+`test/visual/rc.lua` puts the plugin on the runtimepath itself and calls `require('meta').setup`.
+It does not use `--cmd 'set rtp^=…'`: a config manager runs after `--cmd` and rebuilds the
+runtimepath, so that form fails with `module 'meta' not found` — the first thing tried here.
+
+For a permanent install, put `nvim/` on the runtimepath and paste the `require('meta').setup`
+call from `rc.lua` into your config:
 
 ```sh
 ln -s /data/jpl/Work/meta-lsp/nvim ~/.local/share/nvim/site/pack/meta/start/meta
 ```
 
 ```lua
--- your config
 require('meta').setup({
   cmd = { '/data/jpl/Work/meta-lsp/target/release/meta-lsp' },
   settings = {
-    -- PROTOCOL.md §10. Either shape works: this one, or the same table under `meta`.
-    models = {
+    models = {   -- PROTOCOL.md §10; the same table works under a top-level `meta` key
       reason = { base_url = 'http://127.0.0.1:37313/v1', model = 'qwen3.6-35b-a3b-iq3xxs' },
       review = { base_url = 'http://127.0.0.1:37313/v1', model = 'qwen3.6-35b-a3b-iq3xxs' },
     },
@@ -76,8 +88,20 @@ require('meta').setup({
 })
 ```
 
-`META_BASE_URL` / `META_MODEL` / `META_REVIEW_MODEL` override the settings and are applied
-last, which is the shortest path if you just want it running.
+`META_BASE_URL` / `META_MODEL` / `META_REVIEW_MODEL` are applied last and override the settings.
+
+### Give it time
+
+An analysis against the local model takes **10–40 s**: the prompt is the scope plus context,
+and generation is in the tens of tokens per second. Looking for a sign column 20 s after a
+save and concluding it is broken is a mistake this document has already caused once. `:Meta
+status` shows `cache.misses` and `cache.entries` — watch those rather than the clock.
+
+### One thing in the sample config is not ours
+
+`client.supports_method(...)` called with a dot is deprecated in Neovim 0.12 and prints a
+warning (`client.supports_method is deprecated. Run ':checkhealth vim.deprecated'`); the
+replacement is the colon form, `client:supports_method(...)`. The plugin uses the colon form.
 
 ## 5. When it does not work
 

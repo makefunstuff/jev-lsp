@@ -73,21 +73,34 @@ require('meta').setup({
   },
 })
 
--- Opened on VimEnter rather than inline: a buffer edited from inside the init script is not
--- picked up by the attach pass, which is a quirk of startup ordering, not of the plugin
--- (opening a file the usual way — `nvim file.py` — attaches fine).
+-- Opened on VimEnter, deferred past startup. Neovim runs VimEnter with autocmd triggering
+-- suppressed, so an `:edit` made directly inside it loads the buffer but fires no BufReadPost
+-- or BufWinEnter — and the attach pass, which listens for exactly those, never sees the file.
+-- That cost a round of "no client attached" while testing. `vim.schedule` runs the edit once
+-- startup is over, so this takes the same path a user does when they open a file, rather than
+-- papering over it by calling the plugin internals.
 vim.api.nvim_create_autocmd('VimEnter', {
   callback = function()
-    vim.cmd('edit ' .. vim.fn.fnameescape(fixture))
+    vim.schedule(function()
+      vim.cmd('edit ' .. vim.fn.fnameescape(fixture))
+    end)
   end,
 })
 
--- Say where things stand rather than leaving a silent buffer.
-vim.defer_fn(function()
+-- Say where things stand rather than leaving a silent buffer. Poll instead of checking once:
+-- starting the server, the initialize handshake and the first configuration round trip take a
+-- moment, and a fixed delay reports a failure that has not happened. Never claim to be
+-- working when the client is not there.
+local waited = 0
+local function report()
   local clients = vim.lsp.get_clients({ name = 'meta' })
   if #clients == 0 then
-    vim.notify('meta: no client attached — check :LspLog and that ' .. BIN .. ' runs',
-      vim.log.levels.ERROR)
+    waited = waited + 250
+    if waited < 10000 then
+      return vim.defer_fn(report, 250)
+    end
+    vim.notify('meta: no client attached after 10s — check :LspLog, and that ' .. BIN
+      .. ' runs', vim.log.levels.ERROR)
     return
   end
   local inline = clients[1]:supports_method('textDocument/inlineCompletion')
@@ -95,4 +108,5 @@ vim.defer_fn(function()
     .. 'model: %s\n'
     .. 'press :Meta status · <leader>ma for actions after saving this file')
     :format(inline and 'advertised' or 'NOT advertised', MODEL), vim.log.levels.INFO)
-end, 1500)
+end
+vim.defer_fn(report, 500)

@@ -218,11 +218,13 @@ fn doc_ref(doc: &meta_core::Document) -> meta_core::types::DocRef {
 }
 
 /// Commands actually served. A command that only answers "not implemented" is not
-/// advertised (PROTOCOL.md §2); `meta.plan`, `meta.apply` and `meta.revert` are specified
-/// but not yet implemented, and invoking them returns a structured refusal.
+/// advertised (PROTOCOL.md §2), and a command the plugin offers is one it has to serve —
+/// `meta.review` was missing here while `:Meta review` sent it, so that keymap answered
+/// "not implemented" every time.
 const COMMANDS: &[&str] = &[
     "meta.status",
     "meta.recompute",
+    "meta.review",
     "meta.explain",
     "meta.plan",
     "meta.apply",
@@ -364,6 +366,24 @@ fn build_workspace_edit(
         document_changes: Some(DocumentChanges::Operations(operations)),
         change_annotations: None,
     }
+}
+
+/// One finding as a client receives it in a Result. The same fields the diagnostic carries,
+/// so the two surfaces cannot describe the same finding differently.
+fn finding_json(f: &Finding) -> Value {
+    json!({
+        "id": f.id,
+        "line": f.line,
+        "start_col": f.start_col,
+        "end_col": f.end_col,
+        "severity": match f.severity {
+            Severity::Warning => "warning",
+            Severity::Information => "information",
+        },
+        "label": f.label,
+        "detail": f.detail,
+        "verb": f.verb_hint.as_str(),
+    })
 }
 
 fn result_ok(payload: Value) -> Value {
@@ -1073,6 +1093,32 @@ impl MetaServer {
                         "markdown": markdown,
                     }),
                     Ok(Generated::Edit(_)) => result_err("unexpected", "explain produced an edit"),
+                    Err(f) => result_err(f.code(), &f.message()),
+                }
+            }
+            "meta.review" => {
+                let Some(arg) = params.arguments.first() else {
+                    return result_err("bad_arguments", "meta.review needs {uri, line}");
+                };
+                let uri = arg.get("uri").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                let Some(doc) = self.state.doc(&uri) else {
+                    return result_err("unknown_document", "no open document for that uri");
+                };
+                let target = doc.clone();
+                // The same analysis a save runs, but the caller waits for it instead of the
+                // findings arriving later as diagnostics. `:Meta review` is the user asking
+                // now, so the answer belongs in the Result.
+                let outcome = self
+                    .blocking(move |engine| engine.analyze(&target))
+                    .await;
+                match outcome {
+                    Ok(out) => result_ok(json!({
+                        "kind": "review",
+                        "uri": uri,
+                        "findings": out.findings.iter().map(finding_json).collect::<Vec<_>>(),
+                        "from_cache": out.from_cache,
+                        "discarded": out.rejected,
+                    })),
                     Err(f) => result_err(f.code(), &f.message()),
                 }
             }
