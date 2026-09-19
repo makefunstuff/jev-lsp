@@ -98,6 +98,16 @@ array and `env` carries the endpoint variables:
 Other harnesses keep the same three things in their own file: a command, the extensions it
 applies to, and a root marker.
 
+## This repository uses it
+
+The project checks itself with jev. `~/.omp/agent/lsp.json` registers
+`target/release/jev-lsp` for OMP on this machine (absolute path, `--stdio`, `fileTypes`,
+`rootMarkers`, hosted Jev in a `settings` block), so a rule finding reaches OMP's own `lsp` tool
+with no project config, and the conventions this code is checked against live in
+`.jev/rules/*.json` — saving a file runs the pass over it. With hosted Jev the key has to be
+exported as `TYPESAFE_API_KEY`; measured over this repository's own code the rules published
+**zero** findings, and 12 of its 30 Rust files had no candidate.
+
 ## What you get
 
 | key | |
