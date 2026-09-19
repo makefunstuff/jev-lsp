@@ -26,6 +26,17 @@ ln -s /path/to/jev-lsp/nvim ~/.local/share/nvim/site/pack/jev/start/jev
 require('jev').setup({ cmd = { '/path/to/jev-lsp/target/release/jev-lsp' } })
 ```
 
+```lua
+-- with lazy.nvim, the same plugin as a local `dir` spec (no symlink)
+{ dir = '/path/to/jev-lsp/nvim', name = 'jev', lazy = false,
+  config = function()
+    require('jev').setup { cmd = { '/path/to/jev-lsp/target/release/jev-lsp' } }
+  end },
+```
+
+The two are equivalent: the `dir` spec is the shape a lazy-managed config consumes, the symlink is
+the plain one.
+
 Two tiers, two endpoints. The chat tiers answer actions, plans and explanations; the decision
 tier answers the rules pass.
 
