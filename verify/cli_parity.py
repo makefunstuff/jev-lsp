@@ -65,6 +65,10 @@ def main():
     port = free_port()
     stub = start_stub(port)
     workdir = tempfile.mkdtemp(prefix="jev-parity-")
+    # A repository, because `.jev/rules/` lives at the repository root: a flat fixture cannot
+    # show whether the two front ends resolve the same root, and that is how a defect survived
+    # where the CLI looked for the rules beside the file while the server used the workspace.
+    subprocess.run(["git", "-C", workdir, "init", "-q"], capture_output=True)
     fixture = os.path.join(workdir, "loader.py")
     with open(fixture, "w") as fh:
         fh.write(FIXTURE)
@@ -278,6 +282,67 @@ def main():
               f"which names the reason rather than reporting a clean file: {cli_skips}")
         check(not (cli_nothing.get("findings") or lsp_nothing.get("findings")),
               "with no findings invented on either side")
+
+        # ---- inspect, a nested file and a repository-relative pattern ---------
+        # Two defects in one case: the CLI used to look for `.jev/rules/` beside the file rather
+        # than at the repository root, and `applies_to` used to be matched against the absolute
+        # path, so the pattern every rule author writes first matched nothing. Both were silent —
+        # `no_rules` reads like "you have no rules" — and both are only visible with a nested
+        # fixture in a repository.
+        print("[parity] inspect, a nested file and a relative applies_to")
+        nested_dir = os.path.join(workdir, "nested", "deep")
+        os.makedirs(nested_dir)
+        nested = os.path.join(nested_dir, "mod.py")
+        with open(nested, "w") as fh:
+            fh.write("def load(path):\n    return open(path)\n")
+        with open(os.path.join(rules_dir, "a.json"), "w") as fh:
+            fh.write(json.dumps({"schema": "jev.rules/1", "rules": [{
+                "id": "no-open",
+                "title": "Unclosed file handle",
+                "text": "A file opened here is never closed.",
+                "severity": "warning",
+                "applies_to": ["nested/**/*.py"],
+                "inspection": {"kind": "regex", "pattern": r"open\("},
+                "judgement": {"question": "Is this handle left open?",
+                              "criteria": {"true": "nothing closes it", "false": "it is closed"},
+                              "min_probability": 0.75},
+                "verb_hint": "fix",
+            }]}, indent=2))
+
+        cli_out = subprocess.run([args.cli, "inspect", "--force", nested], capture_output=True,
+                                 text=True, env=inspect_env, timeout=60)
+        check(cli_out.returncode == 0,
+              f"the CLI inspect of a nested file succeeded: {cli_out.stderr.strip()[:160]}")
+        cli_nested = json.loads(cli_out.stdout)
+
+        lsp_server = Lsp([args.bin, "--stdio"], inspect_env)
+        try:
+            lsp_server.request("initialize", {
+                "processId": os.getpid(), "rootUri": "file://" + workdir,
+                "capabilities": {"workspace": {"configuration": True}},
+            })
+            lsp_server.notify("initialized", {})
+            lsp_server.notify("textDocument/didOpen", {"textDocument": {
+                "uri": "file://" + nested, "languageId": "python", "version": 1,
+                "text": "def load(path):\n    return open(path)\n"}})
+            lsp_nested = (lsp_server.request("workspace/executeCommand", {
+                "command": "jev.inspect",
+                "arguments": [{"path": nested, "force": True}],
+            }, timeout=60).get("result") or {})
+        finally:
+            lsp_server.stop()
+
+        check(cli_nested.get("considered") == lsp_nested.get("considered") == 1,
+              f"a repository-relative pattern matches a nested file through both front ends "
+              f"(cli={cli_nested.get('considered')}, lsp={lsp_nested.get('considered')})")
+        check(cli_nested.get("candidates") == lsp_nested.get("candidates") == 1,
+              f"and both found the same candidate "
+              f"(cli={cli_nested.get('candidates')}, lsp={lsp_nested.get('candidates')})")
+        check(cli_nested.get("skipped") == lsp_nested.get("skipped") == [],
+              f"with neither reporting a skip: cli={cli_nested.get('skipped')} "
+              f"lsp={lsp_nested.get('skipped')}")
+        check(len(cli_nested.get("findings") or []) == len(lsp_nested.get("findings") or []) == 1,
+              "and the same finding, from the same root")
 
         return 0 if all(ok for ok, _ in RESULTS) else 1
     finally:

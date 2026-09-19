@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 pub enum Refusal {
     PerMinute,
     PerHour,
+    /// The decision tier's own per-minute cap (`budget.max_decisions_per_min`).
+    DecisionsPerMinute,
     Tokens,
     InFlight,
 }
@@ -18,6 +20,7 @@ impl Refusal {
     pub fn reason(self) -> &'static str {
         match self {
             Refusal::PerMinute => "per-minute call budget reached",
+            Refusal::DecisionsPerMinute => "per-minute decision budget reached",
             Refusal::PerHour => "per-hour call budget reached",
             Refusal::Tokens => "session token budget reached",
             Refusal::InFlight => "too many calls already in flight",
@@ -35,6 +38,7 @@ pub enum Permit {
 pub struct BudgetSnapshot {
     pub calls_last_minute: u32,
     pub calls_last_hour: u32,
+    pub decisions_last_minute: u32,
     pub tokens_used: u64,
     pub in_flight: u32,
 }
@@ -42,6 +46,9 @@ pub struct BudgetSnapshot {
 struct Inner {
     minute: VecDeque<Instant>,
     hour: VecDeque<Instant>,
+    /// Decision calls have their own minute window: the chat tiers' cap exists because one of
+    /// their calls can be a rewrite, and a decision is neither.
+    decisions: VecDeque<Instant>,
     tokens: u64,
     in_flight: u32,
 }
@@ -59,6 +66,7 @@ impl Budget {
             inner: Mutex::new(Inner {
                 minute: VecDeque::new(),
                 hour: VecDeque::new(),
+                decisions: VecDeque::new(),
                 tokens: 0,
                 in_flight: 0,
             }),
@@ -76,6 +84,9 @@ impl Budget {
         }
         while inner.hour.front().is_some_and(|t| now.duration_since(*t) >= hour) {
             inner.hour.pop_front();
+        }
+        while inner.decisions.front().is_some_and(|t| now.duration_since(*t) >= minute) {
+            inner.decisions.pop_front();
         }
     }
 
@@ -112,6 +123,40 @@ impl Budget {
         self.acquire_at(cfg, Instant::now())
     }
 
+    /// The same, for a decision call: its own per-minute cap, and nothing else shared with the
+    /// chat tiers except the in-flight bound and the session token cap.
+    ///
+    /// Taken *before* the call, like every other permit here (PROTOCOL.md §5).
+    pub fn try_acquire_decision(&self, cfg: &BudgetConfig) -> Permit {
+        self.acquire_decision_at(cfg, Instant::now())
+    }
+
+    fn acquire_decision_at(&self, cfg: &BudgetConfig, now: Instant) -> Permit {
+        let mut inner = self.inner.lock();
+        Self::prune(&mut inner, now);
+
+        let refusal = if inner.in_flight >= self.max_in_flight {
+            Some(Refusal::InFlight)
+        // Zero means "no decision calls", exactly as it does for `max_calls_per_min`.
+        } else if inner.decisions.len() as u32 >= cfg.max_decisions_per_min {
+            Some(Refusal::DecisionsPerMinute)
+        } else if cfg.max_tokens_per_session > 0 && inner.tokens >= cfg.max_tokens_per_session {
+            Some(Refusal::Tokens)
+        } else {
+            None
+        };
+
+        if let Some(r) = refusal {
+            *self.refusals.lock() += 1;
+            return Permit::Refused(r);
+        }
+
+        inner.decisions.push_back(now);
+        inner.in_flight += 1;
+        *self.hits.lock() += 1;
+        Permit::Granted
+    }
+
     pub fn release(&self) {
         let mut inner = self.inner.lock();
         inner.in_flight = inner.in_flight.saturating_sub(1);
@@ -128,6 +173,7 @@ impl Budget {
         BudgetSnapshot {
             calls_last_minute: inner.minute.len() as u32,
             calls_last_hour: inner.hour.len() as u32,
+            decisions_last_minute: inner.decisions.len() as u32,
             tokens_used: inner.tokens,
             in_flight: inner.in_flight,
         }
@@ -158,6 +204,7 @@ mod tests {
         BudgetConfig {
             max_calls_per_min: 2,
             max_calls_per_hour: 3,
+            max_decisions_per_min: 60,
             max_tokens_per_session: 100,
             timeout_ms: 1000,
         }
@@ -234,6 +281,59 @@ mod tests {
     }
 
     #[test]
+    fn a_sweep_of_decisions_is_not_stopped_by_the_chat_tiers_cap() {
+        // The defect: one decision call per document against a cap of six meant a workspace
+        // sweep died after six files with `over_budget`.
+        let b = Budget::new(8);
+        let cfg = cfg(); // max_calls_per_min: 2, max_decisions_per_min: the default
+        let default = BudgetConfig::default();
+        let t0 = Instant::now();
+        for i in 0..10 {
+            assert_eq!(
+                b.acquire_decision_at(&default, t0 + Duration::from_millis(i)),
+                Permit::Granted,
+                "decision {i} of ten"
+            );
+            // As the engine does: the permit is held for the call and released when it ends.
+            b.release();
+        }
+        assert_eq!(b.snapshot().decisions_last_minute, 10);
+        assert_eq!(b.snapshot().calls_last_minute, 0, "and the chat window is untouched");
+        // The chat tiers' own cap is still two.
+        assert_eq!(b.acquire_at(&cfg, t0), Permit::Granted);
+        assert_eq!(b.acquire_at(&cfg, t0), Permit::Granted);
+        assert_eq!(b.acquire_at(&cfg, t0), Permit::Refused(Refusal::PerMinute));
+    }
+
+    #[test]
+    fn the_decision_cap_is_still_a_cap() {
+        let b = Budget::new(8);
+        let cfg = BudgetConfig {
+            max_decisions_per_min: 3,
+            ..cfg()
+        };
+        let t0 = Instant::now();
+        for _ in 0..3 {
+            assert_eq!(b.acquire_decision_at(&cfg, t0), Permit::Granted);
+        }
+        assert_eq!(
+            b.acquire_decision_at(&cfg, t0),
+            Permit::Refused(Refusal::DecisionsPerMinute)
+        );
+        // The window slides, and the session token cap still binds.
+        assert_eq!(
+            b.acquire_decision_at(&cfg, t0 + Duration::from_secs(61)),
+            Permit::Granted
+        );
+        let broke = BudgetConfig {
+            max_tokens_per_session: 1,
+            ..cfg
+        };
+        b.record_tokens(1);
+        assert_eq!(b.acquire_decision_at(&broke, t0), Permit::Refused(Refusal::Tokens));
+    }
+
+    #[test]
     fn snapshot_reports_what_was_spent() {
         let b = Budget::new(8);
         let cfg = cfg();
@@ -241,6 +341,7 @@ mod tests {
         b.record_tokens(7);
         let s = b.snapshot();
         assert_eq!(s.calls_last_minute, 1);
+        assert_eq!(s.decisions_last_minute, 0);
         assert_eq!(s.tokens_used, 7);
         assert_eq!(s.in_flight, 1);
         assert_eq!(Budget::limits(&cfg), (2, 3, 100));

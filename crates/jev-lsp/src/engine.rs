@@ -337,9 +337,12 @@ impl Engine {
 
         // Steps 2-4: the rules that claim this path, and the candidates their inspections found.
         // All of it is local work that decides nothing.
+        // `applies_to` is written the way a repository names its own files, so it is matched
+        // against the path relative to the root, never the absolute one.
+        let match_path = gates::relative_to(&doc.path, &root);
         let (considered, asked) = inspections::select(
             &rule_set.rules,
-            &doc.path,
+            match_path,
             &doc.text,
             cfg.rules.max_candidates_per_rule,
         );
@@ -413,7 +416,7 @@ impl Engine {
 
         // The permit is taken *before* the call. A check that runs after the call is not a
         // check.
-        let _permit = match self.state.budget.try_acquire(&cfg.budget) {
+        let _permit = match self.state.budget.try_acquire_decision(&cfg.budget) {
             jev_core::budget::Permit::Granted => Permit(&self.state.budget),
             jev_core::budget::Permit::Refused(r) => return Err(Failure::Refused(r)),
         };
@@ -428,7 +431,7 @@ impl Engine {
                 if let Some(bad) = e.downcast_ref::<jev_core::decision::BadAnswer>() {
                     return Err(Failure::Contract(bad.to_string()));
                 }
-                return Err(Failure::Model(format!("decision call failed: {e}")));
+                return Err(Failure::Model(format!("decision call failed: {e:#}")));
             }
         };
         self.state.budget.record_tokens(response.input_tokens + response.output_tokens);
@@ -717,7 +720,9 @@ impl Engine {
             Some(cb) => self.state.backend.chat_stream(tier, &request, cb),
             None => self.state.backend.chat(tier, &request),
         }
-        .map_err(|e| Failure::Model(e.to_string()))?;
+        // `{e:#}` prints the whole `anyhow` chain, so a failed call names its cause (a timeout,
+        // a TLS failure, a reset) instead of only the URL it was aimed at.
+        .map_err(|e| Failure::Model(format!("{e:#}")))?;
         self.state.budget.record_tokens(response.total_tokens());
         Ok(response)
     }
@@ -1591,8 +1596,10 @@ mod tests {
         rules.file("a.json", &rules.rule("no-unwrap", r"\.unwrap\(\)", "**/*.rs", 0.75));
         let decision = ScriptedDecision::with(&[("no-unwrap#1", 0.9)]);
         let e = inspector(&rules, decision.clone());
+        // The decision tier's own cap, not the chat tiers': a decision is not a chat call and
+        // no longer spends their minute window.
         e.state.merge_config(Some(&serde_json::json!({
-            "budget": {"max_calls_per_min": 0, "max_calls_per_hour": 0}
+            "budget": {"max_decisions_per_min": 0}
         })));
         let f = e.inspect(&doc(UNWRAP), true).unwrap_err();
         assert!(matches!(f, Failure::Refused(_)), "{f:?}");

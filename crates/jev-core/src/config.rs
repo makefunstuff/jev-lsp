@@ -154,6 +154,19 @@ impl Default for RulesTrigger {
 pub struct BudgetConfig {
     pub max_calls_per_min: u32,
     pub max_calls_per_hour: u32,
+    /// Decision calls per minute, counted separately from the chat tiers.
+    ///
+    /// Six is right for a chat tier, where one call is thousands of tokens and can be a rewrite;
+    /// it is wrong for a decision, which is ~500 tokens and ~$0.00002 and comes one per document.
+    /// Sharing the counter meant a workspace sweep died after six files — and a user who saves
+    /// seven files in a minute hit the same wall — with `over_budget`, which reads like a
+    /// misconfiguration rather than "you were pacing yourself".
+    ///
+    /// Sixty is still a cap, and still a cost control: at ~$0.00002 a call it bounds a decision
+    /// spend at about a tenth of a cent a minute, and a sweep larger than that is paced over
+    /// minutes, which is the right shape for a hosted endpoint anyway. The session token cap
+    /// applies to decisions too.
+    pub max_decisions_per_min: u32,
     pub max_tokens_per_session: u64,
     pub timeout_ms: u64,
 }
@@ -163,6 +176,7 @@ impl Default for BudgetConfig {
         BudgetConfig {
             max_calls_per_min: 6,
             max_calls_per_hour: 120,
+            max_decisions_per_min: 60,
             max_tokens_per_session: 500_000,
             timeout_ms: 30_000,
         }
@@ -413,6 +427,18 @@ impl Config {
                 self.models.review.api_key_env = Some(name.to_string());
             }
         }
+        if let Ok(ms) = std::env::var("JEV_DECIDE_TIMEOUT_MS") {
+            let value = ms.trim();
+            if !value.is_empty() {
+                // Unparseable or zero keeps the previous value: a typo must not turn the ceiling
+                // into zero, which would fail every call instantly and look like an outage.
+                if let Ok(parsed) = value.parse::<u64>() {
+                    if parsed > 0 {
+                        self.models.decide.timeout_ms = parsed;
+                    }
+                }
+            }
+        }
         if let Ok(wire) = std::env::var("JEV_DECIDE_WIRE") {
             let value = wire.trim();
             if !value.is_empty() {
@@ -448,6 +474,20 @@ impl Config {
 mod tests {
     use super::*;
     use crate::types::Verb;
+    use parking_lot::Mutex;
+
+    /// Serialises every test that touches the process environment.
+    ///
+    /// `std::env::set_var` mutates *the process*, and Rust runs tests on parallel threads, so two
+    /// tests that set and remove variables — even different ones — interleave with each other and
+    /// with every `env::var` read inside `apply_env_overrides`. That is a race that fails rarely
+    /// and therefore poisons every later verification: it was seen once as a single anonymous
+    /// `1 failed` that could not be reproduced in six runs. Any test that touches the environment
+    /// takes this lock for its whole body, and a new one must too.
+    ///
+    /// `parking_lot::Mutex` rather than `std::sync::Mutex`: a panicking test would otherwise
+    /// poison the lock and turn one failure into a cascade of unrelated ones.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn defaults_are_conservative() {
@@ -517,6 +557,7 @@ mod tests {
 
     #[test]
     fn the_environment_wins_over_the_client_payload() {
+        let _env = ENV_LOCK.lock();
         // Guards the bug this test was written for: a client answering with {} used to
         // reset the endpoint the shell had provided.
         std::env::set_var("JEV_BASE_URL", "http://from-env:1234/v1");
@@ -583,7 +624,28 @@ mod tests {
     }
 
     #[test]
+    fn the_decision_timeout_is_settable_from_a_shell_and_a_typo_is_ignored() {
+        let _env = ENV_LOCK.lock();
+        // A hosted cold call took 7.15 s against a 5 s ceiling; the ceiling is the plan's, and
+        // this is what gives a shell the room to raise it.
+        std::env::set_var("JEV_DECIDE_TIMEOUT_MS", "20000");
+        let mut raised = Config::default();
+        raised.apply_env_overrides();
+        std::env::remove_var("JEV_DECIDE_TIMEOUT_MS");
+        assert_eq!(raised.decision().timeout_ms, 20_000);
+
+        for bad in ["", "   ", "soon", "0", "-1"] {
+            std::env::set_var("JEV_DECIDE_TIMEOUT_MS", bad);
+            let mut held = Config::default();
+            held.apply_env_overrides();
+            std::env::remove_var("JEV_DECIDE_TIMEOUT_MS");
+            assert_eq!(held.decision().timeout_ms, 5000, "{bad:?} must keep the previous value");
+        }
+    }
+
+    #[test]
     fn the_chat_tiers_key_variable_is_nameable_from_the_environment() {
+        let _env = ENV_LOCK.lock();
         // Without this a shell can point the chat tiers at a hosted endpoint and still have no
         // way to give them a credential: `api_key_env` is a *name*, and nothing else in the
         // environment could supply one.
@@ -621,6 +683,7 @@ mod tests {
 
     #[test]
     fn the_decision_wire_is_overridable_by_environment_in_both_spellings() {
+        let _env = ENV_LOCK.lock();
         // The wire decides the path, so reaching a provider's own endpoint depends on this
         // being settable from the shell — `JEV_DECIDE_BASE_URL=https://openrouter.ai/api` with
         // the default wire would POST `/api/systemone`, which is not the endpoint.
@@ -691,6 +754,7 @@ mod tests {
 
     #[test]
     fn the_environment_overrides_the_decision_tier_alone() {
+        let _env = ENV_LOCK.lock();
         // `JEV_BASE_URL` names an OpenAI-compatible chat server; pointing the decision tier at
         // it would break every decision. Only the decide-specific pair moves it.
         //

@@ -251,10 +251,12 @@ fn status(config: &Config, deps: &Deps) -> Outcome {
         "cache": {"entries": entries, "hits": hits, "misses": misses},
         "budget": {
             "calls_last_minute": spent.calls_last_minute,
+            "decisions_last_minute": spent.decisions_last_minute,
             "calls_last_hour": spent.calls_last_hour,
             "tokens_used": spent.tokens_used,
             "in_flight": spent.in_flight,
             "limit_per_minute": limit_minute,
+            "limit_decisions_per_minute": config.budget.max_decisions_per_min,
             "limit_per_hour": limit_hour,
             "limit_tokens": limit_tokens,
         },
@@ -482,8 +484,15 @@ fn inspect(
     let doc = &prepared.doc;
     let root = rules_root(&doc.path).unwrap_or_else(|| ".".to_string());
     let set = rules::load(std::path::Path::new(&root));
-    let (considered, asked) =
-        inspections::select(&set.rules, &doc.path, &doc.text, config.rules.max_candidates_per_rule);
+    // `applies_to` is written the way a repository names its own files, so it is matched
+    // against the path relative to the root — the same rule the server follows.
+    let match_path = gates::relative_to(&doc.path, &root);
+    let (considered, asked) = inspections::select(
+        &set.rules,
+        match_path,
+        &doc.text,
+        config.rules.max_candidates_per_rule,
+    );
     let candidates = asked.len();
     let mut skipped = set.skipped.clone();
     // The same skip the language server reports for the same tree, from the same function: a
@@ -528,7 +537,7 @@ fn inspect(
                 }
             } else {
                 // Before the call, never after (PROTOCOL.md §5).
-                let _permit = match deps.budget.try_acquire(&config.budget) {
+                let _permit = match deps.budget.try_acquire_decision(&config.budget) {
                     Permit::Granted => Held(deps.budget),
                     Permit::Refused(refusal) => {
                         return Err(Failure::Budget(refusal.reason().to_string()))
@@ -544,7 +553,7 @@ fn inspect(
                         // an endpoint that did not answer is a transport failure. The exit codes
                         // differ, so the distinction has to survive this far.
                         Some(bad) => Failure::Contract(bad.to_string()),
-                        None => Failure::Transport(format!("decision call failed: {e}")),
+                        None => Failure::Transport(format!("decision call failed: {e:#}")),
                     })?;
                 deps.budget
                     .record_tokens(response.input_tokens + response.output_tokens);
@@ -604,15 +613,36 @@ fn envelope() -> Value {
     json!({"schema": RESULT_SCHEMA, "ok": true})
 }
 
-/// The directory a file sits in, for the root a rules pass reads from.
+/// The root a rules pass reads from: the repository the file belongs to.
+///
+/// `.jev/rules/` lives at the repository root, and the language server reads it from its
+/// workspace root — so the CLI must resolve the same root, or the two front ends disagree about
+/// which rules exist. It used to return the file's own directory, so `jev inspect
+/// crates/jev-core/src/rules.rs` looked for `crates/jev-core/src/.jev/rules`, found nothing, and
+/// answered `no_rules` while the server found the rules: a parity failure that a flat fixture
+/// could not show.
+///
+/// The nearest ancestor holding `.git` is that root, which is what `git rev-parse --show-toplevel`
+/// would report; when no ancestor has one there is no repository to report either, so the file's
+/// own directory is the honest answer.
 fn rules_root(path: &str) -> Option<String> {
-    path.rsplit_once('/').map(|(dir, _)| {
+    let dir = path.rsplit_once('/').map(|(dir, _)| {
         if dir.is_empty() {
             "/".to_string()
         } else {
             dir.to_string()
         }
-    })
+    })?;
+    let mut here = std::path::PathBuf::from(&dir);
+    loop {
+        if here.join(".git").exists() {
+            return Some(here.to_string_lossy().into_owned());
+        }
+        match here.parent() {
+            Some(parent) if parent != here => here = parent.to_path_buf(),
+            _ => return Some(dir),
+        }
+    }
 }
 
 /// A plan artifact (PROTOCOL.md §7). The plan names work; it applies nothing.
@@ -782,7 +812,9 @@ fn call(
     let response = deps
         .backend
         .chat(tier, &request)
-        .map_err(|e| Failure::Transport(e.to_string()))?;
+        // `{e:#}` prints the whole `anyhow` chain: a transport failure without its cause reads
+        // as "the endpoint is down" when it was a timeout at 5 s.
+        .map_err(|e| Failure::Transport(format!("{e:#}")))?;
     let ms = started.elapsed().as_millis() as u64;
     deps.budget.record_tokens(response.total_tokens());
     log.push(format!(

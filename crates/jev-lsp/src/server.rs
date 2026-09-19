@@ -1808,6 +1808,8 @@ impl JevServer {
                         "tokens_used": snap.tokens_used,
                         "in_flight": snap.in_flight,
                         "limit_per_minute": cfg.budget.max_calls_per_min,
+                        "decisions_last_minute": snap.decisions_last_minute,
+                        "limit_decisions_per_minute": cfg.budget.max_decisions_per_min,
                         "limit_per_hour": cfg.budget.max_calls_per_hour,
                         "limit_tokens": cfg.budget.max_tokens_per_session,
                     },
@@ -1822,10 +1824,17 @@ impl JevServer {
                         "candidates": rules.candidates,
                         "calls": rules.calls,
                     },
+                    // Whether the client's settings have arrived yet. Until they have, the
+                    // endpoints below are the built-in defaults and not what the user
+                    // configured — one status call in six reported the default decide endpoint
+                    // for exactly that reason. Status is a read, so it does not *wait* on the
+                    // configuration gate the way model work does; it says which of the two
+                    // answers it is giving.
+                    "config_ready": self.state.config_is_ready(),
                     "models": {
                         "reason": {"base_url": cfg.models.reason.base_url, "model": cfg.models.reason.model},
                         "review": {"base_url": cfg.models.review.base_url, "model": cfg.models.review.model},
-                        "decide": {"wire": cfg.models.decide.wire, "base_url": cfg.models.decide.base_url, "model": cfg.models.decide.model},
+                        "decide": {"wire": cfg.models.decide.wire, "base_url": cfg.models.decide.base_url, "model": cfg.models.decide.model, "timeout_ms": cfg.models.decide.timeout_ms},
                     },
                     "triggers": {
                         "diagnostics": cfg.triggers.diagnostics,

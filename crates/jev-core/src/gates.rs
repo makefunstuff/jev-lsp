@@ -88,6 +88,30 @@ fn glob_here(p: &[char], s: &[char]) -> bool {
     }
 }
 
+/// A path as a rule's `applies_to` should see it: relative to the workspace root.
+///
+/// `applies_to` patterns are written the way a repository names its own files —
+/// `crates/**/*.rs` — while a document path is absolute, so matching the absolute path compares
+/// `crates` against `Users` and matches nothing. That failure is silent, which is the worst kind
+/// here: the pass reports `no_rules`, and "no rule applied" reads exactly like "you have no
+/// rules". Falls back to the path as given when it is not under the root, so a file outside the
+/// workspace cannot be matched by a repository-relative pattern by accident.
+pub fn relative_to<'a>(path: &'a str, root: &str) -> &'a str {
+    let root = root.trim_end_matches('/');
+    if root.is_empty() {
+        return path;
+    }
+    match path.strip_prefix(root) {
+        // The remainder has to be *inside* the root, which means a path-segment boundary:
+        // `strip_prefix` is a byte comparison, so `/Users/x/repo-other/a.rs` would otherwise
+        // come back as `-other/a.rs` and be matched as if it lived in the repository.
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => {
+            rest.strip_prefix('/').unwrap_or(rest)
+        }
+        _ => path,
+    }
+}
+
 /// The first ignore pattern that matches, if any.
 pub fn ignored_by(path: &str, patterns: &[String]) -> Option<String> {
     patterns
@@ -156,6 +180,43 @@ mod tests {
         assert!(!glob_match("**/*.min.js", "app.js"));
         assert!(glob_match("target", "target"));
         assert!(!glob_match("target", "target/x"));
+    }
+
+    #[test]
+    fn a_repository_relative_pattern_matches_a_nested_path_under_its_root() {
+        let path = "/Users/x/repo/crates/jev-core/src/rules.rs";
+        let relative = relative_to(path, "/Users/x/repo");
+        assert_eq!(relative, "crates/jev-core/src/rules.rs");
+        // The form every rule author writes first.
+        assert!(glob_match("crates/**/*.rs", relative));
+        // And the form that only works *because* the leading `**` spans zero segments — the
+        // one that was silently needed before this, so it must keep working.
+        assert!(glob_match("**/crates/**/*.rs", relative));
+        assert!(glob_match("crates/jev-core/src/*.rs", relative));
+        assert!(!glob_match("src/**/*.rs", relative), "a different tree is still a different tree");
+        // A trailing slash on the root is not a different root.
+        assert_eq!(relative_to(path, "/Users/x/repo/"), "crates/jev-core/src/rules.rs");
+    }
+
+    #[test]
+    fn with_no_root_the_absolute_path_is_what_a_pattern_sees() {
+        // The documented fallback: without a root there is no relative context to offer, so a
+        // repository-relative pattern does not match — and saying so is better than pretending.
+        let path = "/Users/x/repo/crates/a.rs";
+        assert_eq!(relative_to(path, ""), path);
+        assert!(!glob_match("crates/**/*.rs", relative_to(path, "")));
+        assert!(glob_match("**/crates/**/*.rs", relative_to(path, "")));
+    }
+
+    #[test]
+    fn a_file_outside_the_root_is_not_matched_by_a_relative_pattern() {
+        assert_eq!(relative_to("/tmp/scratch/a.rs", "/Users/x/repo"), "/tmp/scratch/a.rs");
+        assert!(!glob_match("crates/**/*.rs", relative_to("/tmp/scratch/a.rs", "/Users/x/repo")));
+        // A sibling directory whose name starts with the root's name is not *inside* it.
+        assert_eq!(
+            relative_to("/Users/x/repo-other/a.rs", "/Users/x/repo"),
+            "/Users/x/repo-other/a.rs"
+        );
     }
 
     #[test]
