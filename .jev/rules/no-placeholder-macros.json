@@ -1,0 +1,22 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "no-placeholder-macros",
+      "title": "No todo!() or unimplemented!() left in",
+      "text": "A `todo!()` or `unimplemented!()` that ships is a promise the code does not keep: either finish the branch, or return an error the caller can act on.",
+      "severity": "warning",
+      "applies_to": ["**/crates/**/*.rs"],
+      "inspection": { "kind": "regex", "pattern": "\\b(todo|unimplemented)!\\s*\\(" },
+      "judgement": {
+        "question": "Is this placeholder on a path a caller can reach, rather than a branch that genuinely cannot happen?",
+        "criteria": {
+          "true": "shipping code can reach it and the caller gets a panic instead of an answer",
+          "false": "the branch is unreachable by construction, or the macro is quoted in a doc comment"
+        },
+        "min_probability": 0.7
+      },
+      "verb_hint": "fix"
+    }
+  ]
+}

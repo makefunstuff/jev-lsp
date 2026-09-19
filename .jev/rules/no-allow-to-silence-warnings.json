@@ -1,0 +1,22 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "no-allow-to-silence-warnings",
+      "title": "Silence warnings at the root, not with #[allow]",
+      "text": "A warning is fixed where it comes from: an `#[allow(...)]` that hides one keeps the defect and deletes the evidence, so the allow has to be the last resort for a false positive the compiler cannot be told about.",
+      "severity": "warning",
+      "applies_to": ["**/crates/**/*.rs"],
+      "inspection": { "kind": "regex", "pattern": "#\\[allow\\(" },
+      "judgement": {
+        "question": "Does this allow hide a warning the code could fix, rather than suppress an unavoidable false positive?",
+        "criteria": {
+          "true": "the warning points at something this code could fix instead of allowing",
+          "false": "the lint is a false positive here and the comment beside it says why"
+        },
+        "min_probability": 0.7
+      },
+      "verb_hint": "fix"
+    }
+  ]
+}
