@@ -29,11 +29,29 @@ Measured, 11 fixtures: **`FileType` fired for 8, and 8 were auto-attached.** `f.
 | Step | Owner | Action |
 |---|---|---|
 | 1 | client | Built-in path. Covers every file Neovim identifies. Free, do nothing. |
-| 2 | plugin | On `BufReadPost`, `BufNewFile`, `BufWinEnter` (idempotent): if the buffer is a normal file buffer and no `meta` client is attached, `vim.lsp.start(cfg, { bufnr = bufnr })`. `vim.lsp.start` with an explicit buffer bypasses the `filetypes` filter. |
+| 2 | plugin | On `BufReadPost`, `BufNewFile`, `BufWinEnter` (idempotent): if the buffer is a normal file buffer and no `jev` client is attached, `vim.lsp.start(cfg, { bufnr = bufnr })`. `vim.lsp.start` with an explicit buffer bypasses the `filetypes` filter. |
 | 3 | plugin | Never attach twice; never attach to a buffer §6 excludes. |
 
 Step 2 is ~15 lines of Lua and is the whole reason "universal" is honest rather than
 aspirational. It is not optional.
+
+**And nothing here is required of a client.** The server's contract is standard LSP: findings
+arrive by pull diagnostics plus `workspace/diagnostic/refresh`; actions by `codeAction` and
+`codeAction/resolve`; the material a request carries by `workspace/executeCommand` and
+`workspace/configuration`; progress by `$/progress` under a token the client itself issued; free
+text by the client, because the protocol cannot ask for it (N7). Everything that is *not* a
+standard surface — the universal attach pass, the `vim.lsp.codelens.run` interception, the
+picker, every scratch buffer — lives in `nvim/` and is **optional convenience, never required**:
+any LSP client gets the findings, the edits and the commands without it. What is not optional is
+narrower, and worth stating exactly: in Neovim, step 2 is what makes "every file" true, because
+the built-in path cannot see a buffer whose filetype was never set.
+
+That claim is checkable rather than aspirational, because the server is exercised by three
+clients, two of which share no code with it: Neovim, through this plugin; `verify/lsp_client.py`,
+written from the specification against the standard library alone (`docs/VERIFICATION.md` §1); and
+OMP, through its own LSP support (`verify/omp_lsp.sh`, §1.1) — a client nobody here wrote, which
+receives a rule's finding over `textDocument/diagnostic` and calls `jev.inspect`. Neovim is the
+one it is verified against most deeply, and the only one where the plugin is needed at all.
 
 ## 2. Language resolution
 
@@ -105,7 +123,7 @@ parser, without the language in the plugin's table, or without such a declaratio
 simply absent and the server decides — which is the same path the CLI takes, always.
 
 So a client-resolved scope is visible, not hidden: the answer says which side resolved it. The
-listing in `nvim/lua/meta/init.lua` (`TS_SCOPE_NODES`) is deliberately short, and a language
+listing in `nvim/lua/jev/init.lua` (`TS_SCOPE_NODES`) is deliberately short, and a language
 missing from it is not a failure.
 
 The same division now covers *definitions* — the list of declarations a lens or a hint hangs
@@ -142,11 +160,11 @@ is stated, never silent** — the lesson taken from Copilot's `Inactive` status
 | size | > `max_file_bytes` (default 1 MiB): not analysed ambiently; explicit requests use a window around the cursor or the selected range | `over_size` |
 | binary | a NUL byte in the first 8 KiB: attached, no analysis, no verbs offered | `binary` |
 | grammar | no parser for the language | `generic_scope` — a quality flag, not a refusal |
-| ignore | matches `.gitignore` or `meta.ignore` globs | `ignored` |
+| ignore | matches `.gitignore` or `jev.ignore` globs | `ignored` |
 
 Only the first is a hard exclusion, and it excludes non-files rather than files. A 4 GiB
 log is still *attached and synced*; it is simply not sent to a model whole. The plugin
-surfaces `over_size`, `binary`, `ignored`, and `generic_scope` in `:Meta status` and in the
+surfaces `over_size`, `binary`, `ignored`, and `generic_scope` in `:Jev status` and in the
 statusline segment, so a user can always tell why a buffer is quiet.
 
 ## 6. Latency
@@ -180,7 +198,7 @@ classification.
 
 There is no per-filetype or "generic" key: an override is keyed by the language the buffer
 *resolves* to (`unknown` included), and the persona for a language with no override comes from
-`prompt`'s default for that language (`meta-core/src/lang.rs`). `tier` picks which endpoint
+`prompt`'s default for that language (`jev-core/src/lang.rs`). `tier` picks which endpoint
 serves it — `reason` or `review`.
 
 An override may narrow the verb set for a language (Markdown has no meaningful "add types");

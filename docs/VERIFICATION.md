@@ -7,33 +7,60 @@ not for the code they touch.
 
 | Artefact | State | Last result |
 |---|---|---|
+| `verify/run-suite.sh` | built | the whole table below in one run — 24 rows `ok`, `quality_eval` reported as `?` (it needs a real model) |
 | `verify/probes/` | built | 7 probes, all green (`verify/probes/run.sh`) |
-| `verify/lsp_client.py` | built | 27 ok, 0 FAIL, 0 skip, 0 warn against the real binary |
-| `verify/smoke.py` | built | 32/32 against the real binary |
+| `verify/lsp_client.py` | built | 32 ok, 0 FAIL, 0 skip, 0 warn against the real binary |
+| `verify/smoke.py` | built | 44/44 against the real binary — and three consecutive full-table runs after the two harness defects in §8 were fixed, which is the point |
+| `verify/rules_test.py` | built | 45/45 — the rules pass end to end: inspections, gates, cache, skips |
+| `verify/lsp_framing_test.py` | built | 9/9 — the test client's own stdio framing; written for a defect the suite found in itself (§8) |
+| `verify/omp_lsp.sh` | built | 0 failures, 0 skips — OMP, a third client that shares no code with this repository, receives a rule's finding and calls `jev.inspect` (§1.1) |
 | `verify/queue_test.py` | built | 5/5; proven to fail on the pre-fix behaviour |
 | `verify/supersede_probe.py` | built | 7/7 — written independently by the verifier agent; control case plus a race case, and it asserts the race was actually set up |
 | `verify/plan_test.py` | built | 35/35 — the plan loop, server-side apply, revert, staleness, divergence, multi-file creation |
-| `verify/cli_parity.py` | built | 12/12 — the CLI and the LSP produce identical findings and byte-identical edits |
-| `verify/dismiss_test.lua` | built | 9/9 — a finding is dismissed, recorded per repository, and does not resurface |
+| `verify/cli_parity.py` | built | 25/25 — the CLI and the LSP produce identical findings and byte-identical edits, `jev.inspect` included |
+| `verify/scope_containment_test.py` | built | green (exit 0) — a scope the client narrows is the scope the answer stays inside |
+| `verify/dismiss_test.lua` | built | 0 failures, 0 skips — a finding is dismissed, recorded per repository, and does not resurface |
+| `verify/rules_live.lua` | built | 0 failures, 0 skips on Neovim 0.12.5 **and** 0.12.1 — a rule's finding reaching the sign column, `:Jev inspect` answering with the same finding and its counts |
 | `verify/harness_log.lua` | built | shared by the Lua harnesses: a red run prints the server's own log lines |
 | `verify/real_model.py` | built | real endpoint, reports rather than asserts; run against DeepSeek through the omp auth gateway |
-| `verify/soak.py` | built | several languages through the whole loop against a real endpoint; last result 8/9 applied, 0 unparseable |
-| `verify/stub_model.py` | built | scripted endpoint; no GPU, no network |
-| `verify/quality_eval.py` | built | real endpoint: 4/4 planted defects caught, 4/4 precision, **0 findings across 2 clean files**, 0 discarded |
-| `verify/outcome_test.py` | built | 18/18 — `meta.outcome` recorded, `meta.usage` counted, the unknown event kept verbatim. Proven to fail on the pre-change binary |
-| `verify/repo_bench.py` | built | real endpoint, a measurement rather than a threshold: 40 files of this repository: 62 findings, **3.21 per 1000 lines** (three runs, 3.21/3.48/3.71) |
+| `verify/soak.py` | built | several languages through the whole loop against a real endpoint; last result (2026-09-18) 8/9 applied, 0 unparseable |
+| `verify/stub_model.py` | built | scripted endpoint; no GPU, no network. Answers the decision wire too (`/systemone`) |
+| `verify/quality_eval.py` | built | **not runnable here** (no real endpoint): the suite reports it as `?`. Last measured **2026-09-18 against `deepseek/deepseek-v4-flash`** — 4/4 planted defects caught, 4/4 precision, **0 findings across 2 clean files**, 0 discarded |
+| `verify/outcome_test.py` | built | 18/18 — `jev.outcome` recorded, `jev.usage` counted, the unknown event kept verbatim. Proven to fail on the pre-change binary |
+| `verify/repo_bench.py` | built | real endpoint, a measurement rather than a threshold: 40 files of this repository: 62 findings, **3.21 per 1000 lines** (three runs, 3.21/3.48/3.71; measured 2026-09-18) |
 | `verify/nvim_live.lua` | built | 0 failures, 0 skips — real plugin, real server, real buffer |
-| `verify/goldens/` | **not built** | planned with U6; the anchor-ambiguity rules are covered by `meta-core` unit tests instead |
+| `verify/goldens/` | **not built** | planned with U6; the anchor-ambiguity rules are covered by `jev-core` unit tests instead |
 | `verify/bench.sh` | **not built** | latency budgets are asserted where they can be (`codeAction` p99 in `lsp_client.py` step 3); a standalone bench waits for U9 |
 
 Rows below that cite an unbuilt harness are the requirement, not a report of coverage.
+
+**The table is one command, and it lives in the repository.**
+
+```sh
+bash verify/run-suite.sh /tmp/suite.log            # the table above, in order
+NVIM_ONLY=1 bash verify/run-suite.sh /tmp/nvim.log # only the stub lifecycle and the Lua rows
+```
+
+`verify/run-suite.sh` runs every row, captures each row's output and exit code into `<out-file>`,
+and prints a summary block to its **own stdout** when it finishes — `ok` / `FAIL` / `?` per row,
+where `?` means the row did not run, which is how `quality_eval` reports itself when no real
+endpoint is reachable (`bash verify/run-suite.sh /tmp/suite.log > /tmp/suite-summary.log` gets
+both). It never uses `set -e`: a red row has to be *visible*, not fatal to the run. Three knobs,
+all in its header: `NVIM_ONLY=1` skips cargo, the probes and every Python/OMP row (use it while
+the Rust tree is being edited concurrently — a sibling's half-finished edit is a phantom failure
+here); `REFUSE_IF_BUSY=1` refuses rather than killing when something already answers on the stub's
+port; `NVIM_BINS` names the Neovim binaries for the Lua rows (default: the 0.12.5 build plus the
+installed `nvim`).
 
 **A red run says why.** Every harness prints the server's own `window/logMessage` lines when
 it fails (`verify/harness_log.lua` for the Lua ones; the Python ones carry the same in their
 FAIL detail). This matters more than it sounds: at the other end of an LSP connection a dead
 model endpoint is indistinguishable from a product defect — the client simply gets no
 findings and no edit — and a stale stub process left bound to the port has twice been
-mistaken for a regression.
+mistaken for a regression. That is why the runner owns the stub's whole lifecycle: it kills any
+leftover, waits until the port is *actually* free, starts exactly one stub for the run, and
+checks the **pid** as well as `/health` — a process that lost the race for the port exits while
+the port keeps answering, and then the harnesses would be talking to someone else's stub.
 
 ## 1. Independent LSP client
 
@@ -43,7 +70,7 @@ no code with the server**, depending only on the Python standard library.
 It performs, in order, and asserts at each step:
 
 1. `initialize` → `initialized`; assert `server_capabilities.positionEncoding == "utf-8"`,
-   `codeActionProvider.resolveProvider == true`, `diagnosticProvider.identifier == "meta"`.
+   `codeActionProvider.resolveProvider == true`, `diagnosticProvider.identifier == "jev"`.
 2. `textDocument/didOpen` with a fixture file.
 3. `textDocument/codeAction` → assert p99 latency budget, assert **no action contains an
    `edit`** (N2 — the fast path must not carry edits).
@@ -55,11 +82,53 @@ It performs, in order, and asserts at each step:
 7. Mutate the document, resolve the *same* action again → assert **no `edit` is returned**
    (staleness), and that the response is not an error.
 8. `textDocument/diagnostic` → assert findings carry `data.finding_id` and `data.verb`.
-9. `workspace/executeCommand` `meta.cancel` mid-flight → assert a `$/progress` `end` was
+9. `workspace/executeCommand` `jev.cancel` mid-flight → assert a `$/progress` `end` was
    received for the token and no `edit` followed.
 
 Because it is written from the spec, a disagreement between it and the server is a real
 protocol defect, not a test artifact.
+
+### 1.1 A third client: OMP
+
+`verify/omp_lsp.sh` drives `jev-lsp` from **OMP**, which is a client nobody here wrote and which
+shares no code with this repository. That is the point: the independent client above is
+spec-derived, but it is still *ours*, and Neovim is the client the plugin was built for. A
+finding that reaches OMP's own `lsp` tool is evidence the standard surfaces are enough on their
+own (`docs/LANGUAGE.md` §1).
+
+The fixture registers `target/release/jev-lsp` in its own `<fixture>/.omp/lsp.json` — the
+repository's `.omp/` and `~/.omp` are untouched — and the agent is asked to call the `lsp` tool
+twice, in order: a `workspace/executeCommand` request for `jev.inspect`, then `diagnostics` for
+the file. It asserts:
+
+- the rule's finding reaches OMP's diagnostics with the rule's **title**, the judgement that
+  followed its prose, the `.unwrap()` line, the finding id and the rule's severity:
+  `4:5 [warning] [jev] Unwrap in a request handler — A handler must not unwrap; return the error
+  instead. — reachable (p=0.90) (83f83e989c25)`;
+- `jev.inspect` is reachable through OMP's tool surface and answers with the same finding, its
+  counts (`considered`/`candidates`) and its skips;
+- a **negative control** — the same fixture with no `.jev/rules/` — produces no jev diagnostic and
+  an `inspect` that says `no_rules`, so a green run cannot be the harness finding something else.
+
+`omp` unavailable, no model, or an agent that never drives the tool is a **skip with the reason**,
+never a false `ok`.
+
+**One observation about the client, recorded so it is not read as a defect here.** OMP's symbol
+paths fan out to every non-custom server without checking the negotiated symbol capabilities, so
+`workspace/symbol` and `textDocument/documentSymbol` reach `jev-lsp` and are answered `-32601`
+because it never advertised them — which is PROTOCOL §2 working as intended. From the probe:
+
+```
+Workspace symbol search failed: all language servers failed
+Server failures:
+  jev-lsp: LSP error -32601: Method not found
+```
+
+```
+{"action":"symbols","file":"handler.rs"} → LSP error: LSP error -32601: Method not found
+```
+
+The server is not missing a feature here; a client is asking for one it was not told existed.
 
 ## 2. Live Neovim
 
@@ -71,8 +140,8 @@ protocol defect, not a test artifact.
   diagnostic text and line
 - call `vim.lsp.buf.code_action()`, drive `vim.ui.select` with a stubbed chooser, assert
   the buffer changed exactly as the returned edit specified
-- assert one `:Meta undo` restores the buffer byte-for-byte
-- assert `:Meta stop` results in zero further model calls within 2 s (counted by a stub
+- assert one `:Jev undo` restores the buffer byte-for-byte
+- assert `:Jev stop` results in zero further model calls within 2 s (counted by a stub
   endpoint)
 
 This is the only test that proves the product claim — the rest prove the protocol.
@@ -115,21 +184,30 @@ suite is the actual regression net; it is run in CI *and* as part of the design 
 | An edit arriving while an analysis is in flight is dropped rather than queued | `verify/queue_test.py` — proven to fail with the old behaviour injected (0 refreshes, 0 findings) and pass when queued |
 | A superseded analysis emits no refresh | same test, first assertion |
 | A capability is advertised but not served (`workspaceDiagnostics`) | `verify/smoke.py` asserts the sub-capability, not only the top-level providers |
-| A client answering `workspace/configuration` with `{}` resets unrelated settings | `meta-core` `config::tests::an_empty_payload_changes_nothing` and `the_environment_wins_over_the_client_payload` |
-| A reasoning model exhausting its token budget returns nothing | `meta-core` `model::tests::a_reasoning_model_that_ran_out_of_budget_says_so` — the error must name `finish_reason=length` and the fix |
-| The model echoes the schema instead of filling it | `meta-core` `verbs::tests::the_schema_is_an_example_not_a_template_to_echo`; the schema is a concrete example plus an explicit "never use a field name as a value" rule |
+| A client answering `workspace/configuration` with `{}` resets unrelated settings | `jev-core` `config::tests::an_empty_payload_changes_nothing` and `the_environment_wins_over_the_client_payload` |
+| A reasoning model exhausting its token budget returns nothing | `jev-core` `model::tests::a_reasoning_model_that_ran_out_of_budget_says_so` — the error must name `finish_reason=length` and the fix |
+| The model echoes the schema instead of filling it | `jev-core` `verbs::tests::the_schema_is_an_example_not_a_template_to_echo`; the schema is a concrete example plus an explicit "never use a field name as a value" rule |
 | A slow-but-valid answer turned into a transport error by a timeout below the token ceiling | `verify/soak.py` — the run that measured 66 s against a 30 s cap |
-| An answer that cannot be applied is never re-prompted | `meta-lsp` `engine::tests::an_answer_that_does_not_apply_is_repaired_with_the_reason` |
-| An answer that re-emits the lines it did not consume duplicates them | `meta-core` `edit::tests::an_answer_that_reshapes_a_block_absorbs_the_re_emitted_lines` and `an_insertion_that_would_duplicate_a_line_that_stays_is_refused` |
+| An answer that cannot be applied is never re-prompted | `jev-lsp` `engine::tests::an_answer_that_does_not_apply_is_repaired_with_the_reason` |
+| An answer that re-emits the lines it did not consume duplicates them | `jev-core` `edit::tests::an_answer_that_reshapes_a_block_absorbs_the_re_emitted_lines` and `an_insertion_that_would_duplicate_a_line_that_stays_is_refused` |
 | A file with no detectable language not synced | same probe: `plain`, `data.log`, `f.zzz` must arrive as documents |
 | Gating the verb set on a treesitter parser | golden test with the parser absent: the same verb set is offered and scope falls back to `structural`/`whole_file` |
 | Language hook mutating buffer state | `verify/probes/language.lua`: `the language hook did not mutate buffer state` |
-| A skipped buffer reported silently | `:Meta status` test asserting `over_size`, `binary`, `ignored`, `generic_scope` are surfaced |
+| A skipped buffer reported silently | `:Jev status` test asserting `over_size`, `binary`, `ignored`, `generic_scope` are surfaced |
 | Model output applied without anchor resolution | golden test: ambiguous anchor must yield no edit |
 | `ERROR` severity emitted from the findings contract | schema rejection test |
-| The finding cap applied at some surfaces and not others | `meta-core` `findings::tests::the_cap_keeps_warnings_over_information_and_truncates`; every surface reads the one finalised set, so `verify/quality_eval.py` keeps its zero on the clean files |
-| What the client did with an offer never reaching the server | `verify/outcome_test.py` — proven to fail on the binary without `meta.outcome` (17 checks) |
+| The finding cap applied at some surfaces and not others | `jev-core` `findings::tests::the_cap_keeps_warnings_over_information_and_truncates`; every surface reads the one finalised set, so `verify/quality_eval.py` keeps its zero on the clean files |
+| What the client did with an offer never reaching the server | `verify/outcome_test.py` — proven to fail on the binary without `jev.outcome` (17 checks) |
 | A record that can be read as a schema instead of a log | same test: an unknown `kind` is recorded verbatim and counted as nothing |
+| A malformed rule file taking the whole pass down | `verify/rules_test.py` — the file is skipped with a stated reason and the rest still load |
+| One decision call per candidate instead of one per document | `verify/rules_test.py` — N candidates, exactly one call, counted by the stub |
+| An ambient pass with no rules reporting silence as "clean" | `verify/rules_test.py` and `jev-lsp` `engine::tests::a_pass_with_no_rules_says_so_instead_of_finding_nothing` — `("no_rules", …)` |
+| A rule edit served a conclusion taken under the old text | `jev-core` `cache::tests::the_rules_key_separates_content_rules_and_path`; `verify/rules_test.py` revises the rules for every check, so a stale hit fails it |
+| A finding that does not say which pass produced it | `verify/rules_test.py` asserts `data.source == "rules"` on the pull; `verify/rules_live.lua` asserts it on the diagnostic |
+| An unchanged document re-inspected on every save | `verify/rules_test.py` (no call for an unchanged file) and `jev-lsp` `engine::tests::a_document_the_changed_set_does_not_name_is_skipped_without_a_call` |
+| An answer below the rule's floor published anyway | `verify/rules_test.py` — a below-floor answer publishes nothing, and the counts still say it was looked at |
+| The test client's framing desynchronising on a header split across reads | `verify/lsp_framing_test.py` — the frame is completed on the next read, and a bad frame is reported and skipped by length instead of killing the reader |
+| A client the server was not written against cannot get a finding | `verify/omp_lsp.sh` — OMP receives the rule's finding through its own `lsp` tool and reaches `jev.inspect`; the no-rules control receives nothing |
 
 ## 5. Latency bench
 
@@ -151,8 +229,13 @@ is measured separately and reported as `[U]` context, never as a pass condition.
 | "The frozen contract is implemented by a real client" | `verify/probes/trace.lua` green — a reference server's payloads for §2/§4/§8 are accepted, applied, and refused exactly as specified |
 | "Every file is supported, not just known filetypes" | `verify/probes/language.lua` green — 8/11 attached by the built-in path, 11/11 after the plugin pass, including files with no language at all |
 | "The model output is usable" | golden intents |
-| "The findings are quiet enough to live with" | `verify/quality_eval.py` — 4/4 planted defects caught and zero findings on the two clean files |
-| "What the user does with an offer is known" | `verify/outcome_test.py` — `meta.usage` counts it and the line is in `<root>/.git/meta/session.jsonl` |
+| "The findings are quiet enough to live with" | `verify/quality_eval.py` — last measured 2026-09-18 against `deepseek/deepseek-v4-flash`: 4/4 planted defects caught and zero findings on the two clean files. It needs a real endpoint, so the suite reports the row as `?` rather than running it |
+| "What the user does with an offer is known" | `verify/outcome_test.py` — `jev.usage` counts it and the line is in `<root>/.git/jev/session.jsonl` |
+| "The repository's own rules are what runs ambiently" | `verify/rules_test.py` green, and `verify/rules_live.lua` green on both Neovim versions — the rule's finding reaches the sign column carrying the rule's title, the judgement's reason and `data.source = "rules"` |
+| "Both front ends answer a rule the same way" | `verify/cli_parity.py` — `jev inspect` and the LSP path produce identical findings for the same rules and text |
+| "A pass that had nothing to run says so" | `verify/rules_test.py` — `("no_rules", …)` in the result, and `:Jev inspect` renders the skip section |
+| "It is an LSP server, not a Neovim feature" | `verify/omp_lsp.sh` green — OMP, through its own LSP support and with no code from this repository, receives a rule's finding over `textDocument/diagnostic` and calls `workspace/executeCommand jev.inspect` |
+| "The harness itself is not the source of an intermittent red run" | `verify/lsp_framing_test.py` green — the split-header, bad-body and length-less-header cases, all deterministic and server-free |
 
 Anything not covered above is reported as unverified, with the exact probe that would
 settle it.
@@ -226,6 +309,104 @@ Two lessons, both now enforced:
 * **A pull-based design has to be tested through the client's pull path.** Pulling by hand
   from a harness proves the server answers; it does not prove the client ever asks.
 
+### The rules pass, and the two harnesses that pin it
+
+The ambient pass is the rules pass, and it is pinned from two directions — the protocol and the
+editor:
+
+- **`verify/rules_test.py`** (45 checks) drives it end to end against the real binary and the
+  scripted endpoint: a malformed rule file skipped with a reason while the rest still load,
+  `regex` and `absent` semantics, `max_matches` meaning "only when the file holds more than
+  this many", a below-floor answer publishing nothing, N candidates costing **exactly one**
+  decision call, an unchanged document skipped without a call, a cache hit making no call,
+  `data.source == "rules"` on the pull, and `("no_rules", …)` when nothing claims the file.
+  Each check writes its own revision of the rules, because the rules' hash is part of the cache
+  key — a revision is a different question, which is what makes "exactly one call" an assertion
+  about *this* check rather than about whatever ran before it.
+- **`verify/rules_live.lua`** (0 failures, 0 skips on Neovim 0.12.5 and 0.12.1) drives the same
+  claims through a real editor: a rule's finding arrives on the `.unwrap()` line within 30 s of
+  the save, coded with the `finding_id` its `data` carries, its message carrying the rule's
+  title, the rule's prose and the reason the judgement gave, and `data.source = "rules"`;
+  `:Jev inspect` dispatches through the command surface and reports the same finding on the
+  same line with its reason, the counts, and a skip section; `unchanged` appears for a document
+  git calls unchanged and `--force` re-runs it; the finding is still dismissible, still stays
+  gone on a fresh pull, and `:Jev usage` still counts it.
+
+**The suite supervises its stub, and that is not housekeeping.** Twice in this project a red
+harness turned out to be a **stale stub** bound to the port: the process answered `/health`, so
+every pre-flight passed, and then served whatever state it had been left in — which, from the
+client's end, is indistinguishable from a product defect (no findings, no edit). So the runner
+used for the table in `STATUS.md` kills any leftover stub, waits until the port is actually
+free, starts exactly one stub for the whole run, and only then lets a harness near it; it also
+refuses to adopt a stub that answers `/health` while another suite may be mid-run
+(`REFUSE_IF_BUSY=1`), because nothing can tell a sibling's live stub from a stale one. It checks
+the **pid** as well as `/health`, since a process that lost the race for the port exits while
+the port keeps answering.
+
+Two negative controls are recorded for the rules harness, and both are meant to be red in a
+particular way:
+
+| Control | What it looks like |
+|---|---|
+| the decide endpoint is **dead** (`JEV_DECIDE_BASE_URL` at a port nobody listens on) | 0 failures, **4 skips**, each naming why (`…/health did not answer (curl exit 7)`). "No endpoint" must not read as "no product" |
+| the stub is **alive but answers nothing usable** | **4 failures, 1 skip** — the pass records "cached 0 finding(s)" and no diagnostic ever arrives. Nothing in those failures says *stub*, which is exactly why the runner checks the pid and why this control is kept |
+
+The second control is the one worth keeping: it reproduces, on purpose, the shape of a
+regression report, and the only way to tell the two apart is the stub's own liveness and
+identity.
+
+### Two defects the suite found in itself
+
+Both of these were red harness rows that had nothing to do with the product, and they are
+different failures with different fixes. They are recorded together because the lesson is the
+same one: "the harness is red" is not the same claim as "the product is broken", and a suite that
+cannot tell the two apart will send you hunting in the wrong repository.
+
+#### 1. The test client's framing — a dead reader thread
+
+`verify/lsp_framing_test.py` (9 checks) exists because of a bug in **our own test client**, and it
+is worth reading before blaming the server for an intermittent timeout.
+
+`verify/smoke.py`'s `Lsp._read_message` read the message header **one byte at a time** into a
+local buffer with a one-second deadline, and **discarded what it had read** when that deadline
+expired. Under load the deadline could expire mid-header; the next call then began in the middle
+of a message, mis-framed everything after it, and — through the reader thread's blanket
+`except Exception: break` — killed the reader for the rest of the session. Every later request
+timed out at 30 s, which is exactly how it presented: `verify/latency.py` red **two runs in
+three**, on a server that was innocent. It pre-dated this refactor and the rules pass.
+
+Three fixes, each with a check:
+
+* framing state lives in a **per-instance buffer**, so a deadline that expires mid-frame *keeps*
+  the bytes and the next read completes the frame;
+* an unreadable frame is **reported** (`FramingError`, recorded in `framing_errors`) and skipped by
+  its stated length, so the next good frame on the same stream is still delivered — rather than
+  the reader dying quietly;
+* a header with no usable length **raises** instead of guessing where the following frame begins.
+
+The regression test drives the reader over a real pipe, with no server and no product code: a
+header split across two reads with a sleep past the deadline; a bad body followed by a good frame;
+a length-less header; two frames arriving in one read; and the error contract (`FramingError` is a
+distinct, reportable error rather than a timeout). Deterministic, fast, and it needs neither a
+model nor a server.
+
+#### 2. An assertion with no wait — a race reported as a defect
+
+The second one is subtler, and it is why `verify/smoke.py` was intermittently red on a healthy
+server. Its refresh assertion checked `server.saw_request("workspace/diagnostic/refresh")`
+**immediately** after the model call appeared, but the server sends that refresh *after* the pass
+finishes — so under load the assertion ran first, found nothing, and reported a race as a defect.
+
+The fix gives the assertion its own wait: up to 20 s after the model call is seen, polling for the
+refresh, and when it still does not arrive the failure names **what it saw and how long it
+waited** (`seen 0 after 20.0s; server log: …`) rather than leaving a bare mismatch to interpret.
+That is the same discipline as the framing fix: a harness may be impatient, but it may not be
+impatient *and* silent about it.
+
+Together the two are what make the table trustworthy rather than merely green: **three consecutive
+full-table runs** with `FAIL`/`SKIP` counts of zero and identical summary blocks, on a suite that
+used to be red two times in three.
+
 ## 9. What the real model found that the stub could not
 
 Recorded because each was invisible to a scripted model, and each is now pinned by a test:
@@ -245,7 +426,7 @@ Recorded because each was invisible to a scripted model, and each is now pinned 
 
 - **Undo granularity** of a client-applied `WorkspaceEdit` `[R10]`. Headless script
   execution cannot record undo blocks, so the probe was inconclusive. What *is* verified is
-  the plugin's own path: `verify/nvim_live.lua` asserts `:Meta undo` restores the buffer
+  the plugin's own path: `verify/nvim_live.lua` asserts `:Jev undo` restores the buffer
   byte-for-byte, which is the behaviour the product depends on. Plain `u` remains unmeasured.
 - **Model quality** on any verb. The suite proves the pipeline, never the usefulness of a
   particular model's output; that is measured by the user, in the editor, and recorded
@@ -254,7 +435,15 @@ Recorded because each was invisible to a scripted model, and each is now pinned 
   tier config, the `think` control, and the response parser are unit-tested against canned
   payloads, and the wiring is exercised end to end — but no automated test has talked to a
   live `llama.cpp` server, because that costs a GPU. Run it deliberately:
-  `META_BASE_URL=http://127.0.0.1:<port>/v1 META_MODEL=<model> python3 verify/smoke.py`.
+  `JEV_BASE_URL=http://127.0.0.1:<port>/v1 JEV_MODEL=<model> python3 verify/smoke.py`.
+- **A real decision endpoint.** The decide tier's default is remote
+  (`https://api.typesafe.ai/v1`, `TYPESAFE_API_KEY`), and no harness here has ever called it:
+  every rules run — `rules_test.py`, `rules_live.lua`, the negative controls — points
+  `JEV_DECIDE_BASE_URL` at `verify/stub_model.py`, which answers `/systemone` with a scripted
+  decision. What is verified is the wire's shape, both paths (`systemone` and
+  `/alpha/decisions`), and the parsing of every answer kind; what is *not* verified is the
+  hosted endpoint's own behaviour under this load. The local alternative
+  (`http://127.0.0.1:8009/v1`, model `kev-latest`) is likewise unexercised here.
 - **Real-model latency.** The `codeAction` budget is asserted against the stub. What a
   7B–35B model costs on this machine in `codeAction/resolve` is unmeasured.
 
@@ -267,7 +456,7 @@ Recorded because they are deliberate boundaries, not oversights:
   `TextChangedP`) and `inlineCompletionProvider` had to be injected into the `initialize`
   response because `lsp-types` 0.94 cannot express it. Both are moot since 2026-09-19: the
   method, the capability, the `fim` tier and the `<Tab>` acceptance were removed, along with
-  `crates/meta-lsp/src/advertised.rs` and the transport-boundary wrapper that existed only to
+  `crates/jev-lsp/src/advertised.rs` and the transport-boundary wrapper that existed only to
   carry that one field.
 - **`shutdown` with an explicit `params` member is rejected** with `-32602 Unexpected
   params`. tower-lsp only accepts `()` for a no-params method, and JSON-RPC 2.0 permits

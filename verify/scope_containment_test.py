@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A fix may not reach outside the scope the user asked about.
 
-    python3 verify/scope_containment_test.py [--bin target/release/meta-lsp]
+    python3 verify/scope_containment_test.py [--bin target/release/jev-lsp]
 
 Measured bug: the model returned a whole-file rewrite, the server turned it into ops spanning
 the document, and applying a fix replaced the user's entire buffer instead of editing the
@@ -43,7 +43,7 @@ OUT_OF_SCOPE = {
 
 def main():
     bin_path = os.path.abspath(sys.argv[sys.argv.index("--bin") + 1]
-                               if "--bin" in sys.argv else "target/release/meta-lsp")
+                               if "--bin" in sys.argv else "target/release/jev-lsp")
     if not os.path.exists(bin_path):
         print(f"scope_containment_test: no binary at {bin_path}", file=sys.stderr)
         return 2
@@ -87,8 +87,9 @@ def main():
         uri = "file://" + path
 
         server = Lsp([bin_path, "--stdio"],
-                     {k: v for k, v in os.environ.items() if not k.startswith("META_")})
+                     {k: v for k, v in os.environ.items() if not k.startswith("JEV_")})
         server.settings = {
+            "rules": {"enabled": False},
             "budget": {"max_calls_per_min": 30, "max_calls_per_hour": 100},
             "models": {"reason": {"base_url": f"http://127.0.0.1:{port}/v1", "model": "stub-model"},
                        "review": {"base_url": f"http://127.0.0.1:{port}/v1", "model": "stub-model"}},

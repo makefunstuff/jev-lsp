@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The first model call of a session must obey the client's settings, not the built-in defaults.
 
-    python3 verify/settings_race_test.py [--bin target/release/meta-lsp]
+    python3 verify/settings_race_test.py [--bin target/release/jev-lsp]
 
 `workspace/configuration` is a round trip: the server asks after `initialized` and uses the
 answer when it arrives. A request that lands in that window used to be answered from the
@@ -31,7 +31,7 @@ RAW = json.dumps({"summary": "from the stub", "markdown": f"# race\n\n{MARKER}\n
 
 def main():
     bin_path = os.path.abspath(sys.argv[sys.argv.index("--bin") + 1]
-                               if "--bin" in sys.argv else "target/release/meta-lsp")
+                               if "--bin" in sys.argv else "target/release/jev-lsp")
     if not os.path.exists(bin_path):
         print(f"settings_race_test: no binary at {bin_path}", file=sys.stderr)
         return 2
@@ -61,9 +61,10 @@ def main():
             fh.write("def add(a, b):\n    return a + b\n")
         uri = "file://" + path
 
-        env = {k: v for k, v in os.environ.items() if not k.startswith("META_")}
+        env = {k: v for k, v in os.environ.items() if not k.startswith("JEV_")}
         server = Lsp([bin_path, "--stdio"], env)
         server.settings = {
+            "rules": {"enabled": False},
             "models": {
                 "reason": {"base_url": url, "model": "stub-model"},
                 "review": {"base_url": url, "model": "stub-model"},
@@ -82,7 +83,7 @@ def main():
 
         # No pause. This is the request that used to run on the defaults.
         res = server.request("workspace/executeCommand", {
-            "command": "meta.explain",
+            "command": "jev.explain",
             "arguments": [{"uri": uri, "line": 1}],
         }, timeout=60)
         server.stop()

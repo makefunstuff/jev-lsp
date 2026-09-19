@@ -1,33 +1,33 @@
--- An isolated Neovim config for trying meta-lsp by hand.
+-- An isolated Neovim config for trying jev-lsp by hand.
 --
---   nvim -u /data/jpl/Work/meta-lsp/test/visual/init.lua
+--   nvim -u /data/jpl/Work/jev-lsp/test/visual/init.lua
 --
 -- It does not touch your real configuration: no plugin directory, no rtp change outside this
 -- process, nothing written to ~/.config/nvim. Quit with :qa! and nothing is left behind
 -- except the dismissal file, which lives in the fixture's own .git/.
 --
 -- Point it at a model with environment variables:
---   META_BASE_URL   default http://127.0.0.1:37313/v1   (the local llama.cpp server)
---   META_MODEL      default qwen3.6-35b-a3b-iq3xxs
---   META_LSP_BIN    default <repo>/target/release/meta-lsp
+--   JEV_BASE_URL   default http://127.0.0.1:37313/v1   (the local llama.cpp server)
+--   JEV_MODEL      default qwen3.6-35b-a3b-iq3xxs
+--   JEV_LSP_BIN    default <repo>/target/release/jev-lsp
 --
 -- The omp auth gateway works too, and needs no key handling:
---   META_BASE_URL=http://127.0.0.1:4000/v1 META_MODEL=deepseek/deepseek-flash nvim -u …
+--   JEV_BASE_URL=http://127.0.0.1:4000/v1 JEV_MODEL=deepseek/deepseek-flash nvim -u …
 
 local here = vim.fn.fnamemodify(debug.getinfo(1, 'S').source:sub(2), ':p')
 local repo = vim.fn.fnamemodify(here, ':h:h:h')
 
-local BIN = os.getenv('META_LSP_BIN') or (repo .. '/target/release/meta-lsp')
-local BASE = os.getenv('META_BASE_URL') or 'http://127.0.0.1:37313/v1'
-local MODEL = os.getenv('META_MODEL') or 'qwen3.6-35b-a3b-iq3xxs'
+local BIN = os.getenv('JEV_LSP_BIN') or (repo .. '/target/release/jev-lsp')
+local BASE = os.getenv('JEV_BASE_URL') or 'http://127.0.0.1:37313/v1'
+local MODEL = os.getenv('JEV_MODEL') or 'qwen3.6-35b-a3b-iq3xxs'
 
 if vim.fn.executable(BIN) ~= 1 then
-  vim.notify('meta-lsp binary not found or not executable: ' .. BIN ..
+  vim.notify('jev-lsp binary not found or not executable: ' .. BIN ..
     '\n  build it:  cd ' .. repo .. ' && cargo build --release', vim.log.levels.ERROR)
 end
 
 -- The fixture lives in its own directory, which becomes the workspace root.
-local workdir = vim.fn.stdpath('cache') .. '/meta-visual'
+local workdir = vim.fn.stdpath('cache') .. '/jev-visual'
 vim.fn.mkdir(workdir, 'p')
 vim.fn.mkdir(workdir .. '/.git', 'p') -- a root marker, so dismissals land somewhere sane
 local fixture = workdir .. '/review_me.py'
@@ -61,7 +61,7 @@ vim.opt.number = true
 vim.opt.signcolumn = 'yes'   -- findings land here; without it they are easy to miss
 vim.opt.updatetime = 300     -- how quickly idle/save-driven work is picked up
 
-require('meta').setup({
+require('jev').setup({
   cmd = { BIN },
   settings = {
     models = {
@@ -91,19 +91,19 @@ vim.api.nvim_create_autocmd('VimEnter', {
 -- working when the client is not there.
 local waited = 0
 local function report()
-  local clients = vim.lsp.get_clients({ name = 'meta' })
+  local clients = vim.lsp.get_clients({ name = 'jev' })
   if #clients == 0 then
     waited = waited + 250
     if waited < 10000 then
       return vim.defer_fn(report, 250)
     end
-    vim.notify('meta: no client attached after 10s — check :LspLog, and that ' .. BIN
+    vim.notify('jev: no client attached after 10s — check :LspLog, and that ' .. BIN
       .. ' runs', vim.log.levels.ERROR)
     return
   end
-  vim.notify(('meta ready · server attached\n'
+  vim.notify(('jev ready · server attached\n'
     .. 'model: %s\n'
-    .. 'press :Meta status · <leader>ma for actions after saving this file')
+    .. 'press :Jev status · <leader>ja for actions after saving this file')
     :format(MODEL), vim.log.levels.INFO)
 end
 vim.defer_fn(report, 500)

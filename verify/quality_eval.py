@@ -162,7 +162,7 @@ def free_port():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--bin", default=os.path.join(REPO, "target", "release", "meta-lsp"))
+    ap.add_argument("--bin", default=os.path.join(REPO, "target", "release", "jev-lsp"))
     ap.add_argument("--base-url", required=True, help="an OpenAI-compatible endpoint")
     ap.add_argument("--model", required=True)
     ap.add_argument("--timeout", type=float, default=180)
@@ -173,16 +173,16 @@ def main():
                          "comparison of anything")
     args = ap.parse_args()
 
-    workdir = tempfile.mkdtemp(prefix="meta-quality-")
-    trace_path = os.path.join(workdir, ".git", "meta", "session.jsonl")
+    workdir = tempfile.mkdtemp(prefix="jev-quality-")
+    trace_path = os.path.join(workdir, ".git", "jev", "session.jsonl")
     env = {
         k: v
         for k, v in os.environ.items()
-        if not k.startswith("META_")
+        if not k.startswith("JEV_")
     }
-    env["META_BASE_URL"] = args.base_url
-    env["META_MODEL"] = args.model
-    env["META_REVIEW_MODEL"] = args.model
+    env["JEV_BASE_URL"] = args.base_url
+    env["JEV_MODEL"] = args.model
+    env["JEV_REVIEW_MODEL"] = args.model
 
     server = Lsp([args.bin, "--stdio"], env)
     # One analysis per file and this run is not about the limiter, so the ceiling is raised the

@@ -6,7 +6,7 @@ Neovim configuration.
 ## 1. Look at it
 
 ```sh
-cd /data/jpl/Work/meta-lsp
+cd /data/jpl/Work/jev-lsp
 
 # the local llama.cpp server (fast, no cost, thinking switch honoured)
 nvim -u test/visual/init.lua
@@ -18,7 +18,7 @@ quitting leaves nothing behind except a dismissal file inside the fixture's own 
 To use the cloud model instead — the omp auth gateway needs no key handling:
 
 ```sh
-META_BASE_URL=http://127.0.0.1:4000/v1 META_MODEL=deepseek/deepseek-flash \
+JEV_BASE_URL=http://127.0.0.1:4000/v1 JEV_MODEL=deepseek/deepseek-flash \
   nvim -u test/visual/init.lua
 ```
 
@@ -29,31 +29,31 @@ which endpoints are in force.
 
 | Do this | Expect |
 |---|---|
-| wait ~2 s after opening | `meta ready` message; no errors |
+| wait ~2 s after opening | `jev ready` message; no errors |
 | `:write` | a warning sign appears in the sign column within a few seconds |
-| put the cursor on that line, `<leader>ma` | a menu whose first entry is `Fix: file handle is never closed` |
+| put the cursor on that line, `<leader>ja` | a menu whose first entry is `Fix: file handle is never closed` |
 | pick it | the edit is applied; the sign clears |
-| `<leader>mu` | the buffer is restored byte for byte |
-| `:Meta explain` | an explanation opens in a scratch buffer; `q` closes it |
-| `:Meta dismiss` on a finding | it disappears, and stays gone after a re-save |
-| `:Meta status` | queue, budgets, cache counters, and which endpoints are in force |
-| `:Meta followup` with the cursor on a finding | it asks you a question, then the answer arrives in a buffer a few words at a time |
-| `:Meta plan`, type a goal | a plan opens as one line per step; `<CR>` applies that step, `a` the rest, `u` takes one back |
-| `:lua vim.lsp.codelens.run()` on a function | runs the code lens there — `meta: explain`, or `meta: N finding(s) · fix` |
-| `:Meta usage` | published findings, files analysed, and what was applied, dismissed, accepted, undone |
-| `:Meta session` | what this server has done here; `<CR>` on an entry opens the file and line it names |
+| `<leader>ju` | the buffer is restored byte for byte |
+| `:Jev explain` | an explanation opens in a scratch buffer; `q` closes it |
+| `:Jev dismiss` on a finding | it disappears, and stays gone after a re-save |
+| `:Jev status` | queue, budgets, cache counters, and which endpoints are in force |
+| `:Jev followup` with the cursor on a finding | it asks you a question, then the answer arrives in a buffer a few words at a time |
+| `:Jev plan`, type a goal | a plan opens as one line per step; `<CR>` applies that step, `a` the rest, `u` takes one back |
+| `:lua vim.lsp.codelens.run()` on a function | runs the code lens there — `jev: explain`, or `jev: N finding(s) · fix` |
+| `:Jev usage` | published findings, files analysed, and what was applied, dismissed, accepted, undone |
+| `:Jev session` | what this server has done here; `<CR>` on an entry opens the file and line it names |
 
-Four keys are bound: those above, plus `<leader>mq` (ask). The rest of the surface is typed —
-`:Meta review` (review the file now; the findings come back in the Result rather than waiting
-for the next save), `:Meta hints on|off` (inlay hints, off by default: Neovim switches hints on
-per *buffer*, not per client, so turning them on for meta's badge would turn on every other
-server's hints in that buffer too), `:Meta cancel`, `:Meta stop` (the kill switch, no prompt),
-`:Meta start`, `:Meta log`, `:Meta recompute`, `:Meta where`.
+Four keys are bound: those above, plus `<leader>jq` (ask). The rest of the surface is typed —
+`:Jev review` (review the file now; the findings come back in the Result rather than waiting
+for the next save), `:Jev hints on|off` (inlay hints, off by default: Neovim switches hints on
+per *buffer*, not per client, so turning them on for jev's badge would turn on every other
+server's hints in that buffer too), `:Jev cancel`, `:Jev stop` (the kill switch, no prompt),
+`:Jev start`, `:Jev log`, `:Jev recompute`, `:Jev where`.
 
 ## 3. On your own files
 
 ```sh
-META_BASE_URL=http://127.0.0.1:37313/v1 META_MODEL=qwen3.6-35b-a3b-iq3xxs \
+JEV_BASE_URL=http://127.0.0.1:37313/v1 JEV_MODEL=qwen3.6-35b-a3b-iq3xxs \
   nvim -u test/visual/init.lua path/to/your/file.py
 ```
 
@@ -67,19 +67,19 @@ Verified against a real config (lazy.nvim, pylsp, blink.cmp): the server attache
 triggers an analysis, and the finding lands. No change to your configuration:
 
 ```sh
-cd /data/jpl/Work/meta-lsp
+cd /data/jpl/Work/jev-lsp
 nvim -c 'luafile test/visual/rc.lua' path/to/your/file.py
 ```
 
-`test/visual/rc.lua` puts the plugin on the runtimepath itself and calls `require('meta').setup`.
+`test/visual/rc.lua` puts the plugin on the runtimepath itself and calls `require('jev').setup`.
 It does not use `--cmd 'set rtp^=…'`: a config manager runs after `--cmd` and rebuilds the
-runtimepath, so that form fails with `module 'meta' not found` — the first thing tried here.
+runtimepath, so that form fails with `module 'jev' not found` — the first thing tried here.
 
-For a permanent install, put `nvim/` on the runtimepath and paste the `require('meta').setup`
+For a permanent install, put `nvim/` on the runtimepath and paste the `require('jev').setup`
 call from `rc.lua` into your config:
 
 ```sh
-ln -s /data/jpl/Work/meta-lsp/nvim ~/.local/share/nvim/site/pack/meta/start/meta
+ln -s /data/jpl/Work/jev-lsp/nvim ~/.local/share/nvim/site/pack/jev/start/jev
 ```
 
 With lazy.nvim, a local directory spec does the same and is what was used against a real
@@ -88,17 +88,16 @@ new file alone would have been inert):
 
 ```lua
 {
-  dir = '/data/jpl/Work/meta-lsp/nvim',
-  name = 'meta',
+  dir = '/data/jpl/Work/jev-lsp/nvim',
+  name = 'jev',
   lazy = false,          -- must be attached before the first buffer, not on an event
   config = function()
-    local bin = '/data/jpl/Work/meta-lsp/target/release/meta-lsp'
+    local bin = '/data/jpl/Work/jev-lsp/target/release/jev-lsp'
     if vim.fn.executable(bin) ~= 1 then
-      vim.notify('meta-lsp binary not built: ' .. bin, vim.log.levels.WARN)
+      vim.notify('jev-lsp binary not built: ' .. bin, vim.log.levels.WARN)
       return               -- a missing binary must not break startup
     end
-    require('meta').setup({
-      prefix = '<leader>M',
+    require('jev').setup({
       cmd = { bin },
       settings = {
         models = {
@@ -111,24 +110,22 @@ new file alone would have been inert):
 }
 ```
 
-Two deviations from the defaults there, both because of what the surrounding config already
-does, and both worth checking for in any config:
+Two notes about the defaults, both worth checking for in any config:
 
-- **`prefix`.** The plugin's default is `<leader>m`. A config that already maps `<leader>ma`
-  and `<leader>mb` — Telescope marks and `make` in the sample config — will have one of the
-  two silently win. `<leader>M` keeps every meta key in one namespace and collides with
-  nothing. Check `<leader>m*` before installing.
+- **`prefix`.** The default is `<leader>j`, which is free in this config — `<leader>m` is
+  Telescope marks and `make` here, which is why the prefix is not `m`. A different leader still
+  overrides it with `prefix`; check the keys before installing.
 - **No ghost text.** Inline completion was removed from the server on 2026-09-19; generated
-  code is asked for with `<leader>Ma` or `:Meta ask`. Two
+  code is asked for with `<leader>ja` or `:Jev ask`. Two
   providers driving the same surface is worse than one.
 
-`META_BASE_URL` / `META_MODEL` / `META_REVIEW_MODEL` are applied last and override the settings.
+`JEV_BASE_URL` / `JEV_MODEL` / `JEV_REVIEW_MODEL` are applied last and override the settings.
 
 ### Give it time
 
 An analysis against the local model takes **10–40 s**: the prompt is the scope plus context,
 and generation is in the tens of tokens per second. Looking for a sign column 20 s after a
-save and concluding it is broken is a mistake this document has already caused once. `:Meta
+save and concluding it is broken is a mistake this document has already caused once. `:Jev
 status` shows `cache.misses` and `cache.entries` — watch those rather than the clock.
 
 ### One thing in the sample config is not ours
@@ -139,14 +136,14 @@ replacement is the colon form, `client:supports_method(...)`. The plugin uses th
 
 ## 5. When it does not work
 
-1. `:checkhealth meta` — binary, attachment, capabilities.
+1. `:checkhealth jev` — binary, attachment, capabilities.
 2. `:LspLog` — the server logs the endpoint it is actually using:
-   `meta: settings applied — reason http://… · review http://…`.
+   `jev: settings applied — reason http://… · review http://…`.
    If that line names an endpoint you did not configure, the settings did not arrive and the
    server is on its built-in defaults.
-3. `:Meta status` — what the server believes its configuration is.
+3. `:Jev status` — what the server believes its configuration is.
 4. Nothing after `:write`? The analysis is triggered on save
-   (`triggers.diagnostics = "save"`); check `:Meta status` for `calls_last_minute`. Zero after
+   (`triggers.diagnostics = "save"`); check `:Jev status` for `calls_last_minute`. Zero after
    a save means the model call was not made or failed, and the reason is in `:LspLog`.
 
 ## 6. Driving a Neovim that is already open
@@ -154,7 +151,7 @@ replacement is the colon form, `client:supports_method(...)`. The plugin uses th
 To try this in a long-running Neovim without restarting it, load the setup into it:
 
 ```
-:luafile /data/jpl/Work/meta-lsp/test/visual/rc.lua
+:luafile /data/jpl/Work/jev-lsp/test/visual/rc.lua
 ```
 
 The attach pass sweeps the open buffers, so a client appears for each distinct workspace root
@@ -171,7 +168,7 @@ buffer whatever mode it is in — two accidental edits to a real file before tha
 Stated so nothing here promises a surface that does not exist:
 
 - **Nothing else from `docs/UX.md` §1 is missing.** Plans have their step-through buffer
-  (`:Meta plan <goal>`): one line per step, `<CR>` applies that step, `a` the
+  (`:Jev plan <goal>`): one line per step, `<CR>` applies that step, `a` the
   rest, `u` takes one back, and the line says what happened to it.
 - **Code lens and inlay hints** are designed and not advertised.
 - **Scope resolution is structural**, not treesitter-backed: brace and indentation blocks with

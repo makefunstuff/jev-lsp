@@ -1,8 +1,8 @@
 -- Live Neovim: the real plugin against the real server (docs/VERIFICATION.md §2).
 --
---   META_LSP_BIN=/path/to/meta-lsp nvim --headless -u NONE -l verify/nvim_live.lua
+--   JEV_LSP_BIN=/path/to/jev-lsp nvim --headless -u NONE -l verify/nvim_live.lua
 --
--- META_LSP_BIN is the server binary (required). META_ROOT is the fixture workspace
+-- JEV_LSP_BIN is the server binary (required). JEV_ROOT is the fixture workspace
 -- (optional; a fresh temporary directory otherwise).
 --
 -- Asserts, in order:
@@ -13,20 +13,20 @@
 --   2. the pass never attaches twice, and never to a non-file buffer (§5);
 --   3. the language hook recovers a language from contents and does not mutate buffer state
 --      (§2);
---   4. `:Meta status` round-trips (PROTOCOL §6);
+--   4. `:Jev status` round-trips (PROTOCOL §6);
 --   5. a code action, if the server offers one, resolves to a `WorkspaceEdit` that applies
---      and that `:Meta undo` restores byte-for-byte. No action is a SKIP, not a failure: the
+--      and that `:Jev undo` restores byte-for-byte. No action is a SKIP, not a failure: the
 --      server is allowed to have nothing to say about this fixture.
 --
 -- Prints ok/FAIL/SKIP per assertion. Exit is nonzero only on FAIL.
 --
 -- Every wait is bounded: `vim.wait` with an explicit timeout, so the test cannot hang.
 
-local BIN = os.getenv('META_LSP_BIN')
+local BIN = os.getenv('JEV_LSP_BIN')
 if BIN == nil or BIN == '' then
   io.stderr:write(
-    'nvim_live: META_LSP_BIN is not set and is required (path to the meta-lsp server).\n'
-      .. '  usage: META_LSP_BIN=/path/to/meta-lsp nvim --headless -u NONE -l verify/nvim_live.lua\n'
+    'nvim_live: JEV_LSP_BIN is not set and is required (path to the jev-lsp server).\n'
+      .. '  usage: JEV_LSP_BIN=/path/to/jev-lsp nvim --headless -u NONE -l verify/nvim_live.lua\n'
   )
   os.exit(2)
 end
@@ -34,7 +34,7 @@ end
 local failures = 0
 local skips = 0
 
--- Explicit newlines, not print(): Neovim's own message output (vim.notify, :Meta status)
+-- Explicit newlines, not print(): Neovim's own message output (vim.notify, :Jev status)
 -- can flush without a trailing newline and would otherwise run into the next check.
 local function say(line)
   io.stdout:write(line .. '\n')
@@ -95,9 +95,9 @@ vim.opt.runtimepath:prepend(PLUGIN)
 local server_log = dofile(vim.fn.fnamemodify(here, ':p:h') .. '/harness_log.lua')
 server_log.capture()
 
-local root = os.getenv('META_ROOT')
+local root = os.getenv('JEV_ROOT')
 if root == nil or root == '' then
-  root = vim.fn.tempname() .. '-meta-live'
+  root = vim.fn.tempname() .. '-jev-live'
 end
 vim.fn.mkdir(root, 'p')
 
@@ -107,8 +107,8 @@ vim.fn.writefile(
   fixture
 )
 
-local meta = require('meta')
-meta.setup({ cmd = { BIN } })
+local jev = require('jev')
+jev.setup({ cmd = { BIN } })
 
 vim.cmd('filetype on') -- as a real session: FileType fires for whatever Neovim can identify
 vim.cmd('edit ' .. vim.fn.fnameescape(fixture))
@@ -125,27 +125,27 @@ check(
   'fixture.zzz has no filetype, so the built-in FileType path cannot serve it'
 )
 local attached = vim.wait(10000, function()
-  return #vim.lsp.get_clients({ bufnr = bufnr, name = 'meta' }) > 0
+  return #vim.lsp.get_clients({ bufnr = bufnr, name = 'jev' }) > 0
 end, 25)
 check(attached, 'the attach pass attached a client to an unidentified file (docs/LANGUAGE.md §1)')
 
 -- 2. The guards -------------------------------------------------------------------------------
 
-local before = #vim.lsp.get_clients({ bufnr = bufnr, name = 'meta' })
+local before = #vim.lsp.get_clients({ bufnr = bufnr, name = 'jev' })
 vim.api.nvim_exec_autocmds('BufWinEnter', { buffer = bufnr })
 vim.api.nvim_exec_autocmds('BufReadPost', { buffer = bufnr })
 sleep(200)
 check(
-  #vim.lsp.get_clients({ bufnr = bufnr, name = 'meta' }) == before,
+  #vim.lsp.get_clients({ bufnr = bufnr, name = 'jev' }) == before,
   'the attach pass never attaches a second client to the same buffer'
 )
 
 local scratch = vim.api.nvim_create_buf(false, true)
 vim.api.nvim_buf_set_name(scratch, root .. '/scratch-nofile')
-require('meta.attach').attach(scratch)
+require('jev.attach').attach(scratch)
 sleep(200)
 check(
-  #vim.lsp.get_clients({ bufnr = scratch, name = 'meta' }) == 0,
+  #vim.lsp.get_clients({ bufnr = scratch, name = 'jev' }) == 0,
   'a non-file buffer (buftype=nofile) is never attached (docs/LANGUAGE.md §5)'
 )
 vim.api.nvim_buf_delete(scratch, { force = true })
@@ -155,30 +155,30 @@ vim.api.nvim_buf_delete(scratch, { force = true })
 local hook_buf = vim.api.nvim_create_buf(false, false)
 vim.api.nvim_buf_set_lines(hook_buf, 0, -1, false, { '#!/usr/bin/env python3', 'import os' })
 vim.api.nvim_buf_set_name(hook_buf, root .. '/hook.zzz')
-local recovered = require('meta.attach').get_language_id(hook_buf, vim.bo[hook_buf].filetype)
+local recovered = require('jev.attach').get_language_id(hook_buf, vim.bo[hook_buf].filetype)
 check(recovered == 'python', 'the language hook recovers `python` from contents', vim.inspect(recovered))
 check(vim.bo[hook_buf].filetype == '', 'the language hook did not mutate buffer state')
 vim.api.nvim_buf_delete(hook_buf, { force = true })
 
--- 4. `:Meta status` ---------------------------------------------------------------------------
+-- 4. `:Jev status` ---------------------------------------------------------------------------
 
-local dispatched, dispatch_err = pcall(vim.cmd, 'Meta status')
-check(dispatched, ':Meta status dispatches without raising', dispatch_err)
+local dispatched, dispatch_err = pcall(vim.cmd, 'Jev status')
+check(dispatched, ':Jev status dispatches without raising', dispatch_err)
 
 local status_done, status_result, status_err = false, nil, nil
-meta.status(function(err, result)
+jev.status(function(err, result)
   status_err, status_result, status_done = err, result, true
 end)
 if check(vim.wait(15000, function()
   return status_done
-end, 25), 'meta.status answered within 15 s') then
-  check(status_err == nil, 'meta.status round-tripped without error', vim.inspect(status_err))
-  check(type(status_result) == 'table', 'meta.status returned a result', vim.inspect(status_result))
+end, 25), 'jev.status answered within 15 s') then
+  check(status_err == nil, 'jev.status round-tripped without error', vim.inspect(status_err))
+  check(type(status_result) == 'table', 'jev.status returned a result', vim.inspect(status_result))
 end
 
 -- 5. Code action: resolve, apply, undo ---------------------------------------------------------
 
-local client = vim.lsp.get_clients({ bufnr = bufnr, name = 'meta' })[1]
+local client = vim.lsp.get_clients({ bufnr = bufnr, name = 'jev' })[1]
 if client == nil then
   skip('no client attached, so code actions cannot be exercised')
 else
@@ -218,10 +218,10 @@ else
           not vim.deep_equal(text_before, text_after),
           'the resolved WorkspaceEdit changed the buffer'
         )
-        vim.cmd('Meta undo')
+        vim.cmd('Jev undo')
         check(
           vim.deep_equal(vim.api.nvim_buf_get_lines(bufnr, 0, -1, true), text_before),
-          ':Meta undo restored the buffer byte-for-byte (docs/UX.md §3.5)'
+          ':Jev undo restored the buffer byte-for-byte (docs/UX.md §3.5)'
         )
       else
         skip('resolve returned no edit; the server reports why through window/showMessage')
@@ -238,7 +238,7 @@ end
 -- pending request has to be allowed to run while the client is still there.
 pcall(vim.lsp.codelens.enable, false)
 vim.wait(400)
-for _, c in ipairs(vim.lsp.get_clients({ name = 'meta' })) do
+for _, c in ipairs(vim.lsp.get_clients({ name = 'jev' })) do
   c:stop(true)
 end
 sleep(300)

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/meta-core", "crates/meta-lsp", "crates/meta"]
+members = ["crates/jev-core", "crates/jev-lsp", "crates/jev"]
 
 [workspace.package]
 version = "0.1.0"

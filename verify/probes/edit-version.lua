@@ -12,7 +12,7 @@ local M = vim.lsp.util
 
 local buf = vim.api.nvim_create_buf(true, false)
 vim.api.nvim_set_current_buf(buf)
-vim.api.nvim_buf_set_name(buf, '/tmp/meta-probe-edit-version.lua')
+vim.api.nvim_buf_set_name(buf, '/tmp/jev-probe-edit-version.lua')
 vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'local x = 1' })
 vim.bo[buf].modified = false
 

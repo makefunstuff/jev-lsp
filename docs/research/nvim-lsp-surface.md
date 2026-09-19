@@ -159,7 +159,7 @@ multi-edit `WorkspaceEdit` from a real RPC callback, then count `u` presses need
 return to the pre-edit text.
 
 Design response: do not depend on it. The plugin snapshots buffer content before and
-after every applied edit and provides `:Meta undo`, which is correct regardless of what
+after every applied edit and provides `:Jev undo`, which is correct regardless of what
 undo blocks do.
 
 ## 11. Client capability dump (the ones the design depends on)
@@ -277,6 +277,6 @@ exactly the kind of mistake this section exists to prevent in the server.
   a model call is a hazard. Off by default, behind an explicit opt-in.
 - `textDocument/formatting`, `rangeFormatting` — belong to real formatters.
 - `textDocument/semanticTokens` — belongs to real parsers; the model has nothing to add.
-- Custom `meta/…` LSP methods — unnecessary. The plugin is in-process with Neovim and can
+- Custom `jev/…` LSP methods — unnecessary. The plugin is in-process with Neovim and can
   call Lua directly; the standard `workspace/executeCommand` + `$/progress` pair covers
   the back-channel.

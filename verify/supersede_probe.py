@@ -25,7 +25,7 @@ The stub is stalled (`--stall-ms`, default 1500) so the race is deterministic ra
 load-dependent, and the probe asserts the race was actually set up (`analysis_in_flight`)
 so a green run cannot mean "nothing was in flight".
 
-    python3 verify/supersede_probe.py [--server target/release/meta-lsp] [--stall-ms 1500]
+    python3 verify/supersede_probe.py [--server target/release/jev-lsp] [--stall-ms 1500]
 
 Standard library only. Exits 0 when every assertion holds.
 """
@@ -93,16 +93,16 @@ def code_action_params(uri):
 
 
 def diagnostic_params(uri):
-    return {"textDocument": {"uri": uri}, "identifier": "meta"}
+    return {"textDocument": {"uri": uri}, "identifier": "jev"}
 
 
 def run_case(server, stub_url, timeout, racy):
     """Open, optionally open the action menu, edit, save — then watch what the client sees."""
-    workspace = tempfile.mkdtemp(prefix="meta-supersede-")
+    workspace = tempfile.mkdtemp(prefix="jev-supersede-")
     fixture = os.path.join(workspace, "attention.py")
     pathlib.Path(fixture).write_text(FIXTURE, encoding="utf-8", newline="\n")
     proc = subprocess.Popen([server], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            cwd=REPO, env=dict(os.environ, META_BASE_URL=stub_url))
+                            cwd=REPO, env=dict(os.environ, JEV_BASE_URL=stub_url))
     session = lsp_client.Session(proc.stdout, proc.stdin, timeout=timeout, process=proc)
     result = {"racy": racy}
     try:
@@ -114,7 +114,7 @@ def run_case(server, stub_url, timeout, racy):
         if racy:
             session.request("textDocument/codeAction", code_action_params(uri))
             status = session.request("workspace/executeCommand",
-                                     {"command": "meta.status", "arguments": [{}]}) or {}
+                                     {"command": "jev.status", "arguments": [{}]}) or {}
             result["in_flight"] = status.get("analysis_in_flight")
         baseline = session.server_request_count("workspace/diagnostic/refresh")
         session.did_change(uri, EDITED)
@@ -158,8 +158,8 @@ def main():
                     "client's side: a refresh arrives after the save and the pull that "
                     "follows describes the current content.")
     parser.add_argument("--server", metavar="PATH", default=os.path.join(
-        REPO, "target", "release", "meta-lsp"), help="meta-lsp binary (default: "
-        "target/release/meta-lsp)")
+        REPO, "target", "release", "jev-lsp"), help="jev-lsp binary (default: "
+        "target/release/jev-lsp)")
     parser.add_argument("--stall-ms", metavar="MS", type=int, default=1500,
                         help="delay the stub model applies to every completion, so the "
                              "race is deterministic (default: %(default)s)")

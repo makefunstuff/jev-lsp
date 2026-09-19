@@ -10,7 +10,7 @@
 -- Runs the stub server in verify/probes/streaming/server.py over real stdio framing.
 -- Exits nonzero if any assertion fails.
 
-local TOKEN = 'meta:probe-8f3c1d'
+local TOKEN = 'jev:probe-8f3c1d'
 
 local here = debug.getinfo(1, 'S').source:sub(2)
 local dir = vim.fn.fnamemodify(here, ':h')
@@ -18,7 +18,7 @@ local server = dir .. '/streaming/server.py'
 
 local buf = vim.api.nvim_create_buf(true, false)
 vim.api.nvim_set_current_buf(buf)
-vim.api.nvim_buf_set_name(buf, '/tmp/meta-probe-streaming.lua')
+vim.api.nvim_buf_set_name(buf, '/tmp/jev-probe-streaming.lua')
 vim.api.nvim_buf_set_lines(buf, 0, -1, false, { '-- probe' })
 
 local seen = {}
@@ -33,7 +33,7 @@ vim.api.nvim_create_autocmd('LspProgress', {
 })
 
 local client_id = vim.lsp.start({
-  name = 'meta-streaming-probe',
+  name = 'jev-streaming-probe',
   cmd = { 'python3', server },
   root_dir = '/tmp',
 }, { bufnr = buf })

@@ -4,11 +4,11 @@ Frozen. Changes require editing this file first, with a dated changelog entry. E
 constraint here is backed by a probe in `docs/research/nvim-lsp-surface.md`; the label
 `[R#]` refers to that document's section numbers.
 
-Scope: the LSP surface between `crates/meta-lsp` and any LSP client; the artifact schemas;
+Scope: the LSP surface between `crates/jev-lsp` and any LSP client; the artifact schemas;
 the CLI contract. Internal design is not frozen here.
 
-Name: workspace and binary are `meta`, crates `meta-core` / `meta-lsp` / `meta`, plugin
-`nvim/`. The repository directory is `meta-lsp`. Reversible by mechanical sweep.
+Name: workspace and binary are `jev`, crates `jev-core` / `jev-lsp` / `jev`, plugin
+`nvim/`. The repository directory is `jev-lsp`. Reversible by mechanical sweep.
 
 ---
 
@@ -21,7 +21,7 @@ Name: workspace and binary are `meta`, crates `meta-core` / `meta-lsp` / `meta`,
 | N3 | Expensive work happens in `codeAction/resolve` or in the background worker. | Resolve is invoked only for the picked action `[R4]`. |
 | N4 | Every `WorkspaceEdit` uses `documentChanges` with an explicit integer `version` on each `TextDocumentEdit`. | Bare `changes` skips the version check; an absent `version` raises inside the client `[R3]`. |
 | N5 | The model never emits LSP ranges. | Ranges are encoding- and version-sensitive; the server derives them from treesitter scope plus byte offsets. |
-| N6 | No custom `meta/…` LSP methods. | The standard surface plus the in-process Lua plugin covers every requirement `[R1]`; custom methods buy nothing and cost portability. |
+| N6 | No custom `jev/…` LSP methods. | The standard surface plus the in-process Lua plugin covers every requirement `[R1]`; custom methods buy nothing and cost portability. |
 | N7 | Free-text input comes from the plugin, never from the server. | The protocol cannot ask for text `[R1]`. |
 | N8 | Nothing is applied without approval, except verbs explicitly marked `auto` in config. | Silent edits destroy trust faster than wrong edits. |
 | N9 | The server holds no cross-session memory. Caches are keyed by content hash and are never a source of truth. | Two editors, two views; a stale cache must be detectably stale, not authoritative. |
@@ -42,12 +42,12 @@ Server capabilities returned from `initialize`:
   "codeActionProvider": {
     "resolveProvider": true,
     "codeActionKinds": [
-      "quickfix", "quickfix.meta",
-      "refactor.rewrite", "refactor.rewrite.meta",
-      "source", "source.meta", "source.fixAll"
+      "quickfix", "quickfix.jev",
+      "refactor.rewrite", "refactor.rewrite.jev",
+      "source", "source.jev", "source.fixAll"
     ]
   },
-  "diagnosticProvider": { "identifier": "meta", "interFileDependencies": false, "workspaceDiagnostics": false },
+  "diagnosticProvider": { "identifier": "jev", "interFileDependencies": false, "workspaceDiagnostics": false },
   "codeLensProvider": { "resolveProvider": false },
   "inlayHintProvider": { "resolveProvider": false },
   "executeCommandProvider": { "commands": [ /* §6 */ ], "workDoneProgress": true }
@@ -72,9 +72,9 @@ one entry at a time as features land. `codeLensProvider` and `inlayHintProvider`
 (`docs/UX.md`, `docs/ROADMAP.md`) and are deliberately **not** advertised yet: they are not
 implemented.
 
-Standard kinds only, with a `.meta` suffix where the origin matters. Kind filtering in the
+Standard kinds only, with a `.jev` suffix where the origin matters. Kind filtering in the
 client is prefix-based on `.` `[R4]`, so `refactor.rewrite` also matches
-`refactor.rewrite.meta`, while `only = ["refactor.rewrite.meta"]` selects just ours.
+`refactor.rewrite.jev`, while `only = ["refactor.rewrite.jev"]` selects just ours.
 
 `workDoneProgress: true` is declared on `executeCommandProvider` because that is the only
 request we report progress on. Per the specification this flag exists so a client does not
@@ -113,8 +113,10 @@ asked for them, and the budgets are the design they will be held to.
 
 ### 3.3 Client to server, control
 
-`workspace/executeCommand` (§6) and `workspace/didChangeWatchedFiles` (repo-level
-observation, dynamically registered).
+`workspace/executeCommand` (§6) and `workspace/didChangeConfiguration` — how the kill switch
+takes effect (PROTOCOL §5). Nothing else: in particular there is no
+`workspace/didChangeWatchedFiles` and no dynamic registration, because the repository's changed
+set is asked of git when a pass needs it (§5) rather than watched for.
 
 ### 3.4 Server to client
 
@@ -125,31 +127,33 @@ design is visible, not as a claim of coverage.
 
 | Method | Used for | Sent |
 |---|---|---|
+| `workspace/configuration` | Reading the `jev` section of the client's settings (§10). A request the client answers. | yes |
 | `workspace/diagnostic/refresh` | Background analysis produced new findings — client re-pulls. | yes |
 | `workspace/codeLens/refresh` | Background work changed available affordances. | yes |
 | `$/progress` | Streaming and long-running status, under a token from §3.5. | yes |
 | `workspace/applyEdit` | Applying an approved plan step without a pick. | yes |
 | `window/showDocument` | Opening a plan or explanation artifact as a buffer. | yes |
+| `window/showMessage` | The failures a user must be told about once: the model unreachable, a budget first exhausted, a post-apply divergence (§4, §8). Never on a normal edit. | yes |
 | `textDocument/publishDiagnostics` | Only for findings the plugin has explicitly requested as push (edits made *by* the server). | yes |
 | `window/workDoneProgress/create` | Progress the server starts with no request to attach to. | no — every token comes from the client (§3.5 path 1), so none is ever created |
 | `window/showMessageRequest` | Approval prompt with a pick-list `[R2]`. | no — the decision is the client's own picker (`vim.ui.select`) |
-| `client/registerCapability` | `workspace/didChangeWatchedFiles` watchers. | no — static registration covers what is used |
+| `client/registerCapability` | `workspace/didChangeWatchedFiles` watchers. | no — no watchers are registered at all, statically or dynamically: the changed set is asked of git when a pass needs it (§5) |
 
 ### 3.4.1 `codeLens` — and who runs its command
 
 Lenses are returned fully formed: one per declaration at the left margin, `resolveProvider` is
 false, so a document costs one request and no lens costs a request of its own. The title is
-deterministic and never model output — `meta: explain` for a clean declaration, `meta: N
+deterministic and never model output — `jev: explain` for a clean declaration, `jev: N
 finding(s) · fix` for one with cached findings, where "cached" is the same cache the sign
 column reads.
 
-The `command.command` of every lens is in the reserved namespace **`meta.plugin.`**, which the
+The `command.command` of every lens is in the reserved namespace **`jev.plugin.`**, which the
 plugin handles in-process and never sends to the server:
 
 | Command | What the client does |
 |---|---|
-| `meta.plugin.explain` | the plugin's own explain flow, at the cursor the lens was run from |
-| `meta.plugin.pick` | the plugin's action picker, same flow as `<leader>ma` |
+| `jev.plugin.explain` | the plugin's own explain flow, at the cursor the lens was run from |
+| `jev.plugin.pick` | the plugin's action picker, same flow as `<leader>ja` |
 
 The reason is §7: **the server never learns a buffer exists.** An explanation has no URI, so
 `window/showDocument` cannot open it, and a lens that is rendered but cannot do anything is
@@ -157,7 +161,7 @@ worse than no lens. `vim.lsp.codelens.run()` re-requests and then sends the comm
 server, so the plugin wraps `run` and dispatches its own namespace locally; every other
 command passes through untouched `[R14]`.
 
-### 3.4.3 `meta.document` — what the client knows about a document
+### 3.4.3 `jev.document` — what the client knows about a document
 
 The server has no parser, by design (`LANGUAGE.md` §4): its declaration scan is structural, and
 in C, C++, Java and C# — languages that declare a function by *shape* rather than by keyword —
@@ -166,7 +170,7 @@ found:
 
 ```jsonc
 // plugin -> server, on attach, on change (debounced), on save, and on FileType
-{ "command": "meta.document",
+{ "command": "jev.document",
   "arguments": [ { "uri": "file:///…/statusline.lua", "version": 7,
                    "definitions": [ { "start_line": 45, "end_line": 51 },
                                     { "start_line": 114, "end_line": 128 } ],
@@ -205,7 +209,7 @@ set gives all three declarations.
 ### 3.4.2 `inlayHint` — the badge, and why it is off
 
 One hint per declaration that has **cached findings**, at the end of the declaration's head
-line: `meta: N finding(s)`, with the labels in the tooltip. Nothing anywhere else. Silence is
+line: `jev: N finding(s)`, with the labels in the tooltip. Nothing anywhere else. Silence is
 the default rather than a state to be reported — a hint reading "clean" on every function in a
 file would be the most intrusive surface in the editor, and hints sit inside the text where
 they cannot be skimmed past.
@@ -220,7 +224,7 @@ they cannot be skimmed past.
 The client decides whether to draw any of this, and the plugin keeps it **off** by default for
 a reason of Neovim's rather than a matter of taste: `vim.lsp.inlay_hint.enable` switches hints
 on **per buffer, not per client**, so turning it on for this badge turns on every other
-server's hints in that buffer too. `:Meta hints on|off` toggles it for the buffer.
+server's hints in that buffer too. `:Jev hints on|off` toggles it for the buffer.
 
 ### 3.4.4 Project context — what the editor sends with a request
 
@@ -229,7 +233,7 @@ reading. The client has all three, so it may attach what it found to any request
 generates:
 
 ```jsonc
-{ "command": "meta.explain",
+{ "command": "jev.explain",
   "arguments": [ { "uri": "…", "line": 40,
     "context": [ { "kind": "imports",   "uri": "…", "start_line": 0, "end_line": 12, "text": "…" },
                  { "kind": "reference", "uri": "…", "start_line": 88, "end_line": 92, "text": "…" },
@@ -259,8 +263,8 @@ Kinds are the client's words; the server renders them and orders them. `imports`
 
 ### 3.4.5 `hover` — what has already been said about a scope
 
-Hover shows the answer to a question the user has already asked. `meta.explain` and
-`meta.followup` store what they produced, keyed by document and scope, and hover returns it:
+Hover shows the answer to a question the user has already asked. `jev.explain` and
+`jev.followup` store what they produced, keyed by document and scope, and hover returns it:
 
 - **No model call, ever.** A hover is a keystroke's gesture; one that waits ten seconds is one
   nobody uses. `resolveProvider` is therefore not advertised — the contents are complete.
@@ -286,9 +290,9 @@ A token is obtained in exactly one of two ways:
 
    ```jsonc
    // plugin -> server
-   { "command": "meta.plan",
+   { "command": "jev.plan",
      "arguments": [ { "goal": "make retry cancellable" } ],
-     "workDoneToken": "meta:8f3c1d" }
+     "workDoneToken": "jev:8f3c1d" }
    ```
 
 2. **Server-initiated.** For work with no client request to attach to (a background
@@ -318,10 +322,10 @@ values that carry the text so far in `data`:
 
 ```jsonc
 // server -> client
-{ "token": "meta:8f3c1d",
+{ "token": "jev:8f3c1d",
   "value": { "kind": "report",
-             "message": "meta: explaining — 412 bytes",
-             "data": { "schema": "meta.artifact/1",
+             "message": "jev: explaining — 412 bytes",
+             "data": { "schema": "jev.artifact/1",
                        "kind": "explanation",
                        "partial": true,
                        "markdown": "# Summary\n\n…" } } }
@@ -349,8 +353,8 @@ rendered as a message.
 
 ### 3.6 The session record, and why it is not memory
 
-Every command and every analysis appends one line to `<root>/.git/meta/session.jsonl`, and
-`meta.session` reads the tail back. An entry carries the place the request was anchored on
+Every command and every analysis appends one line to `<root>/.git/jev/session.jsonl`, and
+`jev.session` reads the tail back. An entry carries the place the request was anchored on
 (`uri`, and `line` when the request or the findings give one), which is what lets a client put
 a jump target on the line rather than a bare description of it. It sits where dismissals sit, so it survives a restart,
 survives a buffer being closed, and never appears in `git status`.
@@ -394,21 +398,21 @@ preview pane, never as the label.
 
 | Verb | Kind | Produces | Auto-apply? |
 |---|---|---|---|
-| `fix` | `quickfix.meta` | Edit | yes, when config allows and a finding id is present |
-| `harden` | `refactor.rewrite.meta` | Edit | no |
-| `types` | `refactor.rewrite.meta` | Edit | no |
-| `docs` | `refactor.rewrite.meta` | Edit | no |
-| `rewrite` | `refactor.rewrite.meta` | Edit | no |
-| `test` | `refactor.rewrite.meta` | Edit incl. `create` resource operation | no |
-| `explain` | — | Artifact, via the `meta.explain` command (§6) | n/a |
-| `review` | `source.meta` | Findings + refresh | n/a |
-| `generate` | `refactor.rewrite.meta` | Edit at cursor | no |
+| `fix` | `quickfix.jev` | Edit | yes, when config allows and a finding id is present |
+| `harden` | `refactor.rewrite.jev` | Edit | no |
+| `types` | `refactor.rewrite.jev` | Edit | no |
+| `docs` | `refactor.rewrite.jev` | Edit | no |
+| `rewrite` | `refactor.rewrite.jev` | Edit | no |
+| `test` | `refactor.rewrite.jev` | Edit incl. `create` resource operation | no |
+| `explain` | — | Artifact, via the `jev.explain` command (§6) | n/a |
+| `review` | `source.jev` | Findings + refresh | n/a |
+| `generate` | `refactor.rewrite.jev` | Edit at cursor | no |
 | `fixAll` | `source.fixAll` | Edits for every `ready` finding in scope | yes, when config allows |
 
 `explain` and `review` still arrive through the code action menu; they resolve to a
 `command` that opens a buffer. One entry point for every intent.
 
-`meta.followup` is the one command that is not an action. It carries a question the *plugin*
+`jev.followup` is the one command that is not an action. It carries a question the *plugin*
 asked the user for (N7 — free text enters at the client, never at the server) and, when the
 cursor is on a finding, that finding's id, which the server looks up and puts in the prompt.
 That is the whole difference from `explain`: same context, same artifact contract, same
@@ -428,11 +432,20 @@ Ordered, all mandatory, all evaluated before any model call:
 3. **Budgets** — `max_calls_per_min`, `max_calls_per_hour`, `max_tokens_per_session`.
    Exhaustion is not an error: the server returns `state = "over_budget"` actions and a
    single `window/showMessage` on first exhaustion, then stays silent.
-5. **Kill switch** — `:Meta stop` (plugin) sets `enabled = false` through
+5. **Kill switch** — `:Jev stop` (plugin) sets `enabled = false` through
    `workspace/configuration` re-read; the server stops issuing model calls immediately and
    drains in-flight work.
 6. **Cancellation** — `$/cancelRequest` aborts the model call via an `AbortSignal`-style
-   token threaded through `meta-core`.
+   token threaded through `jev-core`.
+
+**The rules pass takes the same gates in its own order**, because two of them have to come
+before the call to mean anything: the file gates; the rules and their `applies_to`; the
+inspections, which are milliseconds of local work and decide nothing; the cache, keyed by
+content hash *and* the rules' hash, so a rule edit invalidates every conclusion taken under the
+old text; the changed-set test (§6, `force` by exception), which is what keeps a save from
+re-asking about files nobody touched; then one budget permit taken *before* one decision call
+for the whole document. No answer is invented: a question the response does not mention
+publishes nothing.
 
 ---
 
@@ -440,20 +453,21 @@ Ordered, all mandatory, all evaluated before any model call:
 
 | Command | Arguments | Returns | Served |
 |---|---|---|---|
-| `meta.status` | `{}` | `Result` with queue, budgets, cache counters, in-flight calls | yes |
-| `meta.recompute` | `{}` | `Result` | yes |
-| `meta.explain` | `{uri, line, range?}` | `Artifact` (§7, `kind: "explanation"`) | yes |
-| `meta.ask` | `{question, uri?, context?, web?}` | `Artifact` (§7, `kind: "answer"`) — or a one-line `FETCH` request | yes |
-| `meta.review` | `{uri}` | `Result` with the findings for the file as it is now | yes |
-| `meta.followup` | `{uri, line, question, finding_id?, range?}` | `Artifact` (§7, `kind: "answer"`) | yes |
-| `meta.document` | `{uri, version, definitions?, context?}` | `Result` with `{stored}` — the client's own parser answering §3.4.3 | yes |
-| `meta.session` | `{limit?}` | `Result` with `{entries, count, path}` | yes |
-| `meta.usage` | `{}` | `Result` counting what was published and what was done with it, over the session log | yes |
-| `meta.outcome` | `{kind, id?, line?, verb?}` | `Result` with `{recorded}` — the client reporting what the user did | yes |
-| `meta.cancel` | `{progress_token}` | `Result` | yes |
-| `meta.plan` | `{goal, scope}` | `Artifact` | yes |
-| `meta.apply` | `{plan_id, steps: [n]}` | `Result` | yes |
-| `meta.revert` | `{edit_id}` | `Result` | yes |
+| `jev.status` | `{}` | `Result` with queue, budgets, cache counters, in-flight calls | yes |
+| `jev.recompute` | `{}` | `Result` | yes |
+| `jev.explain` | `{uri, line, range?}` | `Artifact` (§7, `kind: "explanation"`) | yes |
+| `jev.ask` | `{question, uri?, context?, web?}` | `Artifact` (§7, `kind: "answer"`) — or a one-line `FETCH` request | yes |
+| `jev.review` | `{uri}` | `Result` with the findings for the file as it is now | yes |
+| `jev.followup` | `{uri, line, question, finding_id?, range?}` | `Artifact` (§7, `kind: "answer"`) | yes |
+| `jev.document` | `{uri, version, definitions?, context?}` | `Result` with `{stored}` — the client's own parser answering §3.4.3 | yes |
+| `jev.session` | `{limit?}` | `Result` with `{entries, count, path}` | yes |
+| `jev.usage` | `{}` | `Result` counting what was published and what was done with it, over the session log | yes |
+| `jev.outcome` | `{kind, id?, line?, verb?}` | `Result` with `{recorded}` — the client reporting what the user did | yes |
+| `jev.cancel` | `{progress_token}` | `Result` | yes |
+| `jev.plan` | `{goal, scope}` | `Artifact` | yes |
+| `jev.apply` | `{plan_id, steps: [n]}` | `Result` | yes |
+| `jev.revert` | `{edit_id}` | `Result` | yes |
+| `jev.inspect` | `{path?, force?}` | `Result` with `findings`, `considered`, `candidates`, `skipped` | yes |
 
 Sent as `workspace/executeCommand`. Only the served commands are advertised in
 `executeCommandProvider.commands` (§2): a client should not be told about a command that can
@@ -461,25 +475,54 @@ only answer "not implemented". Any command that is not served — an unknown nam
 future version adds before it is implemented — still answers with a structured
 `{ok: false, error: {code: "not_implemented"}}` rather than failing silently.
 
-**What the model may read off the machine.** Only `meta.ask` with `web: true`, and only this:
+**What the model may read off the machine.** Only `jev.ask` with `web: true`, and only this:
 the answer may be exactly one line, `FETCH <https url>`, which the server fetches once
 (https only, 64 KiB, no redirect following), shows the model the text under a heading naming
 the url, and records in the artifact as `_Read: <url>_`. A fetch that fails answers
-`fetch_failed` rather than dropping the page silently. Nothing else in this contract reaches
-the network or the filesystem: the server reads no file, and every other byte it sees arrived
-over the protocol from the client. This is the boundary that keeps a model from pulling
-arbitrary bytes into its own prompt without the user being able to see which page it read.
+`fetch_failed` rather than dropping the page silently. Nothing else in this contract gives
+model-authored text a route off the machine: **no document is read from disk** — every byte of
+one arrives over the protocol from the client — and the only things the server reads on its own
+are the repository's rule files (§9) and git's answer about which files changed (§5). What it
+writes is its own record (§3.6), which is a log and never an input (N9). This is the boundary
+that keeps a model from pulling arbitrary bytes into its own prompt without the user being able
+to see which page it read.
 
-**A plan step is applied by the server, not the client.** `meta.apply` resolves the step
+**A plan step is applied by the server, not the client.** `jev.apply` resolves the step
 against the content the server currently holds, builds the edit, and sends
 `workspace/applyEdit` back to the client — so a step that has become stale is refused before
-anything is written (it answers `{"code": "stale"}` in the `failed` list). `meta.revert`
+anything is written (it answers `{"code": "stale"}` in the `failed` list). `jev.revert`
 restores the bytes recorded before the edit and then forgets the id, so a second revert is
 `unknown_edit` rather than a silent no-op.
 
 No command takes a token argument: progress is reported under the `workDoneToken` of the
 enclosing request (§3.5), and cancelling a request is `$/cancelRequest` against the id the
-plugin's send call returned. `meta.cancel` exists only for work the plugin did not issue.
+plugin's send call returned. `jev.cancel` exists only for work the plugin did not issue.
+
+**`jev.inspect` is the ambient pass, on demand.** It runs the same call the save path runs,
+over the same rules, through the same code (`inspections::select` → one decision call →
+`inspections::resolve`), because two front ends that disagreed about what a rule says would be
+worse than one that never ran. `path` names an open document — a filesystem path, a suffix of
+one, or its uri — and omitted it means *the one open document*, which is `bad_arguments` when
+more than one is open. `force` skips the changed-set check: **without it a document git does
+not report as changed is not inspected at all**, which is the whole reason the flag exists. The
+result carries what the pass did, not only what it found:
+
+- `considered` — how many loaded rules claim this file (`applies_to`, §9);
+- `candidates` — how many places their inspections named;
+- `findings` — the same shape `jev.review` prints: `{id, line, start_col, end_col, severity,
+  label, detail, verb}`, with `label` the rule's title and `detail` its prose plus the reason
+  the decision gave and the probability it cleared;
+- `skipped` — a list of `{code, detail}`: a rule file that could not be read (the code is its
+  path), `("unchanged", <path>)` for a document the changed set does not name,
+  `("unlocatable_anchor", <n> finding(s) …)` for an answer whose anchor occurs zero or several
+  times in the text — the same rule the review pathway applies (§4) — and `("no_rules",
+  <sentence>)` when the pass had nothing to run.
+
+**There is no fallback.** A repository with no rules gets no ambient findings, and the pass
+*says so* (`no_rules`) rather than reporting a clean document — "nothing was inspected" and
+"nothing was wrong" must never look the same (§12). The failure codes are the ordinary ones:
+`over_budget` for a refused permit, `model_error` for a decision call that did not answer,
+`contract_error` for an answer that arrived and could not be read, `skipped` for a gate.
 
 ### 6.1 Error codes
 
@@ -513,8 +556,8 @@ cancelled is a defect. The progress need not have been marked `cancellable` `[R1
 field is executed by the client by sending it *back to the server* as
 `workspace/executeCommand` (`vim/lsp/buf.lua:1252-1258`, verified). A server therefore
 cannot use that field to make the client open a buffer, and an artifact has nowhere else to
-go. So the artifact is *pulled* by the plugin instead: `:Meta explain` calls
-`meta.explain` and renders the returned Markdown itself.
+go. So the artifact is *pulled* by the plugin instead: `:Jev explain` calls
+`jev.explain` and renders the returned Markdown itself.
 
 ---
 
@@ -524,7 +567,7 @@ Stable, versioned, self-describing, plain JSON on one line per record where stre
 
 ```jsonc
 // Artifact
-{ "schema": "meta.artifact/1", "kind": "plan" | "explanation" | "review",
+{ "schema": "jev.artifact/1", "kind": "plan" | "explanation" | "review",
   "id": "…", "created": "2026-09-18T12:00:00Z",
   "goal": "…",
   "language": "rust",            // resolved language for the primary target (N11)
@@ -538,7 +581,7 @@ Stable, versioned, self-describing, plain JSON on one line per record where stre
 }
 
 // Result — the envelope for every command
-{ "schema": "meta.result/1", "ok": true,
+{ "schema": "jev.result/1", "ok": true,
   "artifacts": ["…"], "diagnostics": [ … ], "edit_ids": ["…"],
   "error": { "code": "…", "message": "…" },   // present iff ok == false
   "usage": { … } }
@@ -580,30 +623,72 @@ is applied when the document has not moved, and is refused by the client when it
 
 ## 9. Diagnostics
 
-- Source name: `meta`. One namespace, own `resultId` per document.
+- Source name: `jev`. One namespace, own `resultId` per document. The **name** stays `jev`
+  whatever produced a finding — one source, one place a client turns the surface off; which
+  *pass* wrote it travels in `data`.
 - Two severities are permitted: `INFORMATION` for observations, `WARNING` for findings.
   `ERROR` is reserved for a divergence the server can prove §8 violated.
-- Every finding carries `data = { finding_id, verb, content_hash }` so `quickfix.meta`
-  actions can be keyed to it `[R4]`.
-- Findings must be dismissible (`:Meta dismiss <finding_id>`), and a dismissal is recorded
+- Every finding carries `data = { finding_id, verb, content_hash, source }` so `quickfix.jev`
+  actions can be keyed to it `[R4]`. `source` is `"rules"` (a repository convention the
+  decision tier confirmed) or `"review"` (the chat review tier's opinion) — a client that shows
+  the two differently needs to know, and nothing else about the finding differs.
+- Findings must be dismissible (`:Jev dismiss <finding_id>`), and a dismissal is recorded
   in a per-repository file so it does not resurface.
 - Publish is reserved for changes the server made; otherwise findings are served by pull,
   refreshed by `workspace/diagnostic/refresh` `[R5]`.
+
+**Where ambient findings come from: the repository, not the model's taste.** The ambient pass
+is the *rules* pass (`docs/MODEL.md` §2, `docs/UX.md` §1.1), and what it runs is data the
+repository owns — `.jev/rules/*.json`, read in path order, relative to the workspace root (or,
+with no root, the document's own directory):
+
+```jsonc
+{ "schema": "jev.rules/1",
+  "rules": [
+    { "id": "no-unwrap-in-handlers",
+      "title": "Unwrap in a request handler",  // becomes the finding's label (≤ 60 chars)
+      "text": "A handler must not unwrap; return the error instead.",  // its detail
+      "severity": "warning",                   // information | warning; error is reserved, and a
+                                               // rule that asks for it gets warning
+      "applies_to": ["**/*.rs"],               // globs over the document path
+      "inspection": { "kind": "regex", "pattern": "\\.unwrap\\(\\)", "max_matches": 0 },
+      "judgement": { "question": "Is this unwrap reachable from a request handler?",
+                     "criteria": { "true": "a request can reach it", "false": "test code" },
+                     "reasons": { "reachable": "a request can reach it" },
+                     "min_probability": 0.75 },
+      "verb_hint": "fix" } ] }
+```
+
+An `inspection` is tagged by `kind`: `regex` (every matching line; `max_matches` means
+"report only when the file holds *more* than this many", so any match at all is
+`max_matches: 0`) or `absent` (the file is expected to contain the pattern and does not — one
+candidate at the head of the file). It is deliberately dumb and local: it names candidates and
+**decides nothing**. A `judgement` is the one question the decide tier (§10,
+`docs/MODEL.md` §1) is asked about them, with `criteria` and `reasons` passed through to the
+wire unchanged; a `true` that clears `min_probability` (default 0.5 — a coin flip is not a
+finding) becomes a finding through `findings::build`, the same function the review's findings
+pass through, so ids, ordering, dismissal and the noise cap behave identically everywhere.
+
+A rule file that cannot be read, cannot be parsed, or does not carry
+`"schema": "jev.rules/1"` is skipped **with a stated reason** and the rest still load; so is a
+candidate whose anchor is not uniquely locatable. A repository that has written no rules gets
+no ambient findings (§6, `jev.inspect`), and that is the whole of the fallback story — see §12.
 
 ---
 
 ## 10. Configuration
 
-Read through `workspace/configuration` under one section, `meta`. The server asks; the
-plugin supplies from `vim.lsp.config('meta')`. No configuration file of our own, no
-environment variables beyond the model endpoints.
+Read through `workspace/configuration` under one section, `jev`. The server asks; the
+plugin supplies from `vim.lsp.config('jev')`. No configuration file of our own beyond the
+repository's rules document (§9), and no environment variables beyond the model endpoints.
 
 ```jsonc
 { "enabled": true,
-  "models": { "reason": {…}, "review": {…} },                // see docs/MODEL.md
+  "models": { "reason": {…}, "review": {…}, "decide": {…} },  // see docs/MODEL.md
   "budget": { "max_calls_per_min": 6, "max_calls_per_hour": 120,
               "max_tokens_per_session": 500000, "timeout_ms": 30000 },
-  "triggers": { "diagnostics": "save", "idle_ms": 1500, "severity_floor": "information" },
+  "triggers": { "diagnostics": "save", "idle_ms": 1500, "severity_floor": "information",
+                "rules": { "on_save": true, "on_idle": true, "idle_ms": 1500 } },
   "ambient": { "code_lens": true, "inlay_hints": false, "diagnostics": true },
   "auto_apply": { "fix": false, "fixAll": false },
   "languages": {                    // docs/LANGUAGE.md §7 — may narrow, never disable
@@ -612,42 +697,71 @@ environment variables beyond the model endpoints.
     "max_scope_lines": 400,
     "ignore": ["**/node_modules/**", "**/*.min.js"]
   },
+  "rules": { "enabled": true, "max_candidates_per_rule": 8, "max_state_lines": 200,
+             "max_state_bytes": 16000, "max_files_per_pass": 8 },
   "noise": { "max_visible_findings": 5, "suppress_after_dismissals": 2 },
   "log": "warn" }
 ```
 
 Defaults are conservative: `auto_apply` off, `inlay_hints` off.
 
+**`models.decide` is not a chat tier.** It is the endpoint that answers the rules pass's
+questions, and a decision is a different protocol from a chat: the model is handed a state and
+a numbered set of questions and returns one value per question with a probability, no prose and
+no messages (`docs/MODEL.md` §1). Keys `{wire, base_url, model, api_key_env, timeout_ms,
+max_tokens, temperature, think}`; defaults wire `system_one`, `https://api.typesafe.ai/v1`,
+model `jev-latest`, `api_key_env = TYPESAFE_API_KEY`, `timeout_ms` 5000, `max_tokens` 64,
+`temperature` 0.0, `think` `off`. `wire` names the path appended to `base_url`: `system_one`
+posts to `/systemone`, `open_router` to `/alpha/decisions`. The ceilings are small on purpose —
+a decision generates one value per question, so 64 tokens is generous and five seconds a long
+time for it, where the reason tier's numbers are sized for a rewrite. Pointing it at a local
+System One server is one config change away: `base_url = "http://127.0.0.1:8009/v1"`,
+`model = "kev-latest"`. `JEV_BASE_URL` — which names an OpenAI-compatible chat server —
+deliberately does **not** touch this tier; it has its own pair, `JEV_DECIDE_BASE_URL` and
+`JEV_DECIDE_MODEL` (an empty or whitespace value is ignored).
+
+**`rules` is the ambient pass.** With `rules.enabled` true — the default — the ambient pass is
+the rules pass, and the chat review runs only when it is asked for explicitly (`jev.review`,
+the "Review this" action) or when rules are off. The keys bound the work: `max_candidates_per_rule`
+is the most questions one regex may put to the decision, `max_state_lines` and
+`max_state_bytes` the most of the file it is shown, and `max_files_per_pass` how many documents
+one idle pass covers. What it declines to look at is reported, never dropped quietly (§9).
+
 **Two keys are declared and not read by this implementation**: `triggers.severity_floor` and
 `noise.suppress_after_dismissals`. They are in the schema because a client that sends them must
 not be rejected, and they are named here so a reader does not configure a silence that never
 happens — the finding cap is `noise.max_visible_findings`, which *is* read, and a dismissed
-finding stays dismissed per repository (`.git/meta/dismissed.json`).
+finding stays dismissed per repository (`.git/jev/dismissed.json`).
 
 ---
 
 ## 11. CLI contract
 
-`meta` is a thin sync client of `meta-core`, no daemon required, no state.
+`jev` is a thin sync client of `jev-core`, no daemon required, no state.
 
 ```
-meta explain <path>[:<line>[:<col>]]        # artifact to stdout
-meta review <path>                          # findings, JSON
-meta action --verb <verb> <path>[:<range>]  # proposed edit, JSON (never applied)
-meta plan --goal <text> <path>              # plan artifact
-meta status                                 # budget and queue
+jev explain <path>[:<line>[:<col>]]        # artifact to stdout
+jev review <path>                          # findings, JSON
+jev action --verb <verb> <path>[:<range>]  # proposed edit, JSON (never applied)
+jev plan --goal <text> <path>              # plan artifact
+jev inspect <path> [--force]               # the repository's rules, run over <path>
+jev status                                 # budget and queue
 ```
 
-Flags: `--verb <verb>` (action, required), `--goal <text>` (plan, required), `--base-url <url>`
-and `--model <name>` (override every tier; the `META_BASE_URL`/`META_MODEL` variables do the
-same), `--max-tokens <n>`; `-h`/`--help`, `-V`/`--version`. Flags may be written `--k v` or
-`--k=v`.
+Flags: `--verb <verb>` (action, required), `--goal <text>` (plan, required), `--force`
+(inspect: run the rules even for a document git reports as unchanged), `--base-url <url>`
+and `--model <name>` (override every tier, the decision tier included; `JEV_BASE_URL`,
+`JEV_MODEL` and `JEV_REVIEW_MODEL` do the same for the chat tiers), `--max-tokens <n>`;
+`-h`/`--help`, `-V`/`--version`. Flags may be written `--k v` or `--k=v`.
 
 - stdin: additional context (diff, buffer text) when the path is `-`.
 - stdout: exactly one artifact or result, JSON, one line, no decoration.
 - stderr: diagnostics, including the per-request cost line.
 - No interactive mode, no prompts, no colour, no markdown. Exit codes are the only
   channel besides stdout.
+
+`jev inspect` prints exactly the body §6's `jev.inspect` returns — the counts, the findings and
+everything the pass skipped — from the same code, and writes nothing to the file.
 
 | Exit | Meaning |
 |---|---|
@@ -658,7 +772,7 @@ same), `--max-tokens <n>`; `-h`/`--help`, `-V`/`--version`. Flags may be written
 | 4 | Stale target — the document changed since the request was built |
 
 The LSP server is not required for the CLI, and the CLI is not required for the LSP
-server. Both call `meta-core`.
+server. Both call `jev-core`.
 
 ---
 
@@ -668,7 +782,7 @@ Recorded so the refusals are not relitigated:
 
 - **A chat buffer as the primary interface.** Free text has no place to go; the menu, the
   lens, and the finding are the interface. A prompt box exists only as the input to
-  `meta.plan`.
+  `jev.plan`.
 - **Model-generated action titles on the fast path.** Non-deterministic labels destroy
   muscle memory.
 - **Server-side session or conversation memory.** The plan artifact is the continuation.
@@ -687,6 +801,12 @@ Recorded so the refusals are not relitigated:
 - **Silent skips.** A buffer that is attached but not analysed must report why
   (`over_size`, `binary`, `ignored`, `generic_scope`).
 - **Telemetry.**
+- **A fallback from the rules pass to the chat review.** The ambient pass is the rules pass or
+  nothing: a generative review on every save costs thousands of tokens where a decision costs
+  dozens, and when it found nothing there would be no way to tell a clean file from a pass that
+  never ran. A repository with no rules gets no ambient findings and `jev.inspect` says
+  `no_rules`; if a user wants the review tier's opinion they ask for it, and the finding says
+  which pass it came from (`data.source`, §9).
 - **A second source of truth for document state.** The client owns text; the server's
   cache is keyed by content hash and evictable at any time.
 
@@ -706,3 +826,4 @@ Recorded so the refusals are not relitigated:
 | 2026-09-18 | **U7 built.** Inline completion is served and advertised: `textDocument/inlineCompletion` is registered as a custom method (the pinned `lsp-types` has no handler for a 3.18-draft method) and `inlineCompletionProvider` is injected into the `initialize` response, because Neovim attaches its completor only for a client that advertises it. Gates: off by default, binary/size/ignore, a content-hash answer cache, a prefix floor that applies only to timed requests, and its own per-minute window so completions cannot starve explicit work. Also implemented `workspace/didChangeConfiguration`, without which the plugin's kill switch could never take effect. |
 | 2026-09-19 | **The model's reach is written down.** §6 gains the `meta.ask --web` policy it had been relying on the implementation to keep: one `FETCH <https url>` line, one page, https only, 64 KiB, no redirects, the url named in the artifact, and `fetch_failed` when it does not arrive — plus the statement that nothing else in this contract touches the network or the filesystem (the server reads no file; everything else arrives over the protocol). Found by reading the tutorial against the code: the caps existed and were tested, but the contract did not say them. |
 | 2026-09-19 | **Inline completion withdrawn.** The feature was removed at the user's decision — generated code is asked for, not suggested under the cursor — so this contract no longer carries it: §2's capability block and the paragraph about injecting `inlineCompletionProvider`, §3.2's latency row for `textDocument/inlineCompletion`, §5's 200 ms debounce and 8-character prefix floor, §10's `models.fim` and `inline_completion` section, and the method itself. `crates/meta-lsp/src/{inline,advertised}.rs` are deleted with it. A client whose settings still mention `fim` or `inline_completion` is unaffected: unknown sections are ignored. |
+| 2026-09-19 | **The workspace is `jev`, and the ambient pass is the repository's own rules.** The old name is gone from every crate, binary, plugin path, command name, schema string, environment variable and `.git/` path — a clean cutover with no alias and no migration shim, so a session log or a dismissal recorded under the old name is **not** carried over: that record is lost once, by decision rather than oversight. The ambient pass is now the *rules* pass. A repository states its conventions as data — `.jev/rules/*.json`, `"schema": "jev.rules/1"` (§9) — where each rule pairs an `inspection` (a regex, or the absence of one) that names candidates and decides nothing with a `judgement`: one question, gated by `min_probability` (default 0.5), that a new **decision tier** answers over the wire §10 names (`system_one` or `open_router`, hosted by default, local System One one config change away). `jev.inspect` (§6) and `jev inspect` (§11) run that pass on demand through the same code the save path runs, and report what it considered, what it found, and everything it skipped; findings carry `data.source` (`rules` or `review`) beside the `jev` namespace (§9). The generative tiers are demoted to what only they can do — edits, plans, explanations. There is no fallback: a repository with no rules gets no ambient findings, and the pass says `no_rules` rather than reporting a clean document (§12). Verified: `cargo test` 274 passing (49 `jev` + 179 `jev-core` + 46 `jev-lsp`), 0 failed, with `cargo build --release` and `cargo test --no-run` warning-free; `verify/rules_test.py` 45/45; `verify/rules_live.lua` 0 failures, 0 skips on Neovim 0.12.5 **and** 0.12.1; `verify/cli_parity.py` 25/25; and the rest of the table green — one command now, `bash verify/run-suite.sh <out-file>` (`STATUS.md`, `docs/VERIFICATION.md` §8). |

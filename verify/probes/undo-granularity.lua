@@ -10,7 +10,7 @@
 --
 -- It is kept because it documents the failure and prints the shape of the question. The
 -- design does not depend on the answer: the plugin snapshots buffer content around every
--- applied edit and provides `:Meta undo` (docs/UX.md §3.4).
+-- applied edit and provides `:Jev undo` (docs/UX.md §3.4).
 --
 -- To settle it, run interactively:
 --   1. start nvim, open a file, set undolevels to a sane value
@@ -24,7 +24,7 @@ end
 
 local buf = vim.api.nvim_create_buf(true, false)
 vim.api.nvim_set_current_buf(buf)
-vim.api.nvim_buf_set_name(buf, '/tmp/meta-probe-undo.lua')
+vim.api.nvim_buf_set_name(buf, '/tmp/jev-probe-undo.lua')
 vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'a', 'b', 'c', 'd' })
 vim.bo[buf].modified = false
 tick()
@@ -55,4 +55,4 @@ vim.cmd('silent undo')
 print('  after one undo  = ' .. vim.inspect(vim.api.nvim_buf_get_lines(buf, 0, -1, false)))
 print('  verdict         = INCONCLUSIVE under headless script mode; see header for the '
   .. 'interactive probe')
-print('  design impact   = none; :Meta undo uses plugin-side snapshots')
+print('  design impact   = none; :Jev undo uses plugin-side snapshots')

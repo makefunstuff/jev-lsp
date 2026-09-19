@@ -16,7 +16,7 @@ The last one is the point. An edit that leaves a file unparseable is worse than 
 no unit test can see it.
 
     python3 verify/soak.py --base-url http://127.0.0.1:4000/v1 --model deepseek/deepseek-flash \\
-        --rounds 2 [--bin target/release/meta-lsp] [--only python,rust]
+        --rounds 2 [--bin target/release/jev-lsp] [--only python,rust]
 
 Exits 0 unless a *parsed* file was left broken.
 """
@@ -107,7 +107,7 @@ def run_once(binary, language, base_url, model, workdir, timeout):
         fh.write(content)
     uri = "file://" + path
 
-    env = dict(os.environ, META_BASE_URL=base_url, META_MODEL=model, META_REVIEW_MODEL=model)
+    env = dict(os.environ, JEV_BASE_URL=base_url, JEV_MODEL=model, JEV_REVIEW_MODEL=model)
     server = Lsp([binary, "--stdio"], env)
     result = {"language": language, "findings": 0, "edit": False, "parses": None,
               "ambient_ms": None, "resolve_ms": None, "note": ""}
@@ -144,8 +144,8 @@ def run_once(binary, language, base_url, model, workdir, timeout):
             "range": {"start": {"line": 2, "character": 4}, "end": {"line": 2, "character": 4}},
             "context": {"triggerKind": 1, "diagnostics": []},
         }, timeout=30).get("result") or []
-        pick = next((a for a in actions if a["kind"] == "quickfix.meta"), None) \
-            or next((a for a in actions if a["kind"] == "refactor.rewrite.meta"), None)
+        pick = next((a for a in actions if a["kind"] == "quickfix.jev"), None) \
+            or next((a for a in actions if a["kind"] == "refactor.rewrite.jev"), None)
         if pick is None:
             result["note"] = "no action to resolve"
             return result
@@ -171,9 +171,9 @@ def run_once(binary, language, base_url, model, workdir, timeout):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--bin", default=os.path.join(REPO, "target", "release", "meta-lsp"))
-    ap.add_argument("--base-url", default=os.environ.get("META_BASE_URL", ""))
-    ap.add_argument("--model", default=os.environ.get("META_MODEL", ""))
+    ap.add_argument("--bin", default=os.path.join(REPO, "target", "release", "jev-lsp"))
+    ap.add_argument("--base-url", default=os.environ.get("JEV_BASE_URL", ""))
+    ap.add_argument("--model", default=os.environ.get("JEV_MODEL", ""))
     ap.add_argument("--rounds", type=int, default=1)
     ap.add_argument("--timeout", type=float, default=60.0)
     ap.add_argument("--only", default="")
@@ -190,7 +190,7 @@ def main():
     rows, broken = [], 0
     for round_no in range(1, args.rounds + 1):
         for language in languages:
-            workdir = tempfile.mkdtemp(prefix=f"meta-soak-{language}-")
+            workdir = tempfile.mkdtemp(prefix=f"jev-soak-{language}-")
             try:
                 r = run_once(args.bin, language, args.base_url, args.model, workdir, args.timeout)
             except Exception as e:  # a harness failure is a result too

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """CLI/LSP parity (U8): the same request through both front ends must agree exactly.
 
-Both front ends are thin shells over `meta-core`, so for the same file, the same model, and
+Both front ends are thin shells over `jev-core`, so for the same file, the same model, and
 the same verb the conclusions must be identical — not merely similar. This drives the same
 operation twice and compares the artefacts field by field.
 
-    python3 verify/cli_parity.py [--bin target/release/meta-lsp] [--cli target/release/meta]
+    python3 verify/cli_parity.py [--bin target/release/jev-lsp] [--cli target/release/jev]
 
 Exits 0 only when every comparison matches.
 """
@@ -57,21 +57,21 @@ def start_stub(port):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--bin", default=os.path.join(REPO, "target", "release", "meta-lsp"))
-    ap.add_argument("--cli", default=os.path.join(REPO, "target", "release", "meta"))
+    ap.add_argument("--bin", default=os.path.join(REPO, "target", "release", "jev-lsp"))
+    ap.add_argument("--cli", default=os.path.join(REPO, "target", "release", "jev"))
     args = ap.parse_args()
     RESULTS.clear()
 
     port = free_port()
     stub = start_stub(port)
-    workdir = tempfile.mkdtemp(prefix="meta-parity-")
+    workdir = tempfile.mkdtemp(prefix="jev-parity-")
     fixture = os.path.join(workdir, "loader.py")
     with open(fixture, "w") as fh:
         fh.write(FIXTURE)
     uri = "file://" + fixture
 
-    env = dict(os.environ, META_BASE_URL=f"http://127.0.0.1:{port}/v1",
-               META_MODEL="stub-model", META_REVIEW_MODEL="stub-model")
+    env = dict(os.environ, JEV_BASE_URL=f"http://127.0.0.1:{port}/v1",
+               JEV_MODEL="stub-model", JEV_REVIEW_MODEL="stub-model")
 
     def cli(*argv):
         out = subprocess.run([args.cli, *argv], capture_output=True, text=True,
@@ -79,6 +79,7 @@ def main():
         return out
 
     server = Lsp([args.bin, "--stdio"], env)
+    server.settings = {"rules": {"enabled": False}}
     try:
         # ---- review: findings -------------------------------------------------
         print("[parity] review")
@@ -161,6 +162,122 @@ def main():
         cli("action", "--verb", "rewrite", f"{fixture}:1")
         cli("review", fixture)
         check(open(fixture).read() == before, "the file is byte-identical after both commands")
+
+        # ---- inspect: the rules pass -----------------------------------------
+        # The rules pass is the one path both front ends run through the same code, so it is the
+        # one place where "field by field" is a statement about the shared implementation rather
+        # than about two implementations that happen to agree.
+        print("[parity] inspect")
+        rules_dir = os.path.join(workdir, ".jev", "rules")
+        os.makedirs(rules_dir)
+        with open(os.path.join(rules_dir, "a.json"), "w") as fh:
+            fh.write(json.dumps({"schema": "jev.rules/1", "rules": [{
+                "id": "no-open",
+                "title": "Unclosed file handle",
+                "text": "A file opened here is never closed.",
+                "severity": "warning",
+                "applies_to": ["**/*.py"],
+                "inspection": {"kind": "regex", "pattern": r"open\("},
+                "judgement": {
+                    "question": "Is this handle left open?",
+                    "criteria": {"true": "nothing closes it", "false": "it is closed later"},
+                    "min_probability": 0.75,
+                },
+                "verb_hint": "fix",
+            }]}, indent=2))
+        # The decision tier is a different protocol from the chat tiers, so it needs its own
+        # endpoint variable — and the CLI flag, which the parity harness passes to both.
+        inspect_env = dict(env, JEV_DECIDE_BASE_URL=f"http://127.0.0.1:{port}/v1")
+        cli_out = subprocess.run([args.cli, "inspect", fixture], capture_output=True, text=True,
+                                 env=inspect_env, timeout=60)
+        check(cli_out.returncode == 0,
+              f"the CLI inspect succeeded: {cli_out.stderr.strip()[:160]}")
+        cli_inspect = json.loads(cli_out.stdout)
+
+        lsp_server = Lsp([args.bin, "--stdio"], inspect_env)
+        try:
+            lsp_server.request("initialize", {
+                "processId": os.getpid(), "rootUri": "file://" + workdir,
+                "capabilities": {"workspace": {"configuration": True}},
+            })
+            lsp_server.notify("initialized", {})
+            lsp_server.notify("textDocument/didOpen", {"textDocument": {
+                "uri": uri, "languageId": "python", "version": 1, "text": before}})
+            lsp_result = (lsp_server.request("workspace/executeCommand", {
+                "command": "jev.inspect",
+                "arguments": [{"path": fixture, "force": True}],
+            }, timeout=60).get("result") or {})
+        finally:
+            lsp_server.stop()
+
+        check(cli_inspect.get("schema") == lsp_result.get("schema") == "jev.result/1",
+              f"both front ends answer with the same schema "
+              f"(cli={cli_inspect.get('schema')}, lsp={lsp_result.get('schema')})")
+        check(cli_inspect.get("ok") is True and lsp_result.get("ok") is True,
+              "and both succeeded")
+        for key in ("considered", "candidates"):
+            check(cli_inspect.get(key) == lsp_result.get(key),
+                  f"the same {key}: cli={cli_inspect.get(key)} lsp={lsp_result.get(key)}")
+        cli_findings = [(f["line"], f["start_col"], f["end_col"], f["label"], f["severity"],
+                         f["verb"], f["detail"]) for f in cli_inspect.get("findings") or []]
+        lsp_findings = [(f["line"], f["start_col"], f["end_col"], f["label"], f["severity"],
+                         f["verb"], f["detail"]) for f in lsp_result.get("findings") or []]
+        check(cli_findings == lsp_findings and len(cli_findings) >= 1,
+              f"and the same findings, field for field:\n"
+              f"    cli={cli_findings}\n    lsp={lsp_findings}")
+        check(cli_inspect.get("skipped") == lsp_result.get("skipped"),
+              f"including what was skipped: cli={cli_inspect.get('skipped')} "
+              f"lsp={lsp_result.get('skipped')}")
+        check(open(fixture).read() == before,
+              "and neither front end wrote to the file")
+
+        # ---- inspect, with nothing to run ------------------------------------
+        # The case a matching fixture cannot catch, and which shipped as a defect: a file no rule
+        # claims must be reported as *skipped* by both front ends, with the same words. Asserting
+        # only that both are non-empty would have passed while the CLI reported nothing at all.
+        print("[parity] inspect, nothing to run")
+        notes = os.path.join(workdir, "notes.md")
+        with open(notes, "w") as fh:
+            fh.write("# notes\n")
+        notes_uri = "file://" + notes
+
+        cli_out = subprocess.run([args.cli, "inspect", notes], capture_output=True, text=True,
+                                 env=inspect_env, timeout=60)
+        check(cli_out.returncode == 0,
+              f"the CLI inspect of an unclaimed file succeeded: {cli_out.stderr.strip()[:160]}")
+        cli_nothing = json.loads(cli_out.stdout)
+
+        lsp_server = Lsp([args.bin, "--stdio"], inspect_env)
+        try:
+            lsp_server.request("initialize", {
+                "processId": os.getpid(), "rootUri": "file://" + workdir,
+                "capabilities": {"workspace": {"configuration": True}},
+            })
+            lsp_server.notify("initialized", {})
+            lsp_server.notify("textDocument/didOpen", {"textDocument": {
+                "uri": notes_uri, "languageId": "markdown", "version": 1, "text": "# notes\n"}})
+            lsp_nothing = (lsp_server.request("workspace/executeCommand", {
+                "command": "jev.inspect",
+                "arguments": [{"path": notes, "force": True}],
+            }, timeout=60).get("result") or {})
+        finally:
+            lsp_server.stop()
+
+        check(cli_nothing.get("considered") == lsp_nothing.get("considered") == 0
+              and cli_nothing.get("candidates") == lsp_nothing.get("candidates") == 0,
+              f"neither pass found anything to run "
+              f"(cli={cli_nothing.get('considered')}/{cli_nothing.get('candidates')}, "
+              f"lsp={lsp_nothing.get('considered')}/{lsp_nothing.get('candidates')})")
+        cli_skips = cli_nothing.get("skipped") or []
+        lsp_skips = lsp_nothing.get("skipped") or []
+        check(cli_skips == lsp_skips and len(cli_skips) == 1,
+              f"and both front ends report the same skip, word for word:\n"
+              f"    cli={cli_skips}\n    lsp={lsp_skips}")
+        check(bool(cli_skips) and cli_skips[0].get("code") == "no_rules"
+              and "nothing to run" in (cli_skips[0].get("detail") or ""),
+              f"which names the reason rather than reporting a clean file: {cli_skips}")
+        check(not (cli_nothing.get("findings") or lsp_nothing.get("findings")),
+              "with no findings invented on either side")
 
         return 0 if all(ok for ok, _ in RESULTS) else 1
     finally:

@@ -3,7 +3,7 @@
 
 Purpose
 -------
-Speak the frozen contract in PROTOCOL.md to a `meta-lsp` server over stdio and assert it,
+Speak the frozen contract in PROTOCOL.md to a `jev-lsp` server over stdio and assert it,
 step by step, sharing no code with the server. A disagreement between this client and the
 server is a protocol defect, not a test artifact: every assertion below is transcribed from
 PROTOCOL.md / docs/VERIFICATION.md §1, and there is no server-side helper to drift against.
@@ -11,7 +11,7 @@ PROTOCOL.md / docs/VERIFICATION.md §1, and there is no server-side helper to dr
 Runs, in order, and asserts at each step (docs/VERIFICATION.md §1):
 
   1. `initialize` -> `initialized`; `positionEncoding == "utf-8"` (N1),
-     `codeActionProvider.resolveProvider == true`, `diagnosticProvider.identifier == "meta"`,
+     `codeActionProvider.resolveProvider == true`, `diagnosticProvider.identifier == "jev"`,
      `executeCommandProvider.workDoneProgress == true`, all seven §6 commands advertised, and
      no draft capability advertised — §2's "advertise only what is served" is the rule the set
      is checked against, in both directions.
@@ -36,8 +36,8 @@ Runs, in order, and asserts at each step (docs/VERIFICATION.md §1):
   9. `workspace/executeCommand` with a `workDoneToken` in the params, on a served command:
      a `$/progress` `begin` and an `end` arrive for that token (§3.5), no `$/progress`
      arrives under a token this client never supplied or created (§3.5), the two failure
-     paths stay distinct — an unserved `meta.nonexistent` answers `not_implemented`, a
-     served `meta.plan` with unusable arguments answers `bad_arguments` (§6.1) — and no
+     paths stay distinct — an unserved `jev.nonexistent` answers `not_implemented`, a
+     served `jev.plan` with unusable arguments answers `bad_arguments` (§6.1) — and no
      `textDocument/publishDiagnostics` arrives for a document the server has not changed
      (§9).
 
@@ -55,13 +55,13 @@ challenge them:
     invented one would report a defect where there is none.
   * Step 9 command. PROTOCOL §3.5's normal path is a `workDoneToken` inside the
     `workspace/executeCommand` params, and PROTOCOL §6 serves all seven commands, so the
-    progress assertions are driven on `meta.status` when it is advertised (else the first
+    progress assertions are driven on `jev.status` when it is advertised (else the first
     advertised command) — a served command that answers immediately still owes the request
     its `begin` and `end`.
-    docs/VERIFICATION.md §1 words this step as "`meta.cancel` mid-flight"; that is the same
+    docs/VERIFICATION.md §1 words this step as "`jev.cancel` mid-flight"; that is the same
     assertion over a different command — §3.5's token rule, checked as `begin` and `end`
     under the token this request supplied — and the ticket specifies the token form, so the
-    token form is what is driven here. `meta.cancel` is the §6 command for work the plugin
+    token form is what is driven here. `jev.cancel` is the §6 command for work the plugin
     did not issue; driving a cancel against a request we are concurrently awaiting would
     test `$/cancelRequest`, which docs/VERIFICATION.md does not ask this client for.
 
@@ -101,7 +101,7 @@ from urllib.parse import unquote, urlparse
 
 DEFAULT_TIMEOUT = 20.0          # per request, seconds (--timeout)
 BUDGET_CODE_ACTION_MS = 50.0    # docs/ARCHITECTURE.md §4: codeAction p99 < 50 ms
-PROGRESS_TOKEN = "meta:verify-1"
+PROGRESS_TOKEN = "jev:verify-1"
 PROGRESS_WAIT_S = 5.0           # grace after the response for §3.5's begin/end, bounded
 FINDINGS_WAIT_S = 20.0          # grace for the §3.4 `workspace/diagnostic/refresh` the
                                 # server sends when its background pass lands, bounded by
@@ -218,7 +218,7 @@ def _rpc_message(method, params=None, msg_id=None):
     JSON-RPC 2.0 says `params` MAY be omitted and must be an object/array when present, so
     `"params": null` is not a legal member. LSP's `shutdown` and `exit` take no params, and
     servers that read the member strictly answer -32602 "Unexpected params: null" — the real
-    `meta-lsp` does, and Neovim's own client omits the member (`lsp/client.lua:911` calls
+    `jev-lsp` does, and Neovim's own client omits the member (`lsp/client.lua:911` calls
     `rpc.request('shutdown', nil, …)`; Lua drops the nil, so the key never reaches the wire).
     This is an interop trap, not a style choice.
     """
@@ -260,8 +260,8 @@ def _uri_to_path(uri):
 def client_capabilities():
     """What this client advertises. `positionEncodings` is pinned to utf-8 so the server's
     choice in §2 is negotiated rather than assumed [R6]."""
-    kinds = ["quickfix", "quickfix.meta", "refactor.rewrite", "refactor.rewrite.meta",
-             "source", "source.meta", "source.fixAll"]
+    kinds = ["quickfix", "quickfix.jev", "refactor.rewrite", "refactor.rewrite.jev",
+             "source", "source.jev", "source.fixAll"]
     return {
         "general": {"positionEncodings": ["utf-8"], "markdown": {"parser": "none"}},
         "window": {"workDoneProgress": True,
@@ -429,19 +429,25 @@ class Session(object):
 
     def _configuration_value(self, item):
         section = (item or {}).get("section")
-        if section == "meta":
-            return self._meta_config()
+        if section == "jev":
+            return self._jev_config()
         return None
 
-    def _meta_config(self):
+    def _jev_config(self):
         """PROTOCOL §10: configuration travels over workspace/configuration, and no
         environment variable beyond the model endpoints exists. With `--stub-model-url`
-        the client answers as a configured plugin would, pointing every tier at the stub."""
+        the client answers as a configured plugin would, pointing every tier at the stub.
+
+        `rules.enabled` is off so the ambient pass is the chat review this client is written
+        against: the repository's own `.jev/rules/*.json` are a separate surface with their own
+        claims (`verify/rules_test.py`), and this client checks that a pull carries *a*
+        conclusion, not which pass wrote it."""
         if not self.stub_model_url:
-            return {}
+            return {"rules": {"enabled": False}}
         tier = {"base_url": self.stub_model_url, "model": "stub", "temperature": 0.0,
                 "max_tokens": 4096, "timeout_ms": 30000}
         return {"enabled": True,
+                "rules": {"enabled": False},
                 "models": {"reason": dict(tier), "review": dict(tier)},
                 "auto_apply": {"fix": False, "fixAll": False}}
 
@@ -962,6 +968,75 @@ def _try_request(session, report, step, method, params, timeout, label=None):
     return result, None
 
 
+def _capability_keys(node):
+    """Every key in a capability block, at any depth."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield key
+            for nested in _capability_keys(value):
+                yield nested
+    elif isinstance(node, list):
+        for item in node:
+            for nested in _capability_keys(item):
+                yield nested
+
+
+# The members LSP 3.17 defines for each capability, and for the sub-objects inside them.
+#
+# A top-level allowlist is not enough for N6: a non-standard member smuggled *inside* a
+# capability that is itself standard — `codeActionProvider.customFlag`, an unknown field in
+# `diagnosticProvider` — is exactly as much of an invented surface as a `jev/…` method, and a
+# top-level check cannot see it. Every key, at every depth, is therefore checked against the
+# specification's vocabulary for the block it sits in.
+#
+# `None` means "a scalar: nothing may live inside it". A dict value under a `None` shape is
+# itself non-standard, and its keys are reported one by one.
+CAPABILITY_SHAPES = {
+    "positionEncoding": None,
+    "textDocumentSync": {
+        "openClose": None,
+        "change": None,
+        "willSave": None,
+        "willSaveWaitUntil": None,
+        "save": {"includeText": None},
+    },
+    "codeActionProvider": {
+        "resolveProvider": None,
+        "codeActionKinds": None,
+        "workDoneProgress": None,
+    },
+    "codeLensProvider": {"resolveProvider": None, "workDoneProgress": None},
+    "inlayHintProvider": {"resolveProvider": None, "workDoneProgress": None},
+    "hoverProvider": {"workDoneProgress": None},
+    "diagnosticProvider": {
+        "identifier": None,
+        "interFileDependencies": None,
+        "workspaceDiagnostics": None,
+        "workDoneProgress": None,
+    },
+    "executeCommandProvider": {"commands": None, "workDoneProgress": None},
+}
+
+
+def _nonstandard_members(node, shape, path=""):
+    """Every key of `node`, at any depth, that `shape` does not define."""
+    if not isinstance(node, dict):
+        return []
+    offending = []
+    for key, value in node.items():
+        if key not in shape:
+            offending.append("%s%s" % (path, key))
+            continue
+        inner = shape[key] if isinstance(shape[key], dict) else {}
+        if isinstance(value, dict):
+            offending.extend(_nonstandard_members(value, inner, "%s%s." % (path, key)))
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                offending.extend(_nonstandard_members(
+                    item, inner, "%s%s[%d]." % (path, key, index)))
+    return offending
+
+
 def _server_log_lines(session, limit=5):
     """`window/logMessage` / `window/showMessage` text: what the server says about why it
     did or did not do something, so a red or empty step is diagnosable from the report."""
@@ -984,7 +1059,7 @@ def _pull_diagnostics(session, report, uri, grace):
     per refresh, with a short grace so a pass that cached microseconds earlier is not
     missed; the loop in step 8 is what handles the superseded-refresh ordering.
     """
-    params = {"textDocument": {"uri": uri}, "identifier": "meta"}
+    params = {"textDocument": {"uri": uri}, "identifier": "jev"}
     result, _ = _try_request(session, report, 8, "textDocument/diagnostic", params,
                              max(grace, 1.0))
     deadline = time.monotonic() + min(grace, FINDINGS_GRACE_S)
@@ -1025,7 +1100,7 @@ def write_fixtures(directory):
 
 def run_steps(session, workspace, timeout, report, keep_fixtures=False):
     """docs/VERIFICATION.md §1, steps 1-9, in order, asserted one by one."""
-    fixture_dir = tempfile.mkdtemp(prefix="meta-lsp-verify-", dir=workspace)
+    fixture_dir = tempfile.mkdtemp(prefix="jev-lsp-verify-", dir=workspace)
     try:
         py_path, txt_path = write_fixtures(fixture_dir)
 
@@ -1042,8 +1117,8 @@ def run_steps(session, workspace, timeout, report, keep_fixtures=False):
                      _cap(server_capabilities, "codeActionProvider", "resolveProvider") is True,
                      "got %s" % _describe(_cap(server_capabilities, "codeActionProvider",
                                                "resolveProvider")))
-        report.check(1, "diagnosticProvider.identifier == \"meta\"",
-                     _cap(server_capabilities, "diagnosticProvider", "identifier") == "meta",
+        report.check(1, "diagnosticProvider.identifier == \"jev\"",
+                     _cap(server_capabilities, "diagnosticProvider", "identifier") == "jev",
                      "got %s" % _describe(_cap(server_capabilities, "diagnosticProvider",
                                                "identifier")))
         report.check(1, "executeCommandProvider.workDoneProgress == true",
@@ -1063,8 +1138,8 @@ def run_steps(session, workspace, timeout, report, keep_fixtures=False):
         # PROTOCOL §2/§6: advertise exactly what is served, and §6's served set is all
         # seven commands. codeLens/inlayHint remain unasserted either way — the info line
         # above prints the whole advertised member set, so a client author can see it.
-        served = ("meta.status", "meta.recompute", "meta.explain", "meta.plan", "meta.apply",
-                  "meta.revert", "meta.cancel")
+        served = ("jev.status", "jev.recompute", "jev.explain", "jev.plan", "jev.apply",
+                  "jev.revert", "jev.cancel")
         report.check(1, "all seven §6 commands are advertised (%s)" % ", ".join(served),
                      all(command in commands for command in served),
                      "missing: %s" % _describe([c for c in served if c not in commands]))
@@ -1074,9 +1149,49 @@ def run_steps(session, workspace, timeout, report, keep_fixtures=False):
         report.check(1, "no draft capability is advertised (inline completion was removed)",
                      _cap(server_capabilities, "inlineCompletionProvider") is None,
                      "got %s" % _describe(_cap(server_capabilities, "inlineCompletionProvider")))
+        # PROTOCOL N6: no custom LSP method. The advertised block is capabilities, not methods,
+        # so a method name cannot appear as a key of it — a member is camelCase, a method is
+        # `word/word`. Asserted against the exported capability block itself, and then against
+        # the wire: a custom method must be answered MethodNotFound.
+        nonstandard = sorted(k for k in _capability_keys(server_capabilities) if "/" in k)
+        report.check(1, "no custom method is advertised in the capability block (N6)",
+                     not nonstandard,
+                     "offending capability keys: %s" % _describe(nonstandard))
+        # The same claim at every depth: a member the specification does not define, wherever
+        # it sits, is an advertised surface a client will act on.
+        unknown_members = sorted(_nonstandard_members(server_capabilities, CAPABILITY_SHAPES))
+        report.check(1, "every advertised capability member is a standard one (N6)",
+                     not unknown_members,
+                     "members the specification does not define (path): %s"
+                     % _describe(unknown_members))
+        # Sent directly rather than through `_try_request`: an error is the *expected* answer
+        # here, and a helper that turns one into a step failure would report the contract as a
+        # defect.
+        try:
+            session.request("jev/inspect", {}, timeout=min(timeout, 5.0))
+            custom_error = None
+        except ServerError as exc:
+            custom_error = exc.error
+        except RequestTimeout:
+            custom_error = None
+        report.check(1, "and one is not served either (N6)",
+                     isinstance(custom_error, dict) and custom_error.get("code") == -32601,
+                     "got %s" % _describe(custom_error))
 
         # -- step 2 --------------------------------------------------------
         report.step(2, "textDocument/didOpen fixtures in a temp dir under the workspace")
+        # PROTOCOL §10: one section, named `jev`, and the server asks for it by name. The
+        # first configuration request is the one that decides every default in force, so its
+        # parameters are asserted exactly rather than by searching for the string.
+        asked = [r for r in session.server_requests()
+                 if r.get("method") == "workspace/configuration"]
+        first_sections = [
+            (item or {}).get("section")
+            for item in ((asked[0].get("params") or {}).get("items") or [])
+        ] if asked else None
+        report.check(2, "the first workspace/configuration asks for [\"jev\"] (§10)",
+                     first_sections == ["jev"],
+                     "asked for %s" % _describe(first_sections))
         py_uri = session.did_open(py_path, "python")
         txt_uri = session.did_open(txt_path, "plaintext")
         report.info(2, "opened %s (python) and %s (plaintext, control document)"
@@ -1265,14 +1380,14 @@ def run_steps(session, workspace, timeout, report, keep_fixtures=False):
         # -- step 9 --------------------------------------------------------
         report.step(9, "workspace/executeCommand + workDoneToken — progress (§3.5)")
         commands = _cap(server_capabilities, "executeCommandProvider", "commands") or []
-        if "meta.status" in commands:
-            command, arguments = "meta.status", [{}]
+        if "jev.status" in commands:
+            command, arguments = "jev.status", [{}]
         elif commands:
             command, arguments = commands[0], [{}]
         else:
-            command, arguments = "meta.status", [{}]
+            command, arguments = "jev.status", [{}]
             report.warn(9, "executeCommandProvider.commands is empty (PROTOCOL §2/§6)",
-                        "sending meta.status anyway")
+                        "sending jev.status anyway")
         started = time.perf_counter()
         response, error = _try_request(
             session, report, 9, "workspace/executeCommand",
@@ -1310,11 +1425,11 @@ def run_steps(session, workspace, timeout, report, keep_fixtures=False):
         # no version serves" — answers structurally instead of vanishing.
         unserved, _ = _try_request(
             session, report, 9, "workspace/executeCommand",
-            {"command": "meta.nonexistent", "arguments": [{}]}, timeout,
+            {"command": "jev.nonexistent", "arguments": [{}]}, timeout,
             label="an unserved command does not return a JSON-RPC error")
         envelope = unserved if isinstance(unserved, dict) else {}
         error_body = envelope.get("error") if isinstance(envelope.get("error"), dict) else {}
-        report.check(9, "an unserved command answers structurally — meta.nonexistent -> "
+        report.check(9, "an unserved command answers structurally — jev.nonexistent -> "
                         "{ok: false, error: {code: \"not_implemented\"}} (§6.1)",
                      envelope.get("ok") is False
                      and error_body.get("code") == "not_implemented",
@@ -1324,12 +1439,12 @@ def run_steps(session, workspace, timeout, report, keep_fixtures=False):
         # typo in the arguments from a missing feature.
         bad_args, _ = _try_request(
             session, report, 9, "workspace/executeCommand",
-            {"command": "meta.plan", "arguments": []}, timeout,
+            {"command": "jev.plan", "arguments": []}, timeout,
             label="a served command with unusable arguments does not return a JSON-RPC error")
         envelope = bad_args if isinstance(bad_args, dict) else {}
         error_body = envelope.get("error") if isinstance(envelope.get("error"), dict) else {}
         report.check(9, "a served command with unusable arguments answers bad_arguments, "
-                        "not not_implemented — meta.plan with [] (§6.1)",
+                        "not not_implemented — jev.plan with [] (§6.1)",
                      envelope.get("ok") is False
                      and error_body.get("code") == "bad_arguments"
                      and bool(error_body.get("message")),
@@ -1366,7 +1481,7 @@ def initialize_params(workspace):
     root = pathlib.Path(workspace).resolve()
     return {
         "processId": os.getpid(),
-        "clientInfo": {"name": "meta-lsp-verify", "version": "1"},
+        "clientInfo": {"name": "jev-lsp-verify", "version": "1"},
         "locale": "en",
         "rootUri": root.as_uri(),
         "capabilities": client_capabilities(),
@@ -1392,8 +1507,8 @@ class StubServer(threading.Thread):
                  instead of by id would fail
     """
 
-    SERVED_COMMANDS = ("meta.status", "meta.recompute", "meta.explain", "meta.plan",
-                       "meta.apply", "meta.revert", "meta.cancel")
+    SERVED_COMMANDS = ("jev.status", "jev.recompute", "jev.explain", "jev.plan",
+                       "jev.apply", "jev.revert", "jev.cancel")
 
     def __init__(self, rfile, wfile, mode="actions", defect=None, superseded=False):
         threading.Thread.__init__(self, name="stub-server", daemon=True)
@@ -1557,7 +1672,7 @@ class StubServer(threading.Thread):
                 action.pop("edit", None)
                 action["changes"] = {uri: [{"range": {"start": {"line": 0, "character": 0},
                                                       "end": {"line": 0, "character": 0}},
-                                            "newText": "# meta: bare changes\n"}]}
+                                            "newText": "# jev: bare changes\n"}]}
             elif self.defect == "missing_version":
                 for change in ((action.get("edit") or {}).get("documentChanges") or []):
                     (change.get("textDocument") or {}).pop("version", None)
@@ -1569,7 +1684,7 @@ class StubServer(threading.Thread):
                 "range": {"start": {"line": 5, "character": 4},
                           "end": {"line": 5, "character": 20}},
                 "severity": 2,
-                "source": "meta",
+                "source": "jev",
                 "message": "unchecked error path",
                 "data": {"finding_id": "stub-finding-1", "verb": "fix",
                          "content_hash": "sha256:stub"},
@@ -1587,20 +1702,20 @@ class StubServer(threading.Thread):
                 # §6: not served — an unknown name, or one a future version adds before it
                 # is implemented — answers structurally, not silently.
                 self._respond(msg_id, {
-                    "schema": "meta.result/1", "ok": False, "artifacts": [],
+                    "schema": "jev.result/1", "ok": False, "artifacts": [],
                     "diagnostics": [], "edit_ids": [],
                     "error": {"code": "not_implemented",
                               "message": "%s is not implemented in this version" % command}})
-            elif command == "meta.plan" and not any(
+            elif command == "jev.plan" and not any(
                     isinstance(argument, dict) and argument.get("goal")
                     for argument in arguments):
                 # §6: served, but these arguments are unusable — a different code, so a
                 # caller can tell a typo from a missing feature.
                 self._respond(msg_id, {
-                    "schema": "meta.result/1", "ok": False, "artifacts": [],
+                    "schema": "jev.result/1", "ok": False, "artifacts": [],
                     "diagnostics": [], "edit_ids": [],
                     "error": {"code": "bad_arguments",
-                              "message": "meta.plan needs {goal, scope}"}})
+                              "message": "jev.plan needs {goal, scope}"}})
             else:
                 if token is None:
                     pass                               # no token supplied: no progress due
@@ -1609,12 +1724,12 @@ class StubServer(threading.Thread):
                     # through `arguments` instead of the request's workDoneToken field.
                     smuggled = next((item.get("token") for item in arguments
                                      if isinstance(item, dict) and item.get("token")),
-                                    "meta:smuggled")
+                                    "jev:smuggled")
                     self._progress(smuggled, "begin")
                     self._progress(smuggled, "end")
                 elif self.defect == "unowned_progress":
-                    self._progress("meta:never-supplied", "begin")
-                    self._progress("meta:never-supplied", "end")
+                    self._progress("jev:never-supplied", "begin")
+                    self._progress("jev:never-supplied", "end")
                 elif self.defect == "no_progress_end":
                     self._progress(token, "begin", title="stub", percentage=0)
                     self._progress(token, "report", message="halfway", percentage=50)
@@ -1622,7 +1737,7 @@ class StubServer(threading.Thread):
                     self._progress(token, "begin", title="stub", percentage=0)
                     self._progress(token, "report", message="halfway", percentage=50)
                     self._progress(token, "end", message="done")
-                self._respond(msg_id, {"schema": "meta.result/1", "ok": True, "artifacts": [],
+                self._respond(msg_id, {"schema": "jev.result/1", "ok": True, "artifacts": [],
                                        "diagnostics": [], "edit_ids": []})
         elif method == "shutdown":
             self._respond(msg_id, None)
@@ -1646,7 +1761,7 @@ class StubServer(threading.Thread):
             self._respond(msg_id, {"token": token})
         elif method == "stub/ask":
             self._request("workspace/configuration",
-                          {"items": [{"section": "meta"}]}, "ask", origin=msg_id)
+                          {"items": [{"section": "jev"}]}, "ask", origin=msg_id)
         elif method == "stub/unknown-request-back":
             self._request("stub/unknownServerRequest", {}, "unknown", origin=msg_id)
         else:
@@ -1693,28 +1808,34 @@ class StubServer(threading.Thread):
     def _initialize_result(self):
         """Mirrors PROTOCOL §2 after the 2026-09-18 amendment: advertise only what is
         served, and the served command set is §6's."""
-        return {"capabilities": {
+        capabilities = {
             "positionEncoding": "utf-8",
             "textDocumentSync": {"openClose": True, "change": 2,
                                  "save": {"includeText": False}},
             "codeActionProvider": {
                 "resolveProvider": True,
-                "codeActionKinds": ["quickfix", "quickfix.meta", "refactor.rewrite",
-                                    "refactor.rewrite.meta", "source", "source.meta",
+                "codeActionKinds": ["quickfix", "quickfix.jev", "refactor.rewrite",
+                                    "refactor.rewrite.jev", "source", "source.jev",
                                     "source.fixAll"],
             },
-            "diagnosticProvider": {"identifier": "meta", "interFileDependencies": False,
+            "diagnosticProvider": {"identifier": "jev", "interFileDependencies": False,
                                    "workspaceDiagnostics": True},
             "executeCommandProvider": {
-                "commands": ["meta.status", "meta.recompute", "meta.explain", "meta.plan",
-                             "meta.apply", "meta.revert", "meta.cancel"],
+                "commands": ["jev.status", "jev.recompute", "jev.explain", "jev.plan",
+                             "jev.apply", "jev.revert", "jev.cancel"],
                 "workDoneProgress": True},
-        }, "serverInfo": {"name": "verify-stub", "version": "0"}}
+        }
+        if self.defect == "extra_capability_member":
+            # A member the specification does not define, *inside* a capability that is
+            # standard: invisible to a top-level allowlist, and exactly what N6 forbids.
+            capabilities["codeActionProvider"]["customFlag"] = True
+        return {"capabilities": capabilities,
+                "serverInfo": {"name": "verify-stub", "version": "0"}}
 
     def _action(self, uri, version):
         return {
-            "title": "meta: harden parse_retry",
-            "kind": "refactor.rewrite.meta",
+            "title": "jev: harden parse_retry",
+            "kind": "refactor.rewrite.jev",
             "isPreferred": True,
             "data": {"v": 1, "id": "stub-action-1", "verb": "harden", "state": "ready",
                      "doc": {"uri": uri, "version": version, "content_hash": "sha256:stub"},
@@ -1742,7 +1863,7 @@ class StubServer(threading.Thread):
                 "range": {"start": {"line": 0, "character": 0},
                           "end": {"line": last,
                                   "character": len(lines[last].encode("utf-8"))}},
-                "newText": text + "\n# meta: hardened\n",
+                "newText": text + "\n# jev: hardened\n",
             }],
         }]}
         return action
@@ -1845,8 +1966,8 @@ def run_selftest(timeout):
                      "recorded=%d" % len(session.notifications(
                          "textDocument/publishDiagnostics")))
 
-        session.request("stub/progress", {"workDoneToken": "meta:selftest-1"})
-        kinds = session.progress_kinds("meta:selftest-1")
+        session.request("stub/progress", {"workDoneToken": "jev:selftest-1"})
+        kinds = session.progress_kinds("jev:selftest-1")
         report.check("1.7", "progress is recorded under the token the client supplied",
                      kinds == ["begin", "report", "end"], "kinds=%s" % _describe(kinds))
 
@@ -1960,6 +2081,8 @@ def run_selftest(timeout):
                                     "workDoneToken"),
         ("unsolicited_publish", "9", "publishDiagnostics for a document the server did "
                                      "not change"),
+        ("extra_capability_member", "1", "a non-standard member nested inside a standard "
+                                         "capability (N6)"),
     ]
     for defect, step, description in defects:
         session, stub, files = _stub_session(mode="actions", timeout=timeout, defect=defect)
@@ -1984,7 +2107,7 @@ def run_selftest(timeout):
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="lsp_client.py",
-        description="Independent stdio LSP client and conformance harness for meta-lsp "
+        description="Independent stdio LSP client and conformance harness for jev-lsp "
                     "(docs/VERIFICATION.md §1). Speaks Content-Length framed JSON-RPC over "
                     "the server's stdin/stdout, prints one ok/FAIL/skip/warn line per "
                     "assertion on stdout, all diagnostics on stderr, and exits 0 only when "
@@ -1996,7 +2119,7 @@ def build_parser():
                "Exit codes: 0 all assertions passed; 1 at least one FAIL; 2 harness error.",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--server", metavar="PATH",
-                        help="path to the meta-lsp binary to drive over stdio "
+                        help="path to the jev-lsp binary to drive over stdio "
                              "(required unless --selftest)")
     parser.add_argument("--workspace", metavar="DIR", default=os.getcwd(),
                         help="workspace root: initialize rootUri/workspaceFolders, the "
@@ -2008,7 +2131,7 @@ def build_parser():
     parser.add_argument("--stub-model-url", metavar="URL", default=None,
                         help="point every model tier at URL through the "
                              "workspace/configuration channel (PROTOCOL §10) and through "
-                             "META_BASE_URL in the server's environment; without it the "
+                             "JEV_BASE_URL in the server's environment; without it the "
                              "client answers configuration requests with {} and the server "
                              "keeps its own defaults")
     parser.add_argument("--keep-fixtures", action="store_true",
@@ -2045,11 +2168,11 @@ def main(argv=None):
 
     env = dict(os.environ)
     if args.stub_model_url:
-        # Belt and braces: crates/meta-lsp documents META_BASE_URL for shells that already
+        # Belt and braces: crates/jev-lsp documents JEV_BASE_URL for shells that already
         # know where the local model lives, while workspace/configuration (PROTOCOL §10) is
         # the normative channel this client answers on. The server re-applies the
         # environment after merging configuration, so the two cannot disagree.
-        env["META_BASE_URL"] = args.stub_model_url
+        env["JEV_BASE_URL"] = args.stub_model_url
     root = pathlib.Path(workspace).resolve()
     session = None
     report = Report("lsp_client")

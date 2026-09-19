@@ -7,7 +7,7 @@ model has no reason to satisfy. Here the loop is the subject: does the pipeline 
 long does it take, what did the model actually produce, and does the edit apply cleanly.
 
     # local llama.cpp
-    META_BASE_URL=http://127.0.0.1:8080/v1 META_MODEL=<model> python3 verify/real_model.py
+    JEV_BASE_URL=http://127.0.0.1:8080/v1 JEV_MODEL=<model> python3 verify/real_model.py
 
     # the omp auth gateway (resolves the provider credential server-side; no key handling)
     python3 verify/real_model.py --base-url http://127.0.0.1:4000/v1 --model deepseek/deepseek-flash
@@ -54,22 +54,22 @@ def line_of(text, needle):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--bin", default=os.path.join(REPO, "target", "release", "meta-lsp"))
-    ap.add_argument("--base-url", default=os.environ.get("META_BASE_URL", "http://127.0.0.1:8080/v1"))
-    ap.add_argument("--model", default=os.environ.get("META_MODEL", "qwen2.5-coder-7b-instruct"))
+    ap.add_argument("--bin", default=os.path.join(REPO, "target", "release", "jev-lsp"))
+    ap.add_argument("--base-url", default=os.environ.get("JEV_BASE_URL", "http://127.0.0.1:8080/v1"))
+    ap.add_argument("--model", default=os.environ.get("JEV_MODEL", "qwen2.5-coder-7b-instruct"))
     ap.add_argument("--timeout", type=float, default=120.0, help="seconds to wait for a model call")
     ap.add_argument("--verb", default="auto", help="code action to resolve: auto, fix, harden, docs, test, explain")
     ap.add_argument("--keep", action="store_true")
     args = ap.parse_args()
 
-    workdir = tempfile.mkdtemp(prefix="meta-real-")
+    workdir = tempfile.mkdtemp(prefix="jev-real-")
     fixture = os.path.join(workdir, "loader.py")
     with open(fixture, "w") as fh:
         fh.write(FIXTURE)
     uri = "file://" + fixture
 
-    env = dict(os.environ, META_BASE_URL=args.base_url, META_MODEL=args.model,
-               META_REVIEW_MODEL=args.model)
+    env = dict(os.environ, JEV_BASE_URL=args.base_url, JEV_MODEL=args.model,
+               JEV_REVIEW_MODEL=args.model)
     print(f"fixture : {fixture}")
     print(f"endpoint: {args.base_url}")
     print(f"model   : {args.model}")
@@ -114,7 +114,7 @@ def main():
             print(f"  server log : {m['params']['message'][:150]}")
 
         status = server.request("workspace/executeCommand",
-                                {"command": "meta.status", "arguments": []}).get("result", {})
+                                {"command": "jev.status", "arguments": []}).get("result", {})
         b = status.get("budget", {})
         print(f"  budget     : calls_min={b.get('calls_last_minute')} "
               f"tokens={b.get('tokens_used')} in_flight={b.get('in_flight')}")
@@ -132,10 +132,10 @@ def main():
 
         wanted = args.verb
         if wanted == "auto":
-            pick = next((a for a in actions if a["kind"] == "quickfix.meta"), None) \
-                or next((a for a in actions if a["kind"] == "refactor.rewrite.meta"), None)
+            pick = next((a for a in actions if a["kind"] == "quickfix.jev"), None) \
+                or next((a for a in actions if a["kind"] == "refactor.rewrite.jev"), None)
         elif wanted == "fix":
-            pick = next((a for a in actions if a["kind"] == "quickfix.meta"), None)
+            pick = next((a for a in actions if a["kind"] == "quickfix.jev"), None)
         elif wanted == "explain":
             pick = None
         else:
@@ -198,7 +198,7 @@ def main():
                 print(f"  message    : {m['params']['message'][:200]}")
 
         status = server.request("workspace/executeCommand",
-                                {"command": "meta.status", "arguments": []}).get("result", {})
+                                {"command": "jev.status", "arguments": []}).get("result", {})
         b = status.get("budget", {})
         print(f"\ntotals: calls_last_minute={b.get('calls_last_minute')} tokens={b.get('tokens_used')} "
               f"refusals={status.get('counters', {}).get('refusals')}")

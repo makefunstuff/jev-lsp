@@ -1,20 +1,23 @@
 -- Live Neovim: the plugin's own interactive surfaces (docs/ROADMAP.md U4) — the picker, the
 -- proposal diff, and the statusline segment.
 --
---   META_LSP_BIN=/path/to/meta-lsp nvim --headless -u NONE -l verify/nvim_ui_test.lua
---   META_BASE_URL=http://127.0.0.1:8099/v1   # optional: a model endpoint (verify/stub_model.py)
+--   JEV_LSP_BIN=/path/to/jev-lsp nvim --headless -u NONE -l verify/nvim_ui_test.lua
+--   JEV_BASE_URL=http://127.0.0.1:8099/v1   # optional: a model endpoint (verify/stub_model.py)
+--   JEV_DECIDE_BASE_URL=http://127.0.0.1:8099/v1 JEV_DECIDE_MODEL=stub-model
+--     # ^ the decide tier the ambient rules pass asks; without it, no save-driven finding
 --
--- META_LSP_BIN is the server binary (required; unset is a usage error, exit 2).
--- META_BASE_URL points the server at a model endpoint. With one, the checks that need a real
+-- JEV_LSP_BIN is the server binary (required; unset is a usage error, exit 2).
+-- JEV_BASE_URL points the server at a model endpoint. With one, the checks that need a real
 -- proposal are hard: the stub is deterministic. Without one the server still lists actions,
 -- so those checks report SKIP rather than FAIL — nothing here pretends a missing endpoint is
--- a passing test.
+-- a passing test. The ambient pass is the rules pass, so the fixture root carries a
+-- `.jev/rules/example.json` whose decision is answered by JEV_DECIDE_BASE_URL.
 --
 -- Checks, in order:
 --
---   0. the surface: exactly the four surviving keymaps are mapped (`<leader>ma` in visual
---      mode too, since a selection is the scope), the cut ones are gone, `:Meta status`
---      dispatches, and `meta.status` round-trips with the server reporting under the token the
+--   0. the surface: exactly the four surviving keymaps are mapped (`<leader>ja` in visual
+--      mode too, since a selection is the scope), the cut ones are gone, `:Jev status`
+--      dispatches, and `jev.status` round-trips with the server reporting under the token the
 --      plugin issued;
 --   1. the picker opens and lists actions for a file with a findable issue, asks with
 --      `triggerKind = 1` and the cursor range, resolves index 1, and the edit it resolves to
@@ -36,18 +39,18 @@
 -- Prints ok/FAIL/SKIP per check. Exit is nonzero only on FAIL. Every wait is bounded:
 -- `vim.wait` with an explicit timeout, or a deadline-checked poll loop, so the run cannot hang.
 
-local BIN = os.getenv('META_LSP_BIN')
+local BIN = os.getenv('JEV_LSP_BIN')
 if BIN == nil or BIN == '' then
-  io.stderr:write('nvim_ui_test: META_LSP_BIN is required (path to the meta-lsp binary)\n')
+  io.stderr:write('nvim_ui_test: JEV_LSP_BIN is required (path to the jev-lsp binary)\n')
   io.stderr:flush()
   os.exit(2)
 end
-local MODEL = os.getenv('META_BASE_URL') or ''
+local MODEL = os.getenv('JEV_BASE_URL') or ''
 
 --- Model calls so far, from the server's own counter.
 local function calls()
     local status
-    require('meta').command('meta.status', {}, function(_, r)
+    require('jev').command('jev.status', {}, function(_, r)
       status = r
     end)
     -- Polled gently: every one of these is a line in the shared session record, and a tight
@@ -134,47 +137,62 @@ vim.opt.runtimepath:prepend(PLUGIN)
 local server_log = dofile(vim.fn.fnamemodify(here, ':p:h') .. '/harness_log.lua')
 server_log.capture()
 
-local root = os.getenv('META_ROOT')
+local root = os.getenv('JEV_ROOT')
 if root == nil or root == '' then
-  root = vim.fn.tempname() .. '-meta-ui'
+  root = vim.fn.tempname() .. '-jev-ui'
 end
 vim.fn.mkdir(root, 'p')
 
+-- The ambient pass is the *rules* pass (`jev.rules/1`), so a repository with no rule gets no
+-- ambient finding — and several checks below are about a fixture that has one ("analysed, so a
+-- hint has something to report", the ask finding). This rule's inspection matches the
+-- `    f = open(path)` line every Python fixture in this directory carries, so the finding
+-- lands inside `def alpha` and the hint sits on that declaration. `applies_to` is globbed
+-- tightly, because this directory also holds `.zzz`, `.lua` and `.c` fixtures.
+vim.fn.mkdir(root .. '/.jev/rules', 'p')
+vim.fn.writefile({
+  -- A long-bracket string: the JSON needs a literal `\\(` so the decoded pattern is `\(`.
+  -- Two rules, because the directory holds two kinds of fixture: the Python ones (hints, ask,
+  -- lens) carry `f = open(path)`, and the unidentified `.zzz` ones (picker, reject) carry the
+  -- accumulator loop. `applies_to` is globbed tightly for exactly that reason.
+  [[{"schema":"jev.rules/1","rules":[{"id":"no-bare-open","title":"File opened without a context manager","text":"Open the file with a context manager so the handle is closed.","severity":"warning","applies_to":["**/*.py"],"inspection":{"kind":"regex","pattern":"open\\(","max_matches":0},"judgement":{"question":"Is this handle left open on a path that matters?","criteria":{"true":"the handle outlives the function or is never closed","false":"the handle is closed by the caller or the process"},"min_probability":0.75},"verb_hint":"fix"},{"id":"unbounded-accumulator","title":"Accumulator loop without a bound","text":"Bound the loop that accumulates into a shared value so it cannot run away.","severity":"warning","applies_to":["**/*.zzz"],"inspection":{"kind":"regex","pattern":"for i = 1","max_matches":0},"judgement":{"question":"Can this loop run more iterations than the caller expects?","criteria":{"true":"the bound comes from outside the code","false":"the bound is a literal the code controls"},"min_probability":0.75},"verb_hint":"fix"}]}]],
+}, root .. '/.jev/rules/example.json')
+
 say('[nvim_ui] plugin  : ' .. PLUGIN)
 say('[nvim_ui] server  : ' .. BIN)
-say('[nvim_ui] model   : ' .. (MODEL ~= '' and MODEL or '(none: META_BASE_URL unset)'))
+say('[nvim_ui] model   : ' .. (MODEL ~= '' and MODEL or '(none: JEV_BASE_URL unset)'))
 say('[nvim_ui] fixtures: ' .. root)
 
 -- 6a. The segment with no client at all -----------------------------------------------
 --
--- Run first, before any client exists: "does nothing at all when no `meta` client is attached"
+-- Run first, before any client exists: "does nothing at all when no `jev` client is attached"
 -- is a property of the module, and this is the only moment it is trivially true.
 
-local statusline = require('meta.statusline')
+local statusline = require('jev.statusline')
 do
   local raised, value = pcall(statusline.component)
   check(raised and type(value) == 'string', 'statusline.component() returns a string, and does not raise, with no client attached', value)
   check(value == '', 'statusline.component() is empty with no client attached', vim.inspect(value))
 end
 
-local meta = require('meta')
+local jev = require('jev')
 -- A generous budget: this file makes many model calls in a minute and is not the place that
 -- tests the ceiling (verify/queue_test.py and the budget unit tests are).
-meta.setup({
+jev.setup({
   cmd = { BIN },
   settings = { budget = { max_calls_per_min = 120, max_calls_per_hour = 600 } },
 })
 vim.cmd('filetype on')
 
 -- The surface is four keys. Everything else the plugin can do is still reachable, by typing
--- (`:Meta …`), and the cut is the point of this unit: the plugin's own user could not say what
--- it was for. `<leader>ma` is the picker, mapped in visual mode as well.
+-- (`:Jev …`), and the cut is the point of this unit: the plugin's own user could not say what
+-- it was for. `<leader>ja` is the picker, mapped in visual mode as well.
 do
   local expected = {
-    '<leader>ma',
-    '<leader>mu',
-    '<leader>mq',
-    '<leader>ms',
+    '<leader>ja',
+    '<leader>ju',
+    '<leader>jq',
+    '<leader>js',
   }
   local missing = {}
   for _, lhs in ipairs(expected) do
@@ -184,11 +202,11 @@ do
   end
   check(#missing == 0, 'the four surviving keymaps are mapped', vim.inspect(missing))
   check(
-    vim.fn.maparg('<leader>ma', 'x') ~= '',
+    vim.fn.maparg('<leader>ja', 'x') ~= '',
     'the picker is also mapped in visual mode, where a selection is the scope'
   )
-  local cut = { '<leader>mv', '<leader>mp', '<leader>me', '<leader>mr', '<leader>mx',
-    '<leader>md', '<leader>mS', '<leader>mG', '<leader>mh', '<leader>ml' }
+  local cut = { '<leader>jv', '<leader>jp', '<leader>je', '<leader>jr', '<leader>jx',
+    '<leader>jd', '<leader>jS', '<leader>jG', '<leader>jh', '<leader>jl' }
   local still = {}
   for _, lhs in ipairs(cut) do
     if vim.fn.maparg(lhs, 'n') ~= '' then
@@ -206,13 +224,20 @@ local function open_fixture(name, body)
   -- makes the edit a silent no-op, and then a check quietly tests the wrong buffer.
   vim.cmd('silent! edit! ' .. vim.fn.fnameescape(path))
   local bufnr = vim.api.nvim_get_current_buf()
-  local opened = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bufnr), ':p')
+  -- `:p` makes a path absolute but does not follow symlinks, and on macOS `$TMPDIR` is one:
+  -- `vim.fn.tempname()` gives `/var/folders/…` while the buffer name is the resolved
+  -- `/private/var/folders/…`. Comparing the two literally failed every fixture on this
+  -- platform. `realpath` on both sides, so the check asks what it means to ask.
+  local function real(path)
+    return vim.uv.fs_realpath(path) or vim.fn.fnamemodify(path, ':p')
+  end
+  local opened = real(vim.api.nvim_buf_get_name(bufnr))
   assert(
-    opened == vim.fn.fnamemodify(path, ':p'),
+    opened == real(path),
     ('open_fixture: wanted %s, holding %s'):format(path, opened)
   )
   local attached = vim.wait(15000, function()
-    return #vim.lsp.get_clients({ bufnr = bufnr, name = 'meta' }) > 0
+    return #vim.lsp.get_clients({ bufnr = bufnr, name = 'jev' }) > 0
   end, 25)
   return bufnr, attached
 end
@@ -272,11 +297,11 @@ local function title_of(item)
 end
 
 --- The actions a `textDocument/codeAction` call returns, and whether one of them is a fix for a
---- cached finding (`quickfix.meta`, PROTOCOL §4.1) — which is what "a findable issue" means.
+--- cached finding (`quickfix.jev`, PROTOCOL §4.1) — which is what "a findable issue" means.
 local function actions_and_issue(client, params, bufnr)
   local actions = request(client, 'textDocument/codeAction', params, 10000, bufnr) or {}
   for _, action in ipairs(actions) do
-    if kind_of(action):find('^quickfix%.meta') ~= nil then
+    if kind_of(action):find('^quickfix%.jev') ~= nil then
       return actions, true
     end
   end
@@ -318,8 +343,8 @@ do
   vim.notify = function(msg)
     reported = tostring(msg)
   end
-  local dispatched, dispatch_err = pcall(vim.cmd, 'Meta status')
-  check(dispatched, ':Meta status dispatches through the command surface', dispatch_err)
+  local dispatched, dispatch_err = pcall(vim.cmd, 'Jev status')
+  check(dispatched, ':Jev status dispatches through the command surface', dispatch_err)
 
   local kinds = {}
   local autocmd = vim.api.nvim_create_autocmd('LspProgress', {
@@ -334,7 +359,7 @@ do
     end,
   })
   local answered, outcome = false, nil
-  meta.status(function(err, result)
+  jev.status(function(err, result)
     outcome, answered = { err = err, result = result }, true
   end)
   vim.wait(15000, function()
@@ -342,7 +367,7 @@ do
   end, 25)
   check(
     answered and outcome.err == nil and type(outcome.result) == 'table' and outcome.result.ok == true,
-    'meta.status round-trips through the plugin command path',
+    'jev.status round-trips through the plugin command path',
     vim.inspect(outcome and outcome.err)
   )
   local paired = false
@@ -359,12 +384,12 @@ do
   vim.notify = saved_notify
   check(
     type(reported) == 'string' and reported:find('schema', 1, true) ~= nil,
-    ':Meta status reports the Result envelope it got back',
+    ':Jev status reports the Result envelope it got back',
     vim.inspect(reported)
   )
 end
 
-local client = vim.lsp.get_clients({ bufnr = bufnr, name = 'meta' })[1]
+local client = vim.lsp.get_clients({ bufnr = bufnr, name = 'jev' })[1]
 local seen = spy(client)
 
 -- The review runs on save (PROTOCOL §10, triggers.diagnostics = "save"), so saving is what
@@ -403,11 +428,11 @@ if not issue then
   if MODEL == '' then
     skip(
       label,
-      ('no quickfix.meta action within 5 s of saving (%d verb action(s) offered); META_BASE_URL is unset, so no endpoint was promised')
+      ('no quickfix.jev action within 5 s of saving (%d verb action(s) offered); JEV_BASE_URL is unset, so no endpoint was promised')
         :format(#actions)
     )
   else
-    fail(label, 'no quickfix.meta action after 30 s: ' .. vim.inspect(vim.tbl_map(kind_of, actions)))
+    fail(label, 'no quickfix.jev action after 30 s: ' .. vim.inspect(vim.tbl_map(kind_of, actions)))
   end
 else
   local before = lines(bufnr)
@@ -415,7 +440,7 @@ else
     captured.items, captured.opts = items, opts
     cb(items[1], 1)
   end
-  require('meta.picker').action()
+  require('jev.picker').action()
   local landed = vim.wait(20000, function()
     return applied ~= nil
   end, 25)
@@ -477,7 +502,7 @@ do
     items, opts = list, o
     cb(nil, nil) -- dismissed: this check is about rendering, not about applying
   end
-  require('meta.picker').action({ bufnr = pane_bufnr })
+  require('jev.picker').action({ bufnr = pane_bufnr })
   if
     check(
       vim.wait(10000, function()
@@ -515,7 +540,7 @@ do
         choices = list
         return 0
       end
-      require('meta.picker').action({ bufnr = pane_bufnr })
+      require('jev.picker').action({ bufnr = pane_bufnr })
       local offered = vim.wait(10000, function()
         return choices ~= nil
       end, 25)
@@ -535,7 +560,7 @@ do
       -- No picker at all: the menu is what the user loses first, so it is reported rather than
       -- swallowed, and nothing raises.
       vim.ui.select = nil
-      local surviving, chooser_err = pcall(require('meta.picker').action, { bufnr = pane_bufnr })
+      local surviving, chooser_err = pcall(require('jev.picker').action, { bufnr = pane_bufnr })
       vim.ui.select = stock_select
       check(surviving, 'the picker does not raise when vim.ui.select is unset', chooser_err)
     end
@@ -552,7 +577,7 @@ do
     cb(nil, nil) -- dismissed: the point here is the request, not the choice
   end
   vim.cmd('normal! ggVjj')
-  local lhs = vim.api.nvim_replace_termcodes('<leader>ma', true, false, true)
+  local lhs = vim.api.nvim_replace_termcodes('<leader>ja', true, false, true)
   vim.api.nvim_feedkeys(lhs, 'x', false)
   local asked = vim.wait(10000, function()
     return wire ~= nil
@@ -581,7 +606,7 @@ end
 
 local reject_bufnr, reject_attached = open_fixture('reject.zzz', FIXTURE)
 check(reject_attached, 'the plugin attached a client to the reject fixture')
-local reject_client = vim.lsp.get_clients({ bufnr = reject_bufnr, name = 'meta' })[1]
+local reject_client = vim.lsp.get_clients({ bufnr = reject_bufnr, name = 'jev' })[1]
 local reject_seen = spy(reject_client)
 
 local notes = {}
@@ -620,7 +645,7 @@ local function rejected_pick()
     cb(items[1], 1)
   end
   local text = nil
-  require('meta.picker').action({ bufnr = reject_bufnr })
+  require('jev.picker').action({ bufnr = reject_bufnr })
   vim.wait(10000, function()
     return reject_seen.resolve ~= nil
   end, 25)
@@ -666,8 +691,8 @@ then
     )
 
     -- And the suppression is about that text, not about messages in general.
-    messages(nil, { type = 3, message = 'meta: uitest control message' }, { method = 'window/showMessage', client_id = reject_client.id })
-    check(reports('meta: uitest control message') == 1, 'an unrelated window/showMessage is still shown')
+    messages(nil, { type = 3, message = 'jev: uitest control message' }, { method = 'window/showMessage', client_id = reject_client.id })
+    check(reports('jev: uitest control message') == 1, 'an unrelated window/showMessage is still shown')
   else
     skip('the window/showMessage dedupe', 'no handler resolved for window/showMessage')
   end
@@ -705,7 +730,7 @@ do
     maps_before[m.lhs] = true
   end
 
-  local diff = require('meta.diff')
+  local diff = require('jev.diff')
   local opened = diff.propose(edit, { bufnr = bufnr })
   check(opened, 'the diff preview opens')
   check(window_count() == wins + 1, 'the preview is a second window (side by side)', window_count())
@@ -775,7 +800,7 @@ end
 -- 6. The statusline segment -----------------------------------------------------------
 
 do
-  local token = 'meta:uitest:1'
+  local token = 'jev:uitest:1'
   statusline.track(token, 'resolve')
   local segment = statusline.component()
   check(
@@ -824,7 +849,7 @@ do
   -- The expression `setup` documents must be the one that works, evaluated the way a statusline
   -- is: from a string, at redraw time.
   local saved_statusline = vim.o.statusline
-  vim.o.statusline = "%{%v:lua.require'meta.statusline'.component()%}"
+  vim.o.statusline = "%{%v:lua.require'jev.statusline'.component()%}"
   local rendered = vim.api.nvim_eval_statusline(vim.o.statusline, {}).str
   vim.o.statusline = saved_statusline
   check(
@@ -867,7 +892,7 @@ do
     rendered = opts.format_item and opts.format_item(list[1]) or nil
     cb(list[1], 1)
   end
-  local ok = require('meta.picker').select(items, function(choice)
+  local ok = require('jev.picker').select(items, function(choice)
     chosen = choice
   end)
   vim.ui.select = stock
@@ -885,13 +910,13 @@ end
 -- 8. Command arguments are arrays ----------------------------------------------------------
 
 -- `ExecuteCommandParams.arguments` is `LSPAny[]`, and the server reads `arguments.first()`.
--- `meta.plan` sent a map, so the transport rejected it before the command ran: every press of
--- `:Meta plan` answered `invalid type: map, expected a sequence`. The entry points are driven
+-- `jev.plan` sent a map, so the transport rejected it before the command ran: every press of
+-- `:Jev plan` answered `invalid type: map, expected a sequence`. The entry points are driven
 -- here with the request captured, so the shape is checked without spending a model call.
 do
-  local client = vim.lsp.get_clients({ name = 'meta' })[1]
+  local client = vim.lsp.get_clients({ name = 'jev' })[1]
   if client == nil then
-    skip('command argument shapes', 'no meta client attached')
+    skip('command argument shapes', 'no jev client attached')
   else
     local captured = {}
     local orig = client.request
@@ -901,7 +926,7 @@ do
       end
       return true
     end
-    local plugin = require('meta')
+    local plugin = require('jev')
     plugin.plan('uitest goal')
     plugin.review()
     plugin.explain()
@@ -928,20 +953,20 @@ end
 
 -- 9. A streamed answer arrives progressively ------------------------------------------------
 
--- `meta.explain` asks for a stream, and the server reports the text *so far* under the token
+-- `jev.explain` asks for a stream, and the server reports the text *so far* under the token
 -- the plugin issued (PROTOCOL §3.5). What is asserted is what the user sees: the artifact
 -- buffer holds more than one distinct state while the request is still open, so the answer is
 -- being written rather than appearing at the end — and the buffer the partials filled is the
 -- buffer the finished artifact lands in, so nothing moves when it completes.
 do
-  if #vim.lsp.get_clients({ name = 'meta', bufnr = reject_bufnr }) == 0 then
-    skip('the streamed explanation', 'no meta client attached to the fixture')
+  if #vim.lsp.get_clients({ name = 'jev', bufnr = reject_bufnr }) == 0 then
+    skip('the streamed explanation', 'no jev client attached to the fixture')
   else
     local function stream_buffers()
       local found = {}
       for _, b in ipairs(vim.api.nvim_list_bufs()) do
         if vim.api.nvim_buf_is_valid(b)
-          and vim.api.nvim_buf_get_name(b):find('meta://', 1, true) ~= nil
+          and vim.api.nvim_buf_get_name(b):find('jev://', 1, true) ~= nil
         then
           found[#found + 1] = b
         end
@@ -973,7 +998,7 @@ do
     local seen = {}
     -- The *default* path: `M.explain()` with no callback, so the plugin renders the artifact
     -- itself — a check that supplied its own callback would only be testing the callback.
-    require('meta').explain()
+    require('jev').explain()
 
     local deadline = vim.uv.now() + 30000
     local finished, finished_name = false, nil
@@ -984,7 +1009,7 @@ do
           seen[text] = true
         end
         local name = vim.api.nvim_buf_get_name(b)
-        if name:find('meta://explanation', 1, true) == 1 then
+        if name:find('jev://explanation', 1, true) == 1 then
           finished, finished_name = true, name
         end
       end
@@ -1017,7 +1042,7 @@ do
     )
     if finished_name ~= nil then
       check(
-        finished_name:find('meta://explanation/', 1, true) == 1,
+        finished_name:find('jev://explanation/', 1, true) == 1,
         'and it is named for the artifact it now holds',
         finished_name
       )
@@ -1057,7 +1082,7 @@ do
   for _, entry in ipairs(vim.lsp.codelens.get({ bufnr = lens_bufnr })) do
     local command = entry.lens.command or {}
     titles[#titles + 1] = command.title or '?'
-    if command.command == 'meta.plugin.explain' then
+    if command.command == 'jev.plugin.explain' then
       explain_line = entry.lens.range.start.line
     end
   end
@@ -1085,7 +1110,7 @@ do
     local opened = vim.wait(30000, function()
       for _, b in ipairs(vim.api.nvim_list_bufs()) do
         if vim.api.nvim_buf_is_valid(b)
-          and vim.api.nvim_buf_get_name(b):find('meta://explanation', 1, true)
+          and vim.api.nvim_buf_get_name(b):find('jev://explanation', 1, true)
         then
           return true
         end
@@ -1094,7 +1119,7 @@ do
     end, 50)
     check(opened, 'running a lens opens what it promised')
     for _, b in ipairs(vim.api.nvim_list_bufs()) do
-      if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find('meta://', 1, true) then
+      if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find('jev://', 1, true) then
         vim.api.nvim_buf_delete(b, { force = true })
       end
     end
@@ -1123,21 +1148,21 @@ do
   })
   check(lua_attached, 'the plugin attached a client to the scope fixture')
 
-  local client = vim.lsp.get_clients({ bufnr = lua_bufnr, name = 'meta' })[1]
+  local client = vim.lsp.get_clients({ bufnr = lua_bufnr, name = 'jev' })[1]
   if client == nil then
     skip('the parser scope', 'no client on the scope fixture')
   else
     local captured = nil
     local orig = client.request
     client.request = function(_, method, params, ...)
-      if method == 'workspace/executeCommand' and params.command == 'meta.explain' then
+      if method == 'workspace/executeCommand' and params.command == 'jev.explain' then
         captured = params.arguments
       end
       return orig(_, method, params, ...)
     end
     vim.api.nvim_set_current_buf(lua_bufnr)
     vim.api.nvim_win_set_cursor(0, { 8, 2 }) -- inside `beta`
-    require('meta').explain()
+    require('jev').explain()
     vim.wait(5000, function()
       return captured ~= nil
     end, 25)
@@ -1157,21 +1182,21 @@ do
       'def alpha(x):',
       '    return x + 1',
     })
-    local py_client = vim.lsp.get_clients({ bufnr = py_bufnr, name = 'meta' })[1]
+    local py_client = vim.lsp.get_clients({ bufnr = py_bufnr, name = 'jev' })[1]
     if py_client == nil then
       skip('the structural fallback', 'no client on the python fixture')
     else
       local seen = nil
       local orig2 = py_client.request
       py_client.request = function(_, method, params, ...)
-        if method == 'workspace/executeCommand' and params.command == 'meta.explain' then
+        if method == 'workspace/executeCommand' and params.command == 'jev.explain' then
           seen = params.arguments
         end
         return orig2(_, method, params, ...)
       end
       vim.api.nvim_set_current_buf(py_bufnr)
       vim.api.nvim_win_set_cursor(0, { 2, 4 })
-      require('meta').explain()
+      require('jev').explain()
       vim.wait(5000, function()
         return seen ~= nil
       end, 25)
@@ -1185,7 +1210,7 @@ do
       )
     end
     for _, b in ipairs(vim.api.nvim_list_bufs()) do
-      if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find('meta://', 1, true) then
+      if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find('jev://', 1, true) then
         vim.api.nvim_buf_delete(b, { force = true })
       end
     end
@@ -1200,7 +1225,11 @@ end
 do
   local hint_path = root .. '/hints.py'
   local BODY = {
-    'import json',
+    -- Distinct from the lens fixture (which has the same shape): findings are cached by content
+    -- hash, so an identical body would answer this fixture's pull from the lens fixture's
+    -- analysis and "a document with nothing analysed gets no hints" would be about the wrong
+    -- document. `def alpha` and the `open(` line stay where the checks below expect them.
+    'import json  # the hints fixture',
     '',
     '',
     'def alpha(path):',
@@ -1221,11 +1250,11 @@ do
 
   local hint_bufnr = open()
   local attached = vim.wait(15000, function()
-    return #vim.lsp.get_clients({ bufnr = hint_bufnr, name = 'meta' }) > 0
+    return #vim.lsp.get_clients({ bufnr = hint_bufnr, name = 'jev' }) > 0
   end, 25)
   check(attached, 'the plugin attached a client to the hints fixture')
 
-  local client = vim.lsp.get_clients({ bufnr = hint_bufnr, name = 'meta' })[1]
+  local client = vim.lsp.get_clients({ bufnr = hint_bufnr, name = 'jev' })[1]
   if client == nil then
     skip('inlay hints', 'no client on the hints fixture')
   else
@@ -1254,7 +1283,12 @@ do
       local bufnr = open()
       pcall(vim.cmd, 'write')
       analysed = vim.wait(3000, function()
-        return #vim.diagnostic.get(bufnr) > 0
+        -- `open()` re-opens the path, and the buffer it returned can be wiped while the
+        -- wait is running (a scratch buffer left current, or a plugin cleanup). An invalid
+        -- bufnr makes `vim.diagnostic.get` raise — `Invalid buffer id` — and `vim.wait`
+        -- propagates it, killing the whole harness before it can report anything. A gone
+        -- buffer is simply not analysed, so the loop tries the next attempt.
+        return vim.api.nvim_buf_is_valid(bufnr) and #vim.diagnostic.get(bufnr) > 0
       end, 50)
       if analysed then
         hint_bufnr = bufnr
@@ -1271,7 +1305,7 @@ do
         local label = type(list[1].label) == 'string' and list[1].label
           or (list[1].label and list[1].label.value)
         check(
-          type(label) == 'string' and label:find('meta:', 1, true) ~= nil
+          type(label) == 'string' and label:find('jev:', 1, true) ~= nil
             and label:find('finding', 1, true) ~= nil,
           'the label says what it is counting',
           tostring(label)
@@ -1285,12 +1319,12 @@ do
     end
 
     local stock = vim.lsp.inlay_hint.is_enabled({ bufnr = hint_bufnr })
-    require('meta').hints(true)
+    require('jev').hints(true)
     check(vim.lsp.inlay_hint.is_enabled({ bufnr = hint_bufnr }), 'the toggle turns them on')
-    require('meta').hints(false)
+    require('jev').hints(false)
     check(not vim.lsp.inlay_hint.is_enabled({ bufnr = hint_bufnr }), 'and off again')
     if stock then
-      require('meta').hints(true)
+      require('jev').hints(true)
     end
   end
 end
@@ -1317,7 +1351,7 @@ do
   end
   local bufnr = open()
   local attached = vim.wait(15000, function()
-    return #vim.lsp.get_clients({ bufnr = bufnr, name = 'meta' }) > 0
+    return #vim.lsp.get_clients({ bufnr = bufnr, name = 'jev' }) > 0
   end, 25)
   check(attached, 'the plugin attached a client to the ask fixture')
 
@@ -1329,7 +1363,12 @@ do
       bufnr = open()
       pcall(vim.cmd, 'write')
       analysed = vim.wait(3000, function()
-        return #vim.diagnostic.get(bufnr) > 0
+        -- `open()` re-opens the path, and the buffer it returned can be wiped while the
+        -- wait is running (a scratch buffer left current, or a plugin cleanup). An invalid
+        -- bufnr makes `vim.diagnostic.get` raise — `Invalid buffer id` — and `vim.wait`
+        -- propagates it, killing the whole harness before it can report anything. A gone
+        -- buffer is simply not analysed, so the loop tries the next attempt.
+        return vim.api.nvim_buf_is_valid(bufnr) and #vim.diagnostic.get(bufnr) > 0
       end, 50)
       if analysed then
         break
@@ -1339,18 +1378,22 @@ do
 
     if analysed then
       local finding = vim.diagnostic.get(bufnr)[1]
-      local client = vim.lsp.get_clients({ bufnr = bufnr, name = 'meta' })[1]
+      local client = vim.lsp.get_clients({ bufnr = bufnr, name = 'jev' })[1]
       local captured = nil
       local orig = client.request
       client.request = function(_, method, params, ...)
-        if method == 'workspace/executeCommand' and params.command == 'meta.followup' then
+        if method == 'workspace/executeCommand' and params.command == 'jev.followup' then
           captured = params.arguments
         end
         return orig(_, method, params, ...)
       end
-      vim.api.nvim_set_current_buf(bufnr)
+      -- `-u NONE` leaves `hidden` off, so switching away from a buffer with unsaved changes
+      -- raises `E37` inside `nvim_set_current_buf` and would abort the whole run. The switch is
+      -- setup for the cursor below, not an assertion, so it is guarded; if it fails the checks
+      -- that follow fail loudly on their own terms rather than taking the run down.
+      pcall(vim.api.nvim_set_current_buf, bufnr)
       vim.api.nvim_win_set_cursor(0, { finding.lnum + 1, 0 })
-      require('meta').followup('why does this leak?')
+      require('jev').followup('why does this leak?')
       vim.wait(5000, function()
         return captured ~= nil
       end, 25)
@@ -1369,7 +1412,7 @@ do
       local opened = vim.wait(20000, function()
         for _, b in ipairs(vim.api.nvim_list_bufs()) do
           if vim.api.nvim_buf_is_valid(b)
-            and vim.api.nvim_buf_get_name(b):find('meta://answer/', 1, true)
+            and vim.api.nvim_buf_get_name(b):find('jev://answer/', 1, true)
           then
             return true
           end
@@ -1378,7 +1421,7 @@ do
       end, 50)
       check(opened, 'the answer lands in a buffer, like an explanation')
       for _, b in ipairs(vim.api.nvim_list_bufs()) do
-        if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find('meta://', 1, true) then
+        if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find('jev://', 1, true) then
           vim.api.nvim_buf_delete(b, { force = true })
         end
       end
@@ -1392,11 +1435,11 @@ end
 -- repository root's `.git/`, so it survives a restart and never shows up in `git status`. It is
 -- a record, not memory: nothing consults it to decide anything.
 do
-  require('meta').session()
+  require('jev').session()
   local opened = vim.wait(10000, function()
     for _, b in ipairs(vim.api.nvim_list_bufs()) do
       if vim.api.nvim_buf_is_valid(b)
-        and vim.api.nvim_buf_get_name(b):find('meta://session/', 1, true)
+        and vim.api.nvim_buf_get_name(b):find('jev://session/', 1, true)
       then
         return true
       end
@@ -1408,7 +1451,7 @@ do
   local text = ''
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_is_valid(b)
-      and vim.api.nvim_buf_get_name(b):find('meta://session/', 1, true)
+      and vim.api.nvim_buf_get_name(b):find('jev://session/', 1, true)
     then
       text = table.concat(vim.api.nvim_buf_get_lines(b, 0, -1, false), '\n')
     end
@@ -1428,7 +1471,7 @@ do
   -- entries it holds. The root is whatever the client told the server it was, so the path is
   -- the server's answer rather than a guess made here.
   local reported = nil
-  require('meta').command('meta.session', { { limit = 200 } }, function(_, r)
+  require('jev').command('jev.session', { { limit = 200 } }, function(_, r)
     reported = r
   end)
   vim.wait(5000, function()
@@ -1475,7 +1518,7 @@ do
   local session_buf = nil
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_is_valid(b)
-      and vim.api.nvim_buf_get_name(b):find('meta://session/', 1, true)
+      and vim.api.nvim_buf_get_name(b):find('jev://session/', 1, true)
     then
       session_buf = b
     end
@@ -1518,7 +1561,7 @@ do
   end
 
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find('meta://', 1, true) then
+    if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find('jev://', 1, true) then
       vim.api.nvim_buf_delete(b, { force = true })
     end
   end
@@ -1528,17 +1571,17 @@ end
 
 -- The one genuinely multi-step thing here. Each step is a line, `<CR>` applies that line's
 -- step, and the line says what happened — so approving a plan is reading it and pressing
--- return, rather than holding `meta.apply {plan_id, steps:[2]}` in your head.
+-- return, rather than holding `jev.apply {plan_id, steps:[2]}` in your head.
 do
   local plan_bufnr, opened = nil, false
   -- The concurrency guard covers model calls and this file has spent the last few seconds
   -- filling it, so the request is retried rather than assumed to land first time.
   for _ = 1, 10 do
-    require('meta').plan('add a docstring to the loader')
+    require('jev').plan('add a docstring to the loader')
     opened = vim.wait(4000, function()
       for _, b in ipairs(vim.api.nvim_list_bufs()) do
         if vim.api.nvim_buf_is_valid(b)
-          and vim.api.nvim_buf_get_name(b):find('meta://plan/', 1, true)
+          and vim.api.nvim_buf_get_name(b):find('jev://plan/', 1, true)
         then
           plan_bufnr = b
           return true
@@ -1608,7 +1651,7 @@ do
   end
 
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find('meta://', 1, true) then
+    if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find('jev://', 1, true) then
       vim.api.nvim_buf_delete(b, { force = true })
     end
   end
@@ -1644,7 +1687,7 @@ do
   })
   check(c_attached, 'the plugin attached a client to the c fixture')
 
-  local client = vim.lsp.get_clients({ bufnr = c_bufnr, name = 'meta' })[1]
+  local client = vim.lsp.get_clients({ bufnr = c_bufnr, name = 'jev' })[1]
   if client == nil then
     skip('parser-supplied declarations', 'no client on the c fixture')
   else
@@ -1719,7 +1762,7 @@ do
   vim.api.nvim_win_set_cursor(0, { 5, 0 })
 
   local attached = vim.wait(15000, function()
-    return #vim.lsp.get_clients({ bufnr = target, name = 'meta' }) > 0
+    return #vim.lsp.get_clients({ bufnr = target, name = 'jev' }) > 0
   end, 25)
   check(attached, 'the plugin attached a client to the context fixture')
 
@@ -1729,7 +1772,7 @@ do
     vim.wait(1000)
 
     local before = calls()
-    require('meta').explain()
+    require('jev').explain()
     vim.wait(20000, function()
       return calls() > before
     end, 100)
@@ -1771,7 +1814,7 @@ do
   })
   check(hover_attached, 'the plugin attached a client to the hover fixture')
 
-  local client = vim.lsp.get_clients({ bufnr = hover_bufnr, name = 'meta' })[1]
+  local client = vim.lsp.get_clients({ bufnr = hover_bufnr, name = 'jev' })[1]
   if client == nil then
     skip('hover', 'no client on the hover fixture')
   else
@@ -1821,20 +1864,20 @@ do
   })
   check(where_attached, 'the plugin attached a client to the where fixture')
 
-  local client = vim.lsp.get_clients({ bufnr = where_bufnr, name = 'meta' })[1]
+  local client = vim.lsp.get_clients({ bufnr = where_bufnr, name = 'jev' })[1]
   if client == nil then
-    skip('meta.where', 'no client on the where fixture')
+    skip('jev.where', 'no client on the where fixture')
   else
     local captured = nil
     local orig = client.request
     client.request = function(_, method, params, ...)
-      if method == 'workspace/executeCommand' and params.command == 'meta.followup' then
+      if method == 'workspace/executeCommand' and params.command == 'jev.followup' then
         captured = params.arguments
       end
       return orig(_, method, params, ...)
     end
     vim.api.nvim_set_current_buf(where_bufnr)
-    require('meta').where(needle)
+    require('jev').where(needle)
     vim.wait(6000, function()
       return captured ~= nil
     end, 50)
@@ -1866,7 +1909,7 @@ end
 -- pending request has to be allowed to run while the client is still there.
 pcall(vim.lsp.codelens.enable, false)
 vim.wait(400)
-for _, c in ipairs(vim.lsp.get_clients({ name = 'meta' })) do
+for _, c in ipairs(vim.lsp.get_clients({ name = 'jev' })) do
   c:stop(true)
 end
 sleep(300)

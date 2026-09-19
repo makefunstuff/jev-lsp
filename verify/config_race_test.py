@@ -10,7 +10,7 @@ The reproduction is built in: the client stalls its configuration answer while t
 already on the wire. Without the readiness gate the analysis runs immediately against
 `http://127.0.0.1:8080/v1` (nothing is listening there), fails, and no finding ever appears.
 
-    python3 verify/config_race_test.py [--bin target/release/meta-lsp]
+    python3 verify/config_race_test.py [--bin target/release/jev-lsp]
 """
 import argparse
 import os
@@ -56,23 +56,23 @@ def start_stub(port):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--bin", default=os.path.join(REPO, "target", "release", "meta-lsp"))
+    ap.add_argument("--bin", default=os.path.join(REPO, "target", "release", "jev-lsp"))
     args = ap.parse_args()
     RESULTS.clear()
 
     port = free_port()
     stub = start_stub(port)
-    workdir = tempfile.mkdtemp(prefix="meta-race-")
+    workdir = tempfile.mkdtemp(prefix="jev-race-")
     fixture = os.path.join(workdir, "loader.py")
     with open(fixture, "w") as fh:
         fh.write(FIXTURE)
     uri = "file://" + fixture
 
-    # Deliberately no META_BASE_URL: the endpoint must come from the client's settings, and
+    # Deliberately no JEV_BASE_URL: the endpoint must come from the client's settings, and
     # the default points at a port nothing is listening on.
-    env = {k: v for k, v in os.environ.items() if not k.startswith("META_")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("JEV_")}
     server = Lsp([args.bin, "--stdio"], env)
-    server.settings = {"models": {
+    server.settings = {"rules": {"enabled": False}, "models": {
         "reason": {"base_url": f"http://127.0.0.1:{port}/v1", "model": "stub-model"},
         "review": {"base_url": f"http://127.0.0.1:{port}/v1", "model": "stub-model"},
     }}

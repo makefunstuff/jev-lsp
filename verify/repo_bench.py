@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """How many findings does this thing produce on a real repository?
 
-    python3 verify/repo_bench.py --repo /data/jpl/Work/meta-lsp \
-        --bin target/release/meta-lsp \
+    python3 verify/repo_bench.py --repo /data/jpl/Work/jev-lsp \
+        --bin target/release/jev-lsp \
         --model-url http://127.0.0.1:4000/v1 --model deepseek/deepseek-v4-flash --limit 40
 
 The quality metric (verify/quality_eval.py) answers "is the review *right*" on six small files.
@@ -16,7 +16,7 @@ the server's vocabulary copied here on purpose, because a bench that asked the s
 extensions it supports would be measuring the server's opinion of itself.
 
 Per file: `didOpen`, `didSave`, then wait for that exact document's `analysis` entry in the
-record (`<root>/.git/meta/session.jsonl`), bounded at 60 s, and read the findings it lists.
+record (`<root>/.git/jev/session.jsonl`), bounded at 60 s, and read the findings it lists.
 Files whose analyses never land are reported as such — a timeout is data, not a silent zero.
 """
 
@@ -34,7 +34,7 @@ sys.path.insert(0, HERE)
 
 from smoke import Lsp  # noqa: E402
 
-# Mirrors `meta_core::lang::from_extension`. Data, not code: the bench decides what to open by
+# Mirrors `jev_core::lang::from_extension`. Data, not code: the bench decides what to open by
 # extension the way a user decides what to edit, and the language id it sends is the same word
 # Neovim would send.
 EXT_LANG = {
@@ -114,7 +114,7 @@ def candidate_files(repo, limit):
 
 
 def trace_path(root):
-    return os.path.join(root, ".git", "meta", "session.jsonl")
+    return os.path.join(root, ".git", "jev", "session.jsonl")
 
 
 def analysis_entries(path, uri):
@@ -139,10 +139,10 @@ def analysis_entries(path, uri):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", required=True, help="the repository to walk")
-    ap.add_argument("--bin", default=os.path.join(REPO, "target", "release", "meta-lsp"))
+    ap.add_argument("--bin", default=os.path.join(REPO, "target", "release", "jev-lsp"))
     ap.add_argument("--model-url", required=True, help="an OpenAI-compatible endpoint")
-    ap.add_argument("--model", default=os.environ.get("META_MODEL"),
-                    help="model name for every tier; defaults to META_MODEL, then the built-in")
+    ap.add_argument("--model", default=os.environ.get("JEV_MODEL"),
+                    help="model name for every tier; defaults to JEV_MODEL, then the built-in")
     ap.add_argument("--limit", type=int, default=0, help="files to analyse, 0 for all")
     ap.add_argument("--timeout", type=float, default=60.0, help="seconds to wait per file")
     args = ap.parse_args()
@@ -168,10 +168,10 @@ def main():
               f"a stub would measure the stub", file=sys.stderr)
         return 2
 
-    env = dict(os.environ, META_BASE_URL=args.model_url)
+    env = dict(os.environ, JEV_BASE_URL=args.model_url)
     if args.model:
-        env["META_MODEL"] = args.model
-        env["META_REVIEW_MODEL"] = args.model
+        env["JEV_MODEL"] = args.model
+        env["JEV_REVIEW_MODEL"] = args.model
     trace = trace_path(repo)
 
     print(f"repo: {repo}")

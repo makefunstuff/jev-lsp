@@ -65,7 +65,7 @@ def main():
                         "workDoneProgress": True,
                     },
                 },
-                "serverInfo": {"name": "meta-streaming-probe", "version": "0"},
+                "serverInfo": {"name": "jev-streaming-probe", "version": "0"},
             }})
         elif method == "initialized":
             pass

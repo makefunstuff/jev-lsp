@@ -17,7 +17,7 @@
 --
 -- Exits nonzero on any failure.
 
-local DIR = '/tmp/meta-lang-fixtures'
+local DIR = '/tmp/jev-lang-fixtures'
 
 local failures = {}
 local function check(cond, label)
@@ -54,7 +54,10 @@ end
 local ft_events = {}
 vim.api.nvim_create_autocmd('FileType', {
   callback = function(ev)
-    ft_events[vim.api.nvim_buf_get_name(ev.buf)] = vim.bo[ev.buf].filetype
+    -- Keyed by buffer, not by name: the name Neovim reports is the *resolved* path, and on
+    -- macOS `$TMPDIR` is a symlink (`/var/folders/…` → `/private/var/folders/…`), so a
+    -- name-keyed lookup never matched and the check below reported a gap that was not there.
+    ft_events[ev.buf] = vim.bo[ev.buf].filetype
   end,
 })
 
@@ -64,7 +67,7 @@ local server = vim.fn.fnamemodify(here, ':h') .. '/language/server.py'
 -- The plugin's language hook. Pure (filename+contents, never `buf`), and free in the
 -- common case (no detector call when the client already has a filetype).
 local cfg = {
-  name = 'meta-lang',
+  name = 'jev-lang',
   cmd = { 'python3', server },
   root_dir = DIR,
   get_language_id = function(bufnr, ft)
@@ -77,8 +80,8 @@ local cfg = {
     }) or ''
   end,
 }
-vim.lsp.config('meta-lang', cfg)
-vim.lsp.enable('meta-lang')   -- no `filetypes` => documented as ALL filetypes
+vim.lsp.config('jev-lang', cfg)
+vim.lsp.enable('jev-lang')   -- no `filetypes` => documented as ALL filetypes
 
 print('[language] built-in auto-attach path (FileType only)')
 local bufs = {}
@@ -92,7 +95,7 @@ vim.wait(500, function() return false end)
 local missed = {}
 for _, f in ipairs(fixtures) do
   local b = bufs[f[1]]
-  b.attached = #vim.lsp.get_clients({ bufnr = b.bufnr, name = 'meta-lang' }) > 0
+  b.attached = #vim.lsp.get_clients({ bufnr = b.bufnr, name = 'jev-lang' }) > 0
   if not b.attached then
     missed[#missed + 1] = f[1]
   end
@@ -105,7 +108,7 @@ check(vim.tbl_contains(missed, 'f.zzz') and vim.tbl_contains(missed, 'plain'),
   'the missed set is the unidentifiable set')
 -- A shebang file opened normally IS detected (so the built-in path attached it); the
 -- rename/attach case below is what exercises the hook.
-check(ft_events[DIR .. '/script-noext'] ~= nil,
+check(ft_events[bufs['script-noext'].bufnr] ~= nil,
   'a shebang-only file is detected on a normal open, so the built-in path covers it')
 
 -- The plugin's attach pass (BufReadPost/BufNewFile/BufWinEnter in the real plugin).
@@ -126,11 +129,11 @@ local renamed_ft_before = vim.bo[renamed].filetype
 vim.lsp.start(cfg, { bufnr = renamed })
 
 local all_attached = vim.wait(5000, function()
-  if #vim.lsp.get_clients({ bufnr = renamed, name = 'meta-lang' }) == 0 then
+  if #vim.lsp.get_clients({ bufnr = renamed, name = 'jev-lang' }) == 0 then
     return false
   end
   for _, f in ipairs(fixtures) do
-    if #vim.lsp.get_clients({ bufnr = bufs[f[1]].bufnr, name = 'meta-lang' }) == 0 then
+    if #vim.lsp.get_clients({ bufnr = bufs[f[1]].bufnr, name = 'jev-lang' }) == 0 then
       return false
     end
   end
@@ -140,7 +143,7 @@ check(all_attached, 'every file buffer is attached, including unidentified ones'
 
 vim.wait(800, function() return false end)   -- let the didOpen notifications flush
 
-local client = vim.lsp.get_clients({ name = 'meta-lang' })[1]
+local client = vim.lsp.get_clients({ name = 'jev-lang' })[1]
 assert(client, 'no attached client to query')
 local out = { done = false }
 client:request('workspace/executeCommand', { command = 'probe.languageIds', arguments = {} },

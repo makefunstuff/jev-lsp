@@ -6,7 +6,7 @@ step, the server resolves it against the content it holds, and then sends
 `workspace/applyEdit` back to the client. So this test also exercises a direction the other
 harnesses never touch.
 
-    python3 verify/plan_test.py [--bin target/release/meta-lsp]
+    python3 verify/plan_test.py [--bin target/release/jev-lsp]
 
 Exits 0 only when every check passes. Needs `python3` and no GPU.
 """
@@ -58,21 +58,22 @@ def start_stub(port):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--bin", default=os.path.join(REPO, "target", "release", "meta-lsp"))
+    ap.add_argument("--bin", default=os.path.join(REPO, "target", "release", "jev-lsp"))
     args = ap.parse_args()
     RESULTS.clear()
 
     port = free_port()
     stub = start_stub(port)
-    workdir = tempfile.mkdtemp(prefix="meta-plan-")
+    workdir = tempfile.mkdtemp(prefix="jev-plan-")
     fixture = os.path.join(workdir, "loader.py")
     with open(fixture, "w") as fh:
         fh.write(FIXTURE)
     uri = "file://" + fixture
 
-    env = dict(os.environ, META_BASE_URL=f"http://127.0.0.1:{port}/v1",
-               META_MODEL="stub-model", META_REVIEW_MODEL="stub-model")
+    env = dict(os.environ, JEV_BASE_URL=f"http://127.0.0.1:{port}/v1",
+               JEV_MODEL="stub-model", JEV_REVIEW_MODEL="stub-model")
     server = Lsp([args.bin, "--stdio"], env)
+    server.settings = {"rules": {"enabled": False}}
     try:
         server.request("initialize", {
             "processId": os.getpid(), "rootUri": "file://" + workdir,
@@ -82,14 +83,14 @@ def main():
         server.notify("textDocument/didOpen", {"textDocument": {
             "uri": uri, "languageId": "python", "version": 1, "text": FIXTURE}})
 
-        print("[plan] meta.plan")
+        print("[plan] jev.plan")
         plan = server.request("workspace/executeCommand", {
-            "command": "meta.plan",
+            "command": "jev.plan",
             "arguments": [{"goal": "make the load path fail loudly",
                            "scope": {"uri": uri, "line": 1}}],
         }, timeout=60).get("result", {})
 
-        check(plan.get("schema") == "meta.artifact/1", "the reply is an artifact")
+        check(plan.get("schema") == "jev.artifact/1", "the reply is an artifact")
         check(plan.get("kind") == "plan", "of kind plan (PROTOCOL §7)")
         check(isinstance(plan.get("id"), str) and plan["id"], "it carries an id")
         check(plan.get("goal") == "make the load path fail loudly", "and the goal")
@@ -115,10 +116,10 @@ def main():
         check("usage" in plan and plan["usage"].get("tokens_in", 0) > 0,
               "and the cost of producing it")
 
-        print("[plan] meta.apply — the server applies through the client")
+        print("[plan] jev.apply — the server applies through the client")
         before = open(fixture).read()
         applied = server.request("workspace/executeCommand", {
-            "command": "meta.apply",
+            "command": "jev.apply",
             "arguments": [{"plan_id": plan["id"], "steps": [1]}],
         }, timeout=60).get("result", {})
         check(applied.get("ok") is True, f"the step applied: {applied.get('failed')}")
@@ -128,23 +129,23 @@ def main():
         check(isinstance(edit_id, str), f"with an edit id to revert: {edit_id}")
         after = open(fixture).read()
         check(after != before, "the file on disk changed")
-        check("meta" in after, f"and carries the model's change: {after!r}")
+        check("jev" in after, f"and carries the model's change: {after!r}")
 
         print("[plan] the plan records the step as applied")
         replanned = server.request("workspace/executeCommand", {
-            "command": "meta.status", "arguments": []}).get("result", {})
+            "command": "jev.status", "arguments": []}).get("result", {})
         check(replanned.get("plans", 0) >= 1, "the plan is held for the session")
 
-        print("[plan] meta.revert")
+        print("[plan] jev.revert")
         reverted = server.request("workspace/executeCommand", {
-            "command": "meta.revert", "arguments": [{"edit_id": edit_id}]},
+            "command": "jev.revert", "arguments": [{"edit_id": edit_id}]},
             timeout=60).get("result", {})
         check(reverted.get("ok") is True, f"the revert succeeded: {reverted}")
         check(open(fixture).read() == before, "and the file is byte-for-byte what it was")
 
         print("[plan] reverting twice is refused, not a crash")
         again = server.request("workspace/executeCommand", {
-            "command": "meta.revert", "arguments": [{"edit_id": edit_id}]},
+            "command": "jev.revert", "arguments": [{"edit_id": edit_id}]},
             timeout=60).get("result", {})
         check(again.get("ok") is False and again.get("error", {}).get("code") == "unknown_edit",
               f"the second revert is refused: {again.get('error')}")
@@ -155,7 +156,7 @@ def main():
             "contentChanges": [{"text": "def load(path):\n    return None\n"}],
         })
         stale = server.request("workspace/executeCommand", {
-            "command": "meta.apply",
+            "command": "jev.apply",
             "arguments": [{"plan_id": plan["id"], "steps": [1]}],
         }, timeout=60).get("result", {})
         failed = (stale.get("failed") or [{}])[0]
@@ -171,11 +172,11 @@ def main():
         server.notify("textDocument/didOpen", {"textDocument": {
             "uri": uri2, "languageId": "python", "version": 1, "text": FIXTURE}})
         plan2 = server.request("workspace/executeCommand", {
-            "command": "meta.plan",
+            "command": "jev.plan",
             "arguments": [{"goal": "same goal", "scope": {"uri": uri2, "line": 1}}],
         }, timeout=60).get("result", {})
         applied2 = server.request("workspace/executeCommand", {
-            "command": "meta.apply",
+            "command": "jev.apply",
             "arguments": [{"plan_id": plan2.get("id"), "steps": [1]}]},
             timeout=60).get("result", {})
         check(applied2.get("ok") is True, "the second plan applied")
@@ -193,7 +194,7 @@ def main():
                 if n["params"].get("uri") != uri2:
                     continue
                 hits = [d for d in n["params"].get("diagnostics", [])
-                        if d.get("code") == "meta.divergence"]
+                        if d.get("code") == "jev.divergence"]
                 if hits:
                     diverged = hits
             time.sleep(0.05)
@@ -201,7 +202,7 @@ def main():
         if diverged:
             d = diverged[0]
             check(d.get("severity") == 1, "at ERROR severity (PROTOCOL §9 reserves it for this)")
-            check(d.get("source") == "meta", "from meta")
+            check(d.get("source") == "jev", "from jev")
             check("predicted" in d.get("message", ""),
                   f"naming what was expected and what arrived: {d.get('message')}")
 

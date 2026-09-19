@@ -5,14 +5,19 @@
 -- client-side behaviour (the plugin filters what it displays), which is why it lives here
 -- rather than in a Rust unit test.
 --
---   META_LSP_BIN=/path/to/meta-lsp META_BASE_URL=http://127.0.0.1:8099/v1 \
+--   JEV_LSP_BIN=/path/to/jev-lsp JEV_BASE_URL=http://127.0.0.1:8099/v1 \
+--   JEV_DECIDE_BASE_URL=http://127.0.0.1:8099/v1 JEV_DECIDE_MODEL=stub-model \
 --     nvim --headless -u NONE -l verify/dismiss_test.lua
+--
+-- The ambient pass is the rules pass, so the decide tier has to be reachable too: without a
+-- decision endpoint the rule below produces no finding and the dismissal has nothing to act on.
 
-local BIN = os.getenv('META_LSP_BIN')
+local BIN = os.getenv('JEV_LSP_BIN')
 if BIN == nil or BIN == '' then
   io.stderr:write(
-    'dismiss_test: META_LSP_BIN is not set and is required (path to the meta-lsp server).\n'
-      .. '  usage: META_LSP_BIN=/path/to/meta-lsp META_BASE_URL=http://127.0.0.1:8099/v1 '
+    'dismiss_test: JEV_LSP_BIN is not set and is required (path to the jev-lsp server).\n'
+      .. '  usage: JEV_LSP_BIN=/path/to/jev-lsp JEV_BASE_URL=http://127.0.0.1:8099/v1 '
+      .. 'JEV_DECIDE_BASE_URL=http://127.0.0.1:8099/v1 '
       .. 'nvim --headless -u NONE -l verify/dismiss_test.lua\n'
   )
   os.exit(2)
@@ -45,25 +50,33 @@ server_log.capture()
 -- A repository root: `vim.fs.root(…, {'.git'})` is what the plugin keys dismissals on.
 local root = vim.fn.tempname()
 vim.fn.mkdir(root .. '/.git', 'p')
+-- The ambient pass is the *rules* pass (PROTOCOL §9 / `jev.rules/1`), so a repository with no
+-- rule has no ambient finding to dismiss. This rule's inspection matches the `open(` the
+-- fixture below actually contains; the decision tier the stub answers clears its floor.
+vim.fn.mkdir(root .. '/.jev/rules', 'p')
+vim.fn.writefile({
+  -- A long-bracket string: the JSON needs a literal `\\(` so the decoded pattern is `\(`.
+  [[{"schema":"jev.rules/1","rules":[{"id":"no-bare-open","title":"File opened without a context manager","text":"Open the file with a context manager so the handle is closed.","severity":"warning","applies_to":["**/*.py"],"inspection":{"kind":"regex","pattern":"open\\(","max_matches":0},"judgement":{"question":"Is this handle left open on a path that matters?","criteria":{"true":"the handle outlives the function or is never closed","false":"the handle is closed by the caller or the process"},"min_probability":0.75},"verb_hint":"fix"}]}]],
+}, root .. '/.jev/rules/example.json')
 local path = root .. '/loader.py'
 vim.fn.writefile({ 'def load(path):', '    f = open(path)', '    return f' }, path)
 
-require('meta').setup({ cmd = { BIN }, keymaps = false })
+require('jev').setup({ cmd = { BIN }, keymaps = false })
 vim.cmd('edit ' .. vim.fn.fnameescape(path))
 local buf = vim.api.nvim_get_current_buf()
 
 vim.wait(3000, function()
-  return #vim.lsp.get_clients({ bufnr = buf, name = 'meta' }) > 0
+  return #vim.lsp.get_clients({ bufnr = buf, name = 'jev' }) > 0
 end, 25)
-check(#vim.lsp.get_clients({ bufnr = buf, name = 'meta' }) > 0, 'the plugin attached a client')
+check(#vim.lsp.get_clients({ bufnr = buf, name = 'jev' }) > 0, 'the plugin attached a client')
 
 server_log.capture()
 
 --- Diagnostics this plugin produced, from the server's point of view (pre-filter).
-local function meta_diagnostics()
+local function jev_diagnostics()
   local out = {}
   for _, d in ipairs(vim.diagnostic.get(buf)) do
-    if d.source == 'meta' then
+    if d.source == 'jev' then
       out[#out + 1] = d
     end
   end
@@ -74,18 +87,18 @@ server_log.capture()
 vim.cmd('write')
 
 local found = vim.wait(30000, function()
-  return #meta_diagnostics() > 0
+  return #jev_diagnostics() > 0
 end, 50)
 
 if not found then
-  skip('no finding arrived, so nothing can be dismissed (is META_BASE_URL set and the '
+  skip('no finding arrived, so nothing can be dismissed (is JEV_BASE_URL set and the '
     .. 'endpoint reachable?)')
   server_log.dump()
   say(('[dismiss] %d failure(s), %d skip(s)'):format(failures, skips))
   os.exit(failures == 0 and 0 or 1)
 end
 
-local first = meta_diagnostics()[1]
+local first = jev_diagnostics()[1]
 -- `user_data.lsp` is the original LSP diagnostic; its `data` is the payload the server put
 -- there (PROTOCOL §9), which is what dismissal is keyed on.
 local lsp_payload = ((first.user_data or {}).lsp or {}).data or {}
@@ -93,17 +106,17 @@ local finding_id = lsp_payload.finding_id
 check(type(finding_id) == 'string' and finding_id ~= '',
   ('the finding carries a stable id to dismiss: %s'):format(tostring(finding_id)))
 
-print('[dismiss] ' .. tostring(#meta_diagnostics()) .. ' finding(s) before')
+print('[dismiss] ' .. tostring(#jev_diagnostics()) .. ' finding(s) before')
 vim.api.nvim_win_set_cursor(0, { first.lnum + 1, first.col })
-require('meta').dismiss()
+require('jev').dismiss()
 
 vim.wait(500, function()
   return false
 end)
-check(#meta_diagnostics() == 0, 'it disappears once dismissed',
-  ('still %d'):format(#meta_diagnostics()))
+check(#jev_diagnostics() == 0, 'it disappears once dismissed',
+  ('still %d'):format(#jev_diagnostics()))
 
-local dismissals = root .. '/.git/meta/dismissed.json'
+local dismissals = root .. '/.git/jev/dismissed.json'
 check(vim.fn.filereadable(dismissals) == 1,
   'the dismissal is recorded in the repository, not in memory: ' .. dismissals)
 if vim.fn.filereadable(dismissals) == 1 then
@@ -119,7 +132,7 @@ if vim.fn.filereadable(dismissals) == 1 then
 end
 
 -- The point of the record: a fresh pull must not bring it back.
-local refresh = vim.lsp.get_clients({ bufnr = buf, name = 'meta' })[1]:request(
+local refresh = vim.lsp.get_clients({ bufnr = buf, name = 'jev' })[1]:request(
   'textDocument/diagnostic',
   { textDocument = { uri = vim.uri_from_bufnr(buf) } },
   function() end,
@@ -129,9 +142,9 @@ vim.wait(1500, function()
   return false
 end)
 check(refresh ~= nil, 'the diagnostic request went out')
-check(#meta_diagnostics() == 0,
+check(#jev_diagnostics() == 0,
   'and the dismissed finding does not resurface on a fresh pull',
-  ('%d came back'):format(#meta_diagnostics()))
+  ('%d came back'):format(#jev_diagnostics()))
 
 if failures > 0 then
   server_log.dump()

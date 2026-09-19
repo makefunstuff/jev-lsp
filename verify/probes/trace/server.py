@@ -65,8 +65,8 @@ def make_action(uri):
     version = DOCS.get(uri, {}).get("version", 0)
     LAST_ACTION[uri] = version
     return {
-        "title": "meta: harden parse",           # f(verb, scope) — not model output
-        "kind": "refactor.rewrite.meta",
+        "title": "jev: harden parse",           # f(verb, scope) — not model output
+        "kind": "refactor.rewrite.jev",
         "isPreferred": True,
         "data": {
             "v": 1,
@@ -89,7 +89,7 @@ def resolve(action):
             "edits": [{
                 "range": {"start": {"line": 0, "character": 0},
                           "end": {"line": 0, "character": 0}},
-                "newText": "-- meta: applied\n",
+                "newText": "-- jev: applied\n",
             }],
         }],
     }
@@ -117,17 +117,17 @@ def main():
                     "textDocumentSync": {"openClose": True, "change": 2},
                     "codeActionProvider": {
                         "resolveProvider": True,
-                        "codeActionKinds": ["quickfix", "quickfix.meta",
-                                            "refactor.rewrite", "refactor.rewrite.meta",
-                                            "source", "source.meta", "source.fixAll"],
+                        "codeActionKinds": ["quickfix", "quickfix.jev",
+                                            "refactor.rewrite", "refactor.rewrite.jev",
+                                            "source", "source.jev", "source.fixAll"],
                     },
-                    "diagnosticProvider": {"identifier": "meta",
+                    "diagnosticProvider": {"identifier": "jev",
                                            "interFileDependencies": False,
                                            "workspaceDiagnostics": True},
-                    "executeCommandProvider": {"commands": ["meta.status"],
+                    "executeCommandProvider": {"commands": ["jev.status"],
                                                "workDoneProgress": True},
                 },
-                "serverInfo": {"name": "meta-trace-stub", "version": "0"},
+                "serverInfo": {"name": "jev-trace-stub", "version": "0"},
             })
 
         elif method == "initialized":
@@ -161,7 +161,7 @@ def main():
                     "range": {"start": {"line": 0, "character": 0},
                               "end": {"line": 0, "character": 5}},
                     "severity": 2,
-                    "source": "meta",
+                    "source": "jev",
                     "message": "unchecked error path",
                     "data": {"finding_id": "finding-1", "verb": "fix",
                              "content_hash": "sha256:stub"},

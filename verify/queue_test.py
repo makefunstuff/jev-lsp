@@ -13,7 +13,7 @@ depending on timing. Two properties are asserted, both user-visible:
   * a refresh arrives after the save, even though the run it interrupted was superseded;
   * the findings a client pulls afterwards describe the *current* content.
 
-    python3 verify/queue_test.py [--bin target/release/meta-lsp]
+    python3 verify/queue_test.py [--bin target/release/jev-lsp]
 """
 import argparse
 import json
@@ -69,21 +69,22 @@ def start_stub(port):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--bin", default=os.path.join(REPO, "target", "release", "meta-lsp"))
+    ap.add_argument("--bin", default=os.path.join(REPO, "target", "release", "jev-lsp"))
     args = ap.parse_args()
     RESULTS.clear()
 
     port = free_port()
     stub = start_stub(port)
-    workdir = tempfile.mkdtemp(prefix="meta-queue-")
+    workdir = tempfile.mkdtemp(prefix="jev-queue-")
     fixture = os.path.join(workdir, "thing.py")
     with open(fixture, "w") as fh:
         fh.write(V1)
     uri = "file://" + fixture
 
-    env = dict(os.environ, META_BASE_URL=f"http://127.0.0.1:{port}/v1",
-               META_MODEL="stub-model", META_REVIEW_MODEL="stub-model")
+    env = dict(os.environ, JEV_BASE_URL=f"http://127.0.0.1:{port}/v1",
+               JEV_MODEL="stub-model", JEV_REVIEW_MODEL="stub-model")
     server = Lsp([args.bin, "--stdio"], env)
+    server.settings = {"rules": {"enabled": False}}
     try:
         server.request("initialize", {
             "processId": os.getpid(), "rootUri": "file://" + workdir,

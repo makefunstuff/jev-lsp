@@ -2,7 +2,7 @@
 --
 -- A dead model endpoint is indistinguishable from a product defect at the other end of the
 -- LSP connection: the client just gets no findings and no edit. Twice today a stale stub
--- made `nvim_ui_test.lua` report "no quickfix.meta action after 30 s", which reads as a
+-- made `nvim_ui_test.lua` report "no quickfix.jev action after 30 s", which reads as a
 -- server bug and is not one. The server already says what happened, through
 -- `window/logMessage`; this captures it and prints it on failure.
 --

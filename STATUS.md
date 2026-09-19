@@ -1,17 +1,32 @@
 # STATUS
 
-**Objective**: a working LSP that makes Neovim an AI-driven harness — the model observing in
-the background and proposing work through native surfaces — rather than a prompting TUI.
+**Objective**: a working LSP that turns an editor into an AI-driven harness — the model observing
+in the background and proposing work through standard LSP surfaces — rather than a prompting TUI.
+Neovim is the first-class client (the plugin, the attach pass, `:Jev`); it is not the only one, and
+nothing in the protocol assumes it.
 
 **State**: working and verified end to end. Design frozen in `PROTOCOL.md`; implementation
 in `crates/` and `nvim/`; verification in `verify/`.
 
-**Next action**: nothing is open. **Inline completion is gone** (2026-09-19, at the user's
-decision): the `fim` tier, the `textDocument/inlineCompletion` method, the
-`inlineCompletionProvider` injection, the gate stack, the `<Tab>` acceptance and their
-harnesses are removed from the server, the plugin, the contract and the docs. Generated code is
-asked for — an action, `:Meta ask` — rather than offered under the cursor; the staged
-`qwen2.5-coder-7b` preset was reverted with it.
+**Next action**: nothing is open. **The workspace is `jev`, and the ambient pass is the
+repository's own rules** (2026-09-19). The old name is out of every crate, binary, plugin path,
+command, schema string, environment variable and `.git/` path — no alias, no migration shim, and
+the old session and dismissal files were **not** migrated, so a dismissal recorded under the old
+name is lost once. The conventions now live in `.jev/rules/*.json` (`"schema": "jev.rules/1"`),
+each candidate costs one question to the new `decide` tier, and `jev.inspect` / `jev inspect`
+run that pass on demand. Two things a user will otherwise discover the hard way: **a rule edit
+does not repaint the findings already on screen** — the shared display slot is keyed by content
+hash, resolved language and the findings cap, so the *next* pass for that document (the next
+save, or the idle trigger) applies it, while `:Jev recompute` clears the cache and
+`jev inspect --force` re-runs it now — and there is **no fallback**, so a repository with no
+rules gets no ambient findings and the pass says `no_rules` rather than reporting a clean
+document.
+
+**Previously**: **inline completion is gone** (2026-09-19, at the user's decision): the `fim`
+tier, the `textDocument/inlineCompletion` method, the `inlineCompletionProvider` injection, the
+gate stack, the `<Tab>` acceptance and their harnesses are removed from the server, the plugin,
+the contract and the docs. Generated code is asked for — an action, `:Jev ask` — rather than
+offered under the cursor; the staged `qwen2.5-coder-7b` preset was reverted with it.
 
 **Retracted (2026-09-19).** The two `verify/nvim_ui_test.lua` failures recorded here on
 2026-09-18 (the sibling buffer's `MARKER_SIBLING_A` never reaching the prompt) do not
@@ -21,10 +36,14 @@ still true (`vim.treesitter.language.add('python')` answers `No parser for langu
 was never established as the cause of those failures, and the checks that failed do not read the
 pushed context at all. The likeliest explanation is the one `docs/VERIFICATION.md` warns about:
 a stale stub process bound to the port, since a fresh stub on a free port makes every one of
-those checks pass. What is verified now: 28/28 on the independent client (including the
-assertion that no draft capability is advertised), smoke 44/44, plan 35/35, parity 12/12,
-queue 5/5, config race 3/3, supersede 7/7, dismiss 9/9, nvim_live and nvim_ui_test 0/0,
-latency 7/7 paths, quality_eval 4/4 with zero findings on the clean files.
+those checks pass. What is verified now: 32 ok / 0 FAIL on the independent client (including the
+assertion that no draft capability is advertised), smoke 44/44, plan 35/35, parity 25/25,
+queue 5/5, config race 3/3, supersede 7/7, dismiss 0 failures, rules 45/45 and rules_live 0
+failures on both Neovim versions, nvim_live and nvim_ui_test 0/0, latency 7/7 paths.
+`quality_eval` is deliberately not in that list: it needs a real endpoint, and the 4/4 recall /
+4/4 precision / zero findings on the two clean files was **measured on 2026-09-18 against
+`deepseek/deepseek-v4-flash`** — the suite reports the row as `?` on this machine rather than
+running it.
 
 **Previously**: everything in the roadmap is built. The next useful step is a longer
 real-model soak — the six runs so far are one language on one model, and the last three
@@ -46,12 +65,20 @@ which a headless harness cannot drive.
 
 ## Decisions taken (reversible, recorded so they are not relitigated)
 
-- Repository directory is `meta-lsp`; workspace, binary, and crates are `meta*`.
+- Repository directory is `jev-lsp`; workspace, binary, and crates are `jev*`.
 - UTF-8 position encoding, frozen (PROTOCOL N1).
-- No custom `meta/…` LSP methods (N6). `workspace/executeCommand` plus `$/progress` is the
+- No custom `jev/…` LSP methods (N6). `workspace/executeCommand` plus `$/progress` is the
   whole back-channel.
 - **Advertise only what is served** (PROTOCOL §2). A capability nothing answers for is a lie
   the client acts on, and `verify/lsp_client.py` asserts the absence as well as the presence.
+- **The ambient pass is the rules pass, and there is no fallback** (PROTOCOL §12). A
+  repository's conventions are data (`.jev/rules/*.json`, `jev.rules/1`), a decision is a
+  different protocol from a chat, and the review tier does not step in when no rule claims a
+  file: `jev.inspect` says `no_rules` instead of reporting a clean document. A generative review
+  on every save would cost thousands of tokens and its silence would be unattributable.
+- **One name, swept clean.** No alias and no migration shim anywhere — an old command name
+  answers `not_implemented`, settings are read under the section `jev`, and the harness tables
+  and documents were renamed with the code. Only the dated history rows keep the old name.
 - **No ghost text.** Inline completion was removed on 2026-09-19 (see the log). The cursor is
   not a place this server writes to; generated code arrives as an action or an answer.
 - **`explain` is a command, not a code action**, because a resolved action's `command` is
@@ -65,18 +92,24 @@ which a headless harness cannot drive.
 
 | Check | Result |
 |---|---|
-| `cargo test` | 219 passing, no warnings |
+| `bash verify/run-suite.sh <out-file>` | the whole table, one run: supervised stub, every row captured, a verdict per row on stdout (`NVIM_ONLY=1`, `REFUSE_IF_BUSY=1`, `NVIM_BINS` in its header) |
+| `cargo test` | 274 passing (49 `jev` + 179 `jev-core` + 46 `jev-lsp`), 0 failed, no warnings |
 | `cargo build --release` | no warnings, no errors |
 | `verify/probes/run.sh` | 7 probes green |
 | `python3 verify/latency.py` | 7/7 paths within budget against a model made 2 s slow |
 | `python3 verify/queue_test.py` / `config_race_test.py` / `supersede_probe.py` | 5/5, 3/3, 7 ok 0 FAIL |
-| `python3 verify/smoke.py` | 44/44 against the real binary |
-| `python3 verify/lsp_client.py --server … --stub-model-url …` | 28 ok, 0 FAIL, 0 skip (independent client, including the assertion that no draft capability is advertised) |
+| `python3 verify/smoke.py` | 44/44 against the real binary, three consecutive full-table runs since the two harness defects in `docs/VERIFICATION.md` §8 were fixed |
+| `python3 verify/rules_test.py` | 45/45 — the rules pass: inspections, `applies_to`, the changed set, the cache, the skips |
+| `python3 verify/lsp_framing_test.py` | 9/9 — the client's own stdio framing; the bug it was written for is in `docs/VERIFICATION.md` §8 |
+| `python3 verify/scope_containment_test.py` | green (exit 0) — an answer may not reach outside the scope the client named |
+| `python3 verify/lsp_client.py --server … --stub-model-url …` | 32 ok, 0 FAIL, 0 skip (independent client, including the assertion that no draft capability is advertised) |
 | `nvim --headless -l verify/nvim_live.lua` | 0 failures, 0 skips with a stub endpoint (1 skip without one: the resolve step has no model) |
+| `nvim --headless -l verify/rules_live.lua` | 0 failures, 0 skips on Neovim **0.12.5 and 0.12.1** — a rule's finding on the sign column after a save, `:Jev inspect` answering with the same finding, its counts and its skips, `--force` re-running an unchanged document |
 | `python3 verify/plan_test.py` | 35/35 |
-| `python3 verify/cli_parity.py` | 12/12 |
-| `python3 verify/outcome_test.py` | 18/18 — the `meta.outcome` record and the `meta.usage` counts |
-| `python3 verify/quality_eval.py --base-url … --model deepseek/deepseek-v4-flash` | 4/4 recall, 4/4 precision, 0 findings on 2 clean files |
+| `python3 verify/cli_parity.py` | 25/25 — the CLI and the LSP agree exactly, `jev inspect` included |
+| `bash verify/omp_lsp.sh` | 0 failures, 0 skips — OMP, a client that shares no code with this repository, receives a rule's finding over `textDocument/diagnostic` and reaches `workspace/executeCommand jev.inspect`; a no-rules control finds nothing |
+| `python3 verify/outcome_test.py` | 18/18 — the `jev.outcome` record and the `jev.usage` counts |
+| `python3 verify/quality_eval.py --base-url … --model deepseek/deepseek-v4-flash` | **cannot run here** (no real endpoint; the suite reports it as `?`). Last measured 2026-09-18: 4/4 recall, 4/4 precision, 0 findings on 2 clean files |
 | `python3 verify/repo_bench.py --repo . --limit 40` | 40 files, 33 analysed, 62 findings, **3.21 per 1000 lines** (three runs: 3.21 / 3.48 / 3.71; 7 files per run outran the 60 s per-file bound and are reported as such). Measured 2026-09-18, before the inline-completion removal, which touches no findings path |
 | `nvim --headless -l verify/nvim_ui_test.lua` | 0 failures, 0 skips — three consecutive runs with a fresh stub (`--stub-model-url`-style endpoints matter: a stale stub on the port is what VERIFICATION.md §"red run" warns about) |
 
@@ -88,6 +121,7 @@ as a deliberate boundary in `docs/VERIFICATION.md` §10.
 
 | Date | Event |
 |---|---|
+| 2026-09-19 | **The workspace is `jev` and the ambient pass is the repository's own rules.** Two changes landed together. First the name: crates, binaries, the plugin path, every command, every schema string, every environment variable, the diagnostic `source` and the `.git/` state directory are `jev*`, swept in one pass with **no alias and no migration shim** — and the session log and dismissal file were deliberately *not* migrated, so a dismissal recorded under the old name is lost once (said here rather than papered over). Second, the demotion: the ambient pass is a *rules* pass. `.jev/rules/*.json` — `"schema": "jev.rules/1"`, each rule pairing an `inspection` (a regex, or the absence of one, matched against the path's `applies_to`) that names candidates and decides nothing with a `judgement` (one question, gated by `min_probability`, default 0.5) — runs over the documents git reports as changed, and asks the new `decide` tier **one call per document**, which answers over the decision wire (`system_one` at `api.typesafe.ai` by default, `open_router` as the alternative, a local System One server one setting away) rather than `chat/completions`. Only a `true` above the rule's floor becomes a finding, and it goes through `findings::build` like every review finding, so ids, ordering, dismissal and the noise cap behave identically; `data.source` says `rules` or `review` while the diagnostic's own `source` stays `jev`. `jev.inspect` (LSP) and `jev inspect` (CLI) run the same code on demand and report `considered`/`candidates`/`skipped` — `unchanged`, `no_rules`, `unlocatable_anchor`, a rule file that failed to load — so "no finding" can never be confused with "nothing was inspected". There is **no fallback**: a repository with no rules gets no ambient findings. Two consequences recorded because they are the things a reader would otherwise discover the hard way: a rule edit is hashed into the rules cache key but the *display* slot is keyed by content, language and the findings cap, so findings already on screen stay until the next pass for that document (`:Jev recompute` or `jev inspect --force` apply it now, and nothing watches `.jev/rules/`); and the decide tier is remote by default, so changed-file text leaves the machine on every rules pass unless `rules.enabled = false` or `base_url` points at a local System One server. Verified: `cargo test` 274 passing (49 + 179 + 46), 0 failed, `cargo build --release` and `cargo test --no-run` warning-free; `verify/rules_test.py` 45/45; `verify/rules_live.lua` 0 failures, 0 skips on Neovim 0.12.5 and 0.12.1 (including `:Jev inspect` returning the same finding and its counts, and `--force` re-running an unchanged document); `verify/cli_parity.py` 25/25; `verify/lsp_client.py` 32 ok / 0 FAIL / 0 skip; `verify/lsp_framing_test.py` 9/9 (two defects the suite found in *itself*, both now pinned: the client's reader discarded a half-read header, desynchronised the stream and died silently — which presented as `latency.py` red two runs in three — and a refresh assertion had no wait of its own, so a race read as a defect; `docs/VERIFICATION.md` §8); `verify/omp_lsp.sh` 0 failures — OMP, a client that shares no code with this repository, received the rule's finding through `textDocument/diagnostic` and reached `workspace/executeCommand jev.inspect`, with a no-rules control producing nothing; smoke, plan, queue, latency, config-race, supersede, outcome, dismiss, nvim_live and nvim_ui_test all green; and a sweep of every document finds the old name only in the dated rows that record it. The whole table is now one command in the repository — `bash verify/run-suite.sh <out-file>` — with one supervised stub and `NVIM_ONLY=1` / `REFUSE_IF_BUSY=1` / `NVIM_BINS` documented in its header; `quality_eval` is the one row it reports as `?` rather than running, because it needs a real model. |
 | 2026-09-19 | **Inline completion removed, at the user's decision.** Not just the local coder model: `fim` at all — the tier, `textDocument/inlineCompletion`, the `inlineCompletionProvider` injection, the `<Tab>` acceptance, the prompt and schema, the per-minute window and the prefix floor, and the three harnesses that covered them. `crates/meta-lsp/src/inline.rs` and `advertised.rs` are deleted, so the transport boundary is untouched again and `Server::new(...).serve(service)` is a plain tower-lsp service; the `meta.status` line no longer reports a FIM window and `meta.usage` no longer counts accepted completions (the `meta.outcome` event is still recorded if a stale client sends one). The staged `qwen2.5-coder-7b` preset was reverted from the homelab IaC source, and the live `models.ini` was never touched. Reason given: generated code is asked for, not suggested under the cursor. 219 unit tests, warning-free build; smoke, lsp_client, plan, parity, dismiss, outcome and repo_bench all green. |
 | 2026-09-18 | **Three surfaces, quiet, measured — and an outcome the server finally hears.** The plugin's own user could not say what it was for, so six products behind eighteen keymaps are cut to four (`a` act, `u` take it back, `q` ask, `s` status); everything else still works through `:Meta …`. Findings are quieted in exactly one place — `findings::build`, the set every surface reads — and the prompt now asks for less (`PROMPT_VERSION` 3→4): `verify/quality_eval.py` holds 4/4 planted defects with **0 findings on the two clean files**. Every outcome the user makes is recorded (`meta.outcome` from the picker, `:Meta dismiss`, undo, and `<Tab>` accepting a completion; accepts only, since a dismissed overlay is indistinguishable from a cursor move) and counted by `:Meta usage` — the client was the only witness and never said anything, which is why "is this working" had no answer; `verify/outcome_test.py` proves the counting and fails on the binary without it. Completions get one shape: an answer that continues a line which already has code is the rest of *that* line. And the volume is measured on real code at last — `verify/repo_bench.py`, 40 files of this repository, 34 analysed, **62 findings, 3.21 per 1000 lines**. The `qwen2.5-coder-7b` preset for the `fim` tier is staged in the homelab IaC source but deliberately not deployed: CUDA1 has 1.7 GiB free against its 7.5 GiB of weights, and the router reads presets only at startup. |
 | 2026-09-18 | Probe pass over the Neovim 0.12.5 LSP runtime; two surprises recorded (absent-version crash, arbitrary-token progress) |

@@ -1,7 +1,10 @@
 # UX
 
-The interface is Neovim's. Nothing is a chat log; everything is a buffer, a sign, an
-inline annotation, or a key you already press.
+The interface is the client's, and every row of it is a standard LSP surface: a diagnostic, a
+code action, a lens, a hint, a progress report. Nothing is a chat log; nothing needs a custom
+method. What this document describes in keystrokes and buffers is the **Neovim plugin's**
+rendering of those surfaces — the first-class client, and the only place a keymap exists at all
+(`docs/LANGUAGE.md` §1: the plugin is optional convenience, never required).
 
 ## 1. Surfaces
 
@@ -10,15 +13,26 @@ inline annotation, or a key you already press.
 | Sign column + virtual text | `publishDiagnostics` / pull diagnostics | findings while you work | never — no notifications |
 | Lightbulb / code action menu | `textDocument/codeAction` | all explicit intents | only when invoked |
 | Inline annotation | `textDocument/codeLens` | per-symbol affordances: "explain", "test", "+2 findings" | never |
-| Inline hint | `textDocument/inlayHint` | a `meta: N finding(s)` badge on a declaration that has findings, and nothing elsewhere | never |
+| Inline hint | `textDocument/inlayHint` | a `jev: N finding(s)` badge on a declaration that has findings, and nothing elsewhere | never |
 | Plan buffer | plugin + `window/showDocument` | multi-step work: a line per step, `<CR>` applies one, `a` the rest, `u` takes one back | once, on completion |
 | Statusline segment | `$/progress` via `LspProgress` | what is running, budget remaining | never |
 | Streamed answer | `$/progress` partial results (§3.5.1) | the answer written into its buffer as it arrives, and `waiting for the model (3s)` before the first token | never |
 | Hover | `textDocument/hover` | what has already been explained about this scope, instantly and never from a model | never |
 | Text prompt | plugin `vim.ui.input` | the goal for `plan` | only when invoked |
 
-Free text appears exactly once, in `:Meta plan`, because the protocol cannot ask for text
+Free text appears exactly once, in `:Jev plan`, because the protocol cannot ask for text
 and because a goal is the only thing a picker cannot express.
+
+**Every row above is a standard surface, and the plugin is convenience, never a requirement.**
+Findings arrive by pull diagnostics plus `workspace/diagnostic/refresh`; actions by
+`codeAction` and `codeAction/resolve`; the material the model is shown by
+`workspace/executeCommand` and `workspace/configuration`; progress by `$/progress` under a
+token the client itself issued; free text by the client, because the protocol cannot ask for it
+(N7). Everything that is *not* a standard surface — the universal attach pass, the
+`vim.lsp.codelens.run` interception, the picker, scratch buffers, undo snapshots — lives in
+`nvim/` and is optional: a client that speaks LSP gets the findings and the edits without it.
+`docs/LANGUAGE.md` §1 says what the plugin exists for; `docs/VERIFICATION.md` §2 says what is
+proven with it and what is proven without.
 
 **Context the model is shown is the editor's, not the server's** (PROTOCOL §3.4.4). When a
 request generates — an explanation, a question about a finding, a resolved action — the plugin
@@ -27,27 +41,84 @@ the symbol, the test that covers it, and the other buffers that are open. The se
 that (four documents, forty lines each), orders it, and folds it into the cache key, so the
 same question about the same state is still answered once.
 
-Every row above is built. The plan buffer came last: `:Meta plan <goal>` renders the plan the
+Every row above is built. The plan buffer came last: `:Jev plan <goal>` renders the plan the
 server verified as one line per step, `<CR>` applies the step on the cursor's line, `a` applies
 the rest, `u` takes the last one on that line back, and each line says what happened to it.
 Nothing is applied until asked (N8), which is why it is a buffer with keystrokes rather than a
 progress bar.
 
-The inline hint is built too (`textDocument/inlayHint`, §1 row 4): a `meta: N finding(s)`
+The inline hint is built too (`textDocument/inlayHint`, §1 row 4): a `jev: N finding(s)`
 badge on a declaration that has findings, and silence everywhere else. It stays **off** by
 default — Neovim switches inlay hints on per *buffer*, not per client, so enabling it for this
-badge also enables every other server's hints in that buffer. `:Meta hints on|off` toggles it.
+badge also enables every other server's hints in that buffer. `:Jev hints on|off` toggles it.
 
 The inline annotation is built (`textDocument/codeLens`, §1 row 3): a clean declaration shows
-`meta: explain`, one with cached findings shows `meta: N finding(s) · fix`, and running it is
+`jev: explain`, one with cached findings shows `jev: N finding(s) · fix`, and running it is
 `:lua vim.lsp.codelens.run()` at the cursor or the lens click. The command never reaches the
-server — the plugin handles its own `meta.plugin.` namespace, because opening a buffer is the
+server — the plugin handles its own `jev.plugin.` namespace, because opening a buffer is the
 client's decision (PROTOCOL §3.4.1).
 
 A streamed answer is the one place the interface shows work *while* the model runs: the
 scope's explanation appears in its buffer a few words at a time, and the seconds before the
 first token are reported rather than left blank. Measured against the local model: 4.6 s to a
 complete answer, the first 3 of which are prefill and reasoning.
+
+### 1.1 The rules pass — where an ambient finding comes from
+
+The ambient pass is the repository's *rules* (PROTOCOL §9). A rule is a convention in prose
+plus the inspection that names the places it might be about; the decision tier answers one
+question about each of those places, and only a `true` above the rule's own floor becomes a
+finding:
+
+```jsonc
+{ "schema": "jev.rules/1",
+  "rules": [
+    { "id": "no-unwrap-in-handlers",
+      "title": "Unwrap in a request handler",   // the finding's label
+      "text": "A handler must not unwrap; return the error instead.",  // its detail
+      "severity": "warning",
+      "applies_to": ["**/*.rs"],
+      "inspection": { "kind": "regex", "pattern": "\\.unwrap\\(\\)" },
+      "judgement": { "question": "Is this unwrap reachable from a request handler?",
+                     "min_probability": 0.75 },
+      "verb_hint": "fix" } ] }
+```
+
+The file lives in `.jev/rules/`, and `docs/TUTORIAL.md` §3.7 walks through writing one. What you
+see when a rule fires is an ordinary finding — a sign in the margin, an entry in the menu, a
+count in the lens, something to dismiss — whose **label is the rule's title** and whose detail
+is the rule's prose followed by the reason the decision gave and the probability it cleared.
+Nothing about it is model prose you have to interpret, and the finding says which pass produced
+it: `data.source` is `rules` for these and `review` for the chat review's, so a client that
+wants to show them differently can (PROTOCOL §9).
+
+**`:Jev inspect` is the answer to "why did — or didn't — this file get a finding".** It runs the
+rules pass for the current buffer through the `jev.inspect` command and opens the answer in a
+buffer, like any other artifact: the counts (rules considered, candidates found, findings
+published), one line per finding with the rule's prose under it, and every skip — `unchanged`
+(git reports the file untouched), `no_rules` (nothing in `.jev/rules/` claims this file, or no
+rules loaded at all), or a rule file that could not be loaded, with its reason.
+`:Jev inspect --force` re-runs the pass even when git reports the file unchanged. The LSP command
+`jev.inspect` is the contract — any client can call it, and the CLI's `jev inspect` is the same
+call from a shell — while `:Jev inspect` is this plugin's convenience over it, like every other
+row of §1.
+
+**A rule edit does not repaint what is already on screen.** Diagnose the surprise in the order
+it happens: the findings every surface reads are one shared display slot, keyed by content
+hash, resolved language and the findings cap, and both the rules pass and the chat review write
+it. So after editing a rule, findings already displayed stay exactly as they were until the next
+pass for that document — the next save, or the idle trigger. There is no watcher on
+`.jev/rules/`, so writing a rule file re-runs nothing by itself. To see the effect *now*:
+`:Jev recompute` drops the conclusion cache and re-runs every open document, and
+`:Jev inspect --force` re-runs this one, this moment. This is the price of one display slot for
+both passes rather than a defect.
+
+**No rules, no ambient findings.** A repository that has written none gets nothing on save —
+deliberately, and not silently: `:Jev inspect` says `no_rules`, the pass's log line names the
+directory it looked in, and `:Jev status` reports `rules.loaded` (0 means nothing loaded, which
+`rules.hash` and `rules.last_pass_ms` distinguish from "no pass has run yet"). The chat review
+has not gone away for when you want that instead: `:Jev review`, or the "Review this" action —
+and the findings it returns are labelled `review`.
 
 ## 2. Keymaps and commands
 
@@ -57,35 +128,37 @@ cursor: inline completion was removed on 2026-09-19 (STATUS.md).
 
 ```lua
 -- default; all overridable
-<leader>ma   code action (picker, summary in the preview pane)
-<leader>mu   undo the last applied edit
-<leader>mq   ask a question
-<leader>ms   status: queue, budgets, cache hit rate
+<leader>ja   code action (picker, summary in the preview pane)
+<leader>ju   undo the last applied edit
+<leader>jq   ask a question
+<leader>js   status: queue, budgets, cache hit rate
 ```
 
 Reachable by typing — the full subcommand set, since a keymap is an accelerator and not the
-surface: `ask|followup|where|explain|review|plan|dismiss|undo|hints|usage|session|recompute|`
-`status|stop|start|cancel|log`. `:Meta ask --web <question>` is the
+surface: `ask|followup|where|explain|review|inspect|plan|dismiss|undo|hints|usage|session|`
+`recompute|status|stop|start|cancel|log`. `:Jev ask --web <question>` is the
 fetch-enabled form of ask: one https page may be read to answer, and the artifact names it.
+`:Jev inspect [--force]` runs the rules pass for this buffer and shows what it found and what it
+skipped — §1.1 is the paragraph worth reading before you conclude a rule is broken.
 
-`:Meta usage` is the answer to "is this working": published findings, files analysed, and
+`:Jev usage` is the answer to "is this working": published findings, files analysed, and
 counts of what was done with them — applied, dismissed, accepted, undone — over what the
-session log still holds. `:Meta session` opens the log itself at this root (`<root>/.git/meta/session.jsonl`),
+session log still holds. `:Jev session` opens the log itself at this root (`<root>/.git/jev/session.jsonl`),
 newest first, with a pointer to the file. An entry that names a place says so
 (`review_me.py:5`), and `<CR>` on it opens that file at that line: the record is a history you
 can walk, not only read.
 
 `stop` is the kill switch from PROTOCOL §5 and must be reachable without opening anything —
-it is one `:Meta stop` away, and the status line it silences says so.
+it is one `:Jev stop` away, and the status line it silences says so.
 
 ## 3. Scenarios
 
 ### 3.1 Ambient finding, fixed in three keystrokes
 
-1. You save. The worker analyses the file against the budget gates, finds an unchecked
-   error path, stores it and sends `workspace/diagnostic/refresh`.
+1. You save. The rules pass runs against the budget gates: a rule's inspection names a line, the
+   decision tier confirms it, the finding is stored and `workspace/diagnostic/refresh` goes out.
 2. Neovim re-pulls; a warning sign appears on the line. No popup, no sound, no tab.
-3. `<leader>ma` — the menu opens instantly from cache, first entry
+3. `<leader>ja` — the menu opens instantly from cache, first entry
    `Handle the error from read_file` marked `isPreferred`.
 4. You pick it. `resolve` returns the edit; Neovim applies it; the sign clears.
 
@@ -93,11 +166,11 @@ Elapsed user-visible latency for step 3: under 50 ms. Total keystrokes: 4.
 
 ### 3.2 Multi-step work
 
-`:Meta plan` with a goal ("make retry logic cancellable"). The stream arrives in the
+`:Jev plan` with a goal ("make retry logic cancellable"). The stream arrives in the
 statusline, then a plan buffer opens:
 
 ```
- meta://plan/7f1c                                          goal: make retry logic cancellable
+ jev://plan/7f1c                                          goal: make retry logic cancellable
  ──────────────────────────────────────────────────────────────────────────────────────────
  1  ✗  Extract the backoff loop from `retry` into a cancellable helper
        crates/net/src/retry.rs · function retry · v42
@@ -124,7 +197,7 @@ buffer until `<CR>`. Approve or reject per step; `q` leaves everything untouched
 
 ### 3.4 Undo
 
-`:Meta undo` (`<leader>mu`) restores the buffer snapshot taken before the last applied
+`:Jev undo` (`<leader>ju`) restores the buffer snapshot taken before the last applied
 edit. This does not rely on Neovim's undo-block behaviour, which is unverified for
 `WorkspaceEdit` application `[R10]`; the plugin owns the snapshots and they are per-buffer
 and in-memory only.
@@ -140,9 +213,9 @@ The failure mode of every ambient agent is crying wolf. Enforced:
   lens and the hint always describe the same set. Warnings take the budget before information,
   and the order within a severity does not move between refreshes. Nothing is hidden behind a
   summary line: the cap decides what exists.
-- **Dismissal is permanent and per-repository.** `:Meta dismiss` writes the finding's
-  content-addressed key to `.git/meta/dismissed.json` (never into the repo tree).
-- **Suppression.** A *finding* stays dismissed per repository — `.git/meta/dismissed.json`,
+- **Dismissal is permanent and per-repository.** `:Jev dismiss` writes the finding's
+  content-addressed key to `.git/jev/dismissed.json` (never into the repo tree).
+- **Suppression.** A *finding* stays dismissed per repository — `.git/jev/dismissed.json`,
   filtered from every pull (`filter_findings`). A verb is never suppressed: `noise.suppress_after_dismissals`
   is in the settings schema and is not read (PROTOCOL §10).
 - **Quiet by default.** `inlay_hints` ships disabled; diagnostics do not run per
@@ -152,7 +225,7 @@ The failure mode of every ambient agent is crying wolf. Enforced:
 
 ## 5. Why this beats prompting in a TUI
 
-| | Prompting in a TUI | meta-lsp in Neovim |
+| | Prompting in a TUI | jev-lsp in Neovim |
 |---|---|---|
 | Context | You select it, usually incompletely | Scope, neighbours, diagnostics, imports, repo state are gathered by the server |
 | Latency to first useful token | Full round trip after you finish typing the prompt | Picker already open; the answer is cached work |

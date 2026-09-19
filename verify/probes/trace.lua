@@ -15,7 +15,7 @@
 --
 -- Exits nonzero on any failure.
 
-local TOKEN_URI = 'file:///tmp/meta-trace-fixture.lua'
+local TOKEN_URI = 'file:///tmp/jev-trace-fixture.lua'
 
 local here = debug.getinfo(1, 'S').source:sub(2)
 local server = vim.fn.fnamemodify(here, ':h') .. '/trace/server.py'
@@ -32,12 +32,21 @@ end
 
 local buf = vim.api.nvim_create_buf(true, false)
 vim.api.nvim_set_current_buf(buf)
-vim.api.nvim_buf_set_name(buf, '/tmp/meta-trace-fixture.lua')
+vim.api.nvim_buf_set_name(buf, '/tmp/jev-trace-fixture.lua')
 vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'local function parse() end' })
 vim.bo[buf].modified = false
 
+--- The document URI, taken from the buffer with the same function the client uses.
+---
+--- Not a literal `file:///tmp/…`: Neovim resolves the name it is given (`/tmp` is a symlink to
+--- `/private/tmp` on macOS), so a hard-coded URI asks the server about one spelling while the
+--- client reports the other. The stub then keys its document table under the client's spelling,
+--- answers every question about the literal with "version 0", and the staleness assertion below
+--- passes for the wrong reason — nothing can be refused against version 0.
+local TOKEN_URI = vim.uri_from_bufnr(buf)
+
 local client_id = vim.lsp.start({
-  name = 'meta-trace',
+  name = 'jev-trace',
   cmd = { 'python3', server },
   root_dir = '/tmp',
 }, { bufnr = buf })
@@ -86,7 +95,7 @@ local action = actions[1]
 check(action and action.edit == nil, 'fast-path action carries no edit (N2)')
 check(action and type(action.data) == 'table' and action.data.verb == 'harden',
   'action carries structured data for resolve (§4)')
-check(action and action.kind == 'refactor.rewrite.meta', 'kind is the declared .meta kind')
+check(action and action.kind == 'refactor.rewrite.jev', 'kind is the declared .jev kind')
 
 -- Phase 2: resolve adds the edit, and it applies while the document has not moved.
 print('[trace] codeAction/resolve + apply')
@@ -101,7 +110,7 @@ check(td_edit and type(td_edit.textDocument.version) == 'number',
 
 vim.lsp.util.apply_workspace_edit(edit, 'utf-8')
 local applied = vim.api.nvim_buf_get_lines(buf, 0, -1, false)[1]
-check(applied == '-- meta: applied', 'edit applied to the buffer: ' .. vim.inspect(applied))
+check(applied == '-- jev: applied', 'edit applied to the buffer: ' .. vim.inspect(applied))
 
 -- Phase 3: staleness, through the client. Fresh action, then move the document, then
 -- resolve. The edit is stamped with the version the action was created against, so the

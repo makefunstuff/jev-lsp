@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""End-to-end smoke test: the real `meta-lsp` binary against the scripted model.
+"""End-to-end smoke test: the real `jev-lsp` binary against the scripted model.
 
 This is the fast pre-flight. `verify/lsp_client.py` is the independent, spec-derived
 conformance client; this one exists to answer "does the thing work at all" in one command.
 
-    python3 verify/smoke.py [--bin target/release/meta-lsp]
+    python3 verify/smoke.py [--bin target/release/jev-lsp]
 
 Exits 0 only when every check passes. Never needs a GPU or the network.
 """
@@ -22,6 +22,15 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
+
+
+class FramingError(Exception):
+    """The server sent a frame this client could not read.
+
+    Raised to the caller of the request that was in flight, rather than swallowed: a client
+    whose framing has broken reports every later request as a timeout, which is the most
+    misleading failure this harness can produce.
+    """
 
 
 def free_port():
@@ -90,6 +99,12 @@ class Lsp:
         self.pending = {}
         self.notifications = []
         self.requests_from_server = []
+        # Frames that arrived and could not be read, oldest first. Read by `request` so a
+        # broken stream fails a request instead of timing one out.
+        self.framing_errors = []
+        # Bytes read from the server but not yet framed. A field, not a local: a header that
+        # arrives across two reads must survive the wait between them.
+        self._buffer = b""
         self.lock = threading.Lock()
         self.alive = True
         self.reader = threading.Thread(target=self._read_loop, daemon=True)
@@ -97,36 +112,80 @@ class Lsp:
 
     # -- framing ---------------------------------------------------------
     def _read_message(self, timeout=0.5):
+        """One framed message, or `None` if none is complete within `timeout`.
+
+        Framing lives in `self._buffer` so that it cannot desynchronise: a header or a body that
+        arrives across two reads is continued, never discarded. This is not hypothetical — the
+        previous version kept the header in a local and threw it away when a one-second deadline
+        expired mid-header, so the next call read from the middle of a message, mis-framed
+        everything after it, and (through the reader thread's blanket `except`) left every later
+        request to time out at 30 s. Seen as a red `latency.py` under load, two runs in three.
+
+        A frame that is complete but unreadable is recorded and skipped, and the caller is told
+        through `framing_errors`; the stream is left where the next frame begins.
+        """
         fd = self.proc.stdout.fileno()
-        header = b""
         deadline = time.time() + timeout
-        while b"\r\n\r\n" not in header:
-            if time.time() > deadline:
+        while True:
+            separator = self._buffer.find(b"\r\n\r\n")
+            if separator >= 0:
+                length = self._content_length(self._buffer[:separator])
+                if length is None:
+                    # A header with no usable length says nothing about where the next frame
+                    # begins, so nothing can be resynchronised to: skipping bytes would only
+                    # mis-read whatever follows. Say so and stop.
+                    self.framing_errors.append("a frame whose header carries no content-length")
+                    print("[lsp] unreadable frame header from the server", file=sys.stderr,
+                          flush=True)
+                    raise FramingError(self.framing_errors[-1])
+                start = separator + 4
+                if len(self._buffer) >= start + length:
+                    body = self._buffer[start:start + length]
+                    self._buffer = self._buffer[start + length:]
+                    try:
+                        return json.loads(body)
+                    except ValueError as exc:
+                        self.framing_errors.append("a frame whose body is not JSON: %s" % exc)
+                        print("[lsp] unreadable frame body from the server: %s" % exc,
+                              file=sys.stderr, flush=True)
+                        continue
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                # Whatever arrived stays in the buffer; the next call continues the frame.
                 return None
-            r, _, _ = select.select([fd], [], [], 0.1)
+            r, _, _ = select.select([fd], [], [], min(0.1, remaining))
             if not r:
                 continue
-            chunk = os.read(fd, 1)
+            chunk = os.read(fd, 4096)
             if not chunk:
                 return None
-            header += chunk
-        length = 0
+            self._buffer += chunk
+
+    @staticmethod
+    def _content_length(header):
+        """The byte length a header claims, or `None` if it does not claim one."""
         for line in header.split(b"\r\n"):
             if line.lower().startswith(b"content-length:"):
-                length = int(line.split(b":")[1])
-        body = b""
-        while len(body) < length:
-            chunk = os.read(fd, length - len(body))
-            if not chunk:
-                return None
-            body += chunk
-        return json.loads(body)
+                try:
+                    return int(line.split(b":", 1)[1])
+                except ValueError:
+                    return None
+        return None
 
     def _read_loop(self):
         while self.alive:
             try:
                 msg = self._read_message(timeout=1.0)
-            except Exception:
+            except FramingError as exc:
+                # Already recorded by the reader, and the stream cannot be resynchronised:
+                # stop, loudly, with the reason rather than a bare death.
+                print("[lsp] reader stopped: %s" % exc, file=sys.stderr, flush=True)
+                break
+            except Exception as exc:
+                # A transport failure: the same, and worth recording because a reader that
+                # stops without a word turns every later request into a timeout.
+                self.framing_errors.append("the reader stopped: %s" % exc)
+                print("[lsp] reader stopped: %s" % exc, file=sys.stderr, flush=True)
                 break
             if msg is None:
                 continue
@@ -247,12 +306,17 @@ class Lsp:
         every reading is quantised to the poll interval and the bench measures itself."""
         self.next_id += 1
         rid = self.next_id
+        seen_errors = len(self.framing_errors)
         self._write({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
         deadline = time.time() + timeout
         while time.time() < deadline:
             with self.lock:
                 if rid in self.pending:
                     return self.pending.pop(rid)
+            if len(self.framing_errors) > seen_errors:
+                # The stream broke while this request was in flight. Saying that is the whole
+                # point: without it this request, and every one after it, reports a timeout.
+                raise FramingError(self.framing_errors[seen_errors])
             time.sleep(poll)
         raise TimeoutError(f"{method} did not answer within {timeout}s")
 
@@ -293,7 +357,7 @@ def check(ok, label):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--bin", default=os.path.join(REPO, "target", "release", "meta-lsp"))
+    ap.add_argument("--bin", default=os.path.join(REPO, "target", "release", "jev-lsp"))
     ap.add_argument("--keep", action="store_true", help="do not delete the fixture directory")
     args = ap.parse_args()
 
@@ -302,7 +366,7 @@ def main():
         return 2
 
     stub = Stub()
-    workdir = tempfile.mkdtemp(prefix="meta-smoke-")
+    workdir = tempfile.mkdtemp(prefix="jev-smoke-")
     fixture = os.path.join(workdir, "fixture.rs")
     with open(fixture, "w") as fh:
         fh.write(FIXTURE)
@@ -310,11 +374,12 @@ def main():
 
     env = dict(
         os.environ,
-        META_BASE_URL=f"http://127.0.0.1:{stub.port}/v1",
-        META_MODEL="stub-model",
-        META_REVIEW_MODEL="stub-model",
+        JEV_BASE_URL=f"http://127.0.0.1:{stub.port}/v1",
+        JEV_MODEL="stub-model",
+        JEV_REVIEW_MODEL="stub-model",
     )
     server = Lsp([args.bin, "--stdio"], env)
+    server.settings = {"rules": {"enabled": False}}
     try:
         print("[smoke] handshake")
         res = server.request("initialize", {
@@ -326,8 +391,8 @@ def main():
         check(caps.get("positionEncoding") == "utf-8", "server chose utf-8 (N1)")
         check(caps.get("codeActionProvider", {}).get("resolveProvider") is True,
               "codeActionProvider.resolveProvider advertised")
-        check(caps.get("diagnosticProvider", {}).get("identifier") == "meta",
-              "diagnosticProvider.identifier == meta")
+        check(caps.get("diagnosticProvider", {}).get("identifier") == "jev",
+              "diagnosticProvider.identifier == jev")
         check(caps.get("executeCommandProvider", {}).get("workDoneProgress") is True,
               "executeCommandProvider.workDoneProgress advertised")
         check(caps.get("inlayHintProvider", {}).get("resolveProvider") is False,
@@ -350,8 +415,21 @@ def main():
             time.sleep(0.1)
         reqs = stub.requests()
         check(len(reqs["requests"]) == 1, f"exactly one model call for the analysis (got {len(reqs['requests'])})")
-        check(len(server.saw_request("workspace/diagnostic/refresh")) >= 1,
-              "server asked the client to re-pull diagnostics")
+
+        # The refresh is sent *after* the pass finishes, so waiting for the model call to appear
+        # is not waiting for this. Under load the assertion used to run first and report a race
+        # as a defect; waiting for it makes the check deterministic without weakening it — it
+        # still fails, with what it saw and how long it waited, if the refresh never arrives.
+        waited = time.time()
+        refresh_deadline = waited + 20
+        while time.time() < refresh_deadline and not server.saw_request("workspace/diagnostic/refresh"):
+            time.sleep(0.05)
+        refreshes = server.saw_request("workspace/diagnostic/refresh")
+        log_tail = [m["params"].get("message", "")[:70]
+                    for m in server.saw_notification("window/logMessage")][-3:]
+        check(len(refreshes) >= 1,
+              f"server asked the client to re-pull diagnostics "
+              f"(seen {len(refreshes)} after {time.time() - waited:.1f}s; server log: {log_tail})")
 
         diag = server.request("textDocument/diagnostic", {"textDocument": {"uri": uri}})
         report = diag.get("result", {})
@@ -361,7 +439,7 @@ def main():
         check(len(items) == 1, f"one finding pulled (got {len(items)})")
         if items:
             d = items[0]
-            check(d.get("source") == "meta", "diagnostic source is meta")
+            check(d.get("source") == "jev", "diagnostic source is jev")
             check(d.get("severity") == 2, "finding is a warning, never an error")
             check(isinstance(d.get("data", {}).get("finding_id"), str), "finding carries a stable id")
 
@@ -409,7 +487,7 @@ def main():
         with open(os.path.join(workdir, "elsewhere.py"), "w") as fh:
             fh.write("# SENTINEL_ALPHA\ndef other():\n    return 1\n")
         explain = {
-            "command": "meta.explain",
+            "command": "jev.explain",
             "arguments": [{"uri": uri, "line": 4}],
         }
 
@@ -420,7 +498,7 @@ def main():
                  "text": sentinel},
             ]
             return server.request("workspace/executeCommand",
-                                  {"command": "meta.explain", "arguments": [args]}, timeout=30)
+                                  {"command": "jev.explain", "arguments": [args]}, timeout=30)
 
         before = len(stub.requests()["requests"])
         explain_with("# SENTINEL_ALPHA")
@@ -459,12 +537,12 @@ def main():
         }).get("result") or []
         check(len(actions) >= 3, f"a menu is offered (got {len(actions)})")
         check(all(a.get("edit") is None for a in actions), "no action carries an edit on the fast path (N2)")
-        check(any(a.get("kind") == "quickfix.meta" for a in actions), "a finding-driven quickfix is offered")
+        check(any(a.get("kind") == "quickfix.jev" for a in actions), "a finding-driven quickfix is offered")
         check(all("data" in a for a in actions), "every action round-trips structured data")
         titles = [a.get("title") for a in actions]
         check(len(set(titles)) == len(titles), "titles are distinct")
 
-        fix = next((a for a in actions if a.get("kind") == "quickfix.meta"), None)
+        fix = next((a for a in actions if a.get("kind") == "quickfix.jev"), None)
         if not check(fix is not None, "a fix action is available to resolve"):
             return 1
 
@@ -512,10 +590,10 @@ def main():
         check(stale.get("disabled", {}).get("reason"), "and says why")
 
         print("[smoke] commands and progress")
-        token = "meta:smoke"
+        token = "jev:smoke"
         status = server.request("workspace/executeCommand", {
-            "command": "meta.status", "arguments": [], "workDoneToken": token}).get("result", {})
-        check(status.get("schema") == "meta.result/1" and status.get("ok") is True, "meta.status returned a result")
+            "command": "jev.status", "arguments": [], "workDoneToken": token}).get("result", {})
+        check(status.get("schema") == "jev.result/1" and status.get("ok") is True, "jev.status returned a result")
         check(status.get("budget", {}).get("calls_last_hour", 0) >= 1, "status reports the calls spent")
         kinds = [n["params"]["value"]["kind"] for n in server.saw_notification("$/progress")
                  if n["params"]["token"] == token]
@@ -523,19 +601,19 @@ def main():
               f"progress ran begin..end under the client's token (saw {kinds})")
 
         explain = server.request("workspace/executeCommand", {
-            "command": "meta.explain",
+            "command": "jev.explain",
             "arguments": [{"uri": uri, "line": 1}],
         }).get("result", {})
-        check(explain.get("schema") == "meta.artifact/1" and explain.get("markdown"),
-              "meta.explain returned an artifact")
+        check(explain.get("schema") == "jev.artifact/1" and explain.get("markdown"),
+              "jev.explain returned an artifact")
 
         notimpl = server.request("workspace/executeCommand", {
-            "command": "meta.nonexistent", "arguments": []}).get("result", {})
+            "command": "jev.nonexistent", "arguments": []}).get("result", {})
         check(notimpl.get("ok") is False and notimpl.get("error", {}).get("code") == "not_implemented",
               "an unknown command says so instead of pretending")
 
         bad_args = server.request("workspace/executeCommand", {
-            "command": "meta.plan", "arguments": []}).get("result", {})
+            "command": "jev.plan", "arguments": []}).get("result", {})
         check(bad_args.get("ok") is False and bad_args.get("error", {}).get("code") == "bad_arguments",
               f"a served command with missing arguments is refused clearly: {bad_args.get('error')}")
 

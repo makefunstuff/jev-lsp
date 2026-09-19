@@ -50,7 +50,7 @@ def main():
                     "textDocumentSync": {"openClose": True, "change": 2},
                     "executeCommandProvider": {"commands": ["probe.languageIds"]},
                 },
-                "serverInfo": {"name": "meta-language-probe", "version": "0"},
+                "serverInfo": {"name": "jev-language-probe", "version": "0"},
             }})
         elif method == "initialized":
             pass

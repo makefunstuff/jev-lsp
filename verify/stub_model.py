@@ -11,12 +11,19 @@ Rules it applies, in order:
   * otherwise                            -> an edit response replacing the anchor's scope
 
 Control plane, for assertions:
-  * `GET  /__requests` -> every request body seen, in order
+  * `GET  /__requests` -> every request body seen, in order (chat), plus `decisions`
+  * `GET  /__decisions` -> every *decision* request body seen, in order
   * `GET  /__script`   -> the current script
   * `POST /__script`   -> replace the script with a JSON object; keys are
                           `review`, `edit`, `artifact`, or `raw` (a verbatim string),
-                          optionally with `times` to serve it a limited number of times
+                          optionally with `times` to serve it a limited number of times,
+                          and `decision_probability` / `decisions` for the decision routes
   * `POST /__reset`    -> forget everything
+
+Decision routes (`/systemone`, `/alpha/decisions`): the Jev decision wire. Deterministic:
+every question is answered with `decision_probability` (default 0.9) unless `decisions`
+names it, and a question mapped to `null` is *omitted* — which is how a harness asserts
+"reported, never guessed".
 
 Environment:
   STUB_PORT    port to bind (default 8099)
@@ -85,7 +92,7 @@ def _edit_body(anchor):
         "replacements": [
             {
                 "anchor": {"kind": "statement", "match": anchor.strip()},
-                "replacement": anchor.rstrip() + "  # meta",
+                "replacement": anchor.rstrip() + "  # jev",
             }
         ],
         "new_files": [],
@@ -106,7 +113,37 @@ def _review_body(anchor):
     }
 
 LOCK = threading.Lock()
-STATE = {"requests": [], "script": {}, "served": []}
+STATE = {"requests": [], "script": {}, "served": [], "decisions": []}
+
+# The probability every decision question gets unless the script names it, and the reason label
+# every answer carries. Both are scriptable; see the module doc.
+DEFAULT_DECISION_PROBABILITY = 0.9
+DECISION_REASON = "reachable"
+
+
+def _decision_body(body):
+    """Answer a decision request. Deterministic, and silent about what it does not know."""
+    with LOCK:
+        script = dict(STATE["script"])
+    table = script.get("decisions") or {}
+    default = script.get("decision_probability", DEFAULT_DECISION_PROBABILITY)
+    answers = {}
+    for qid in (body.get("questions") or {}):
+        probability = table.get(qid, default) if qid in table else default
+        if probability is None:
+            # Absent from the response on purpose: the server must report "no answer" rather
+            # than invent one, and this is what a real endpoint does with a question it drops.
+            continue
+        answers[qid] = {
+            "type": "noul",
+            "noul": float(probability),
+            "reason": DECISION_REASON,
+        }
+    return {
+        "model": body.get("model", "stub"),
+        "answers": answers,
+        "usage": {"input_tokens": 12, "output_tokens": 3},
+    }
 
 
 
@@ -243,7 +280,17 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/__requests":
             with LOCK:
-                self._send(200, {"requests": STATE["requests"], "served": STATE["served"]})
+                self._send(
+                    200,
+                    {
+                        "requests": STATE["requests"],
+                        "served": STATE["served"],
+                        "decisions": STATE["decisions"],
+                    },
+                )
+        elif path == "/__decisions":
+            with LOCK:
+                self._send(200, {"decisions": STATE["decisions"]})
         elif path == "/__script":
             with LOCK:
                 self._send(200, STATE["script"])
@@ -262,6 +309,7 @@ class Handler(BaseHTTPRequestHandler):
                 STATE["requests"].clear()
                 STATE["script"].clear()
                 STATE["served"].clear()
+                STATE["decisions"].clear()
                 STATE.pop("times_used", None)
             self._send(200, {"reset": True})
             return
@@ -276,6 +324,19 @@ class Handler(BaseHTTPRequestHandler):
                 STATE["script"] = script
                 STATE.pop("times_used", None)
             self._send(200, {"script": script})
+            return
+
+        if path.endswith("/systemone") or path.endswith("/decisions"):
+            if DELAY_MS:
+                time.sleep(DELAY_MS / 1000.0)
+            try:
+                body = json.loads(raw or b"{}")
+            except json.JSONDecodeError as e:
+                self._send(400, {"error": str(e)})
+                return
+            with LOCK:
+                STATE["decisions"].append(body)
+            self._send(200, _decision_body(body))
             return
 
         if path.endswith("/chat/completions"):

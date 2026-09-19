@@ -10,7 +10,7 @@ is fast" and "fast because nothing called it" look identical against a quick stu
 of them is the invariant. A path that reaches the model takes at least two seconds and fails
 its budget; nothing here is allowed near it (N2, N3).
 
-    python3 verify/latency.py [--bin target/release/meta-lsp]
+    python3 verify/latency.py [--bin target/release/jev-lsp]
 
 Prints one line per path with its measured time. Exit is nonzero if any path exceeded its
 budget, or if the model was reached at all.
@@ -82,20 +82,21 @@ def start_stub(port):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--bin", default=os.path.join(REPO, "target", "release", "meta-lsp"))
+    ap.add_argument("--bin", default=os.path.join(REPO, "target", "release", "jev-lsp"))
     args = ap.parse_args()
 
     port = free_port()
     stub = start_stub(port)
-    workdir = tempfile.mkdtemp(prefix="meta-latency-")
+    workdir = tempfile.mkdtemp(prefix="jev-latency-")
     fixture = os.path.join(workdir, "loader.py")
     with open(fixture, "w") as fh:
         fh.write(FIXTURE)
     uri = "file://" + fixture
 
-    env = {k: v for k, v in os.environ.items() if not k.startswith("META_")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("JEV_")}
     server = Lsp([args.bin, "--stdio"], env)
     server.settings = {
+        "rules": {"enabled": False},
         "models": {
             "reason": {"base_url": f"http://127.0.0.1:{port}/v1", "model": "stub-model"},
             "review": {"base_url": f"http://127.0.0.1:{port}/v1", "model": "stub-model"},
@@ -184,19 +185,19 @@ def main():
             ),
         )
         timed(
-            "meta.status",
+            "jev.status",
             lambda: server.request(
                 "workspace/executeCommand",
-                {"command": "meta.status", "arguments": []},
+                {"command": "jev.status", "arguments": []},
                 timeout=30,
                 poll=0.0002,
             ),
         )
         timed(
-            "meta.session",
+            "jev.session",
             lambda: server.request(
                 "workspace/executeCommand",
-                {"command": "meta.session", "arguments": [{"limit": 50}]},
+                {"command": "jev.session", "arguments": [{"limit": 50}]},
                 timeout=30,
                 poll=0.0002,
             ),

@@ -1,0 +1,22 @@
+[package]
+name = "jev-lsp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "jev-lsp"
+path = "src/main.rs"
+
+[dependencies]
+jev-core = { path = "../jev-core" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-std"] }
+parking_lot = "0.12"
+tower = "0.4"
+tower-lsp = "0.20"
+
+[lints.rust]
+unsafe_code = "forbid"
