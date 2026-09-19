@@ -76,9 +76,10 @@ trigger -> verb -> tier
 No dynamic routing heuristics. A table, visible in one place, overridable per verb in
 config.
 
-**The post-apply check is not a model call.** After the client applies an edit the server
-compares the new bytes against its own prediction and publishes an `ERROR` diagnostic on a
-mismatch (PROTOCOL §8). It does not parse the result, and nothing in `crates/` does
+**The post-apply check is not a model call.** For an edit the server applied (a plan step), the
+server compares the new bytes against its own prediction and publishes an `ERROR` diagnostic on a
+mismatch (PROTOCOL §8). A resolved code action is applied by the client, records no prediction, and
+is not compared. It does not parse the result, and nothing in `crates/` does
 (`docs/VERIFICATION.md` §11).
 
 **The ambient row is the one that changed.** With rules on — the default — the pass that runs on

@@ -249,4 +249,4 @@ Not built in phases 1–2.
 | Budget exhausted | `over_budget` state; work continues on cache; recovery is automatic at the window boundary |
 | Cache eviction mid-flight | Recomputed; correctness never depends on cache presence |
 | Client crashes | Nothing to reconcile — the server holds no authoritative state |
-| Document changed post-apply | Re-hash detects divergence → `ERROR` diagnostic naming the prediction mismatch |
+| Document changed post-apply | For an edit the server applied (a plan step): re-hash detects divergence → `ERROR` diagnostic naming the prediction mismatch. A resolved code action records no prediction, so nothing is compared (`docs/VERIFICATION.md` §11) |

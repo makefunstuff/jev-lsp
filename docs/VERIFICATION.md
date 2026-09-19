@@ -550,14 +550,31 @@ Recorded because they are deliberate boundaries, not oversights:
 - **`languages.overrides[].verbs` narrows the menu but nothing enforces the complement** —
   a client can invoke any verb through a hand-built action. The server validates the result,
   not the request (the version stamp and anchor rules are what protect the buffer).
-- **Nothing in `crates/` parses the result of an applied edit, and that is deliberate.** An
-  edit is validated *structurally*: `edit::build_proposal` checks that every anchor locates
-  exactly once and that a replacement does not duplicate lines it did not consume, the scope and
-  version stamps are applied, and after the client applies it the server compares the bytes to
-  its own prediction (PROTOCOL §8) — a text comparison, which catches a client that applied
-  something else, not text that is invalid in its language. There is no treesitter parser in the
-  server and no language-level check anywhere, so `state = "ready"` means *the contract passed*,
-  never *the file still compiles*.
+- **Nothing in `crates/` parses the result of an applied edit, and that is a decision rather than
+  an omission.** Every alternative was weighed against the one failure this project has actually
+  measured. A *structural probe* is cheap enough (µs, in `edit.rs`, no dependency) and would have
+  to run on `predict_after`, before the client applies anything — but its balance form is blind to
+  the failure that prompted it (the replacement's delimiters were balanced), and its indentation
+  form (an opener at the end of the range with the following line not indented deeper) flags that
+  failure only when gated on `Profile.braces == false`; ungated, it flags legal code, and a probe
+  that refuses a valid edit is worse than one that misses an invalid one. A *parser behind a
+  feature or a subprocess* would be the largest dependency this repository carries (tree-sitter
+  grammars), puts language knowledge in the server where N10 keeps it out, and `rustc
+  --emit=metadata` needs a crate context a single buffer does not have — while the parser that
+  already holds the file is the user's own language server, whose verdict reaches the client and
+  not us. *Correlating the client's own diagnostics* is the cheapest true signal there is —
+  `CodeActionContext.diagnostics` is already populated on every code-action request
+  (`nvim/lua/jev/picker.lua:204-226`) and the plugin already pushes a versioned
+  `{uri, version, definitions, context}` document per change (300 ms debounce,
+  `nvim/lua/jev/init.lua:354-423`, guard-tested server-side) — and it is the upgrade to make the
+  day a user complains: as `INFORMATION` attributed to the client, never as `ERROR` (a parser that
+  has not run yet, or another server's stale diagnostic, cannot be read as proof), with jev's own
+  findings excluded from the correlation. Until then `state = "ready"` means *the contract
+  passed*, never *the file still compiles*, and the party that knows is the client that parses.
+
+  What the server does validate on both paths: `edit::build_proposal` checks that every anchor
+  locates exactly once, that a replacement does not duplicate lines it did not consume, and the
+  scope and version stamps. It never parses, and no language-level check exists anywhere.
 
   The shape this misses, measured three times on `google/gemini-2.5-flash-lite` (§7): the answer
   replaced one statement with a block header and did not re-indent the body —
@@ -573,3 +590,20 @@ Recorded because they are deliberate boundaries, not oversights:
   `real_model.py` call `ast.parse` on the result and report `BROKEN`/`unparseable`: the harness
   is the only place that question is asked. `docs/MODEL.md` §5's repair loop answers a different
   question (did the answer satisfy its contract, and can it be anchored).
+- **The post-apply prediction check covers the plan path only.** `edit::predict_after` materialises
+  the exact post-edit text in µs, and `verify_prediction` compares the next synced text to it and
+  publishes the `ERROR` divergence diagnostic (PROTOCOL §8) — but `remember_prediction` and
+  `record_applied` are called from one place, the `jev.apply` step path
+  (`crates/jev-lsp/src/server.rs:2581, 2592`). On a **resolved code action** — the most common way
+  an edit reaches a buffer — there is no prediction recorded, so the comparison returns early and
+  nothing is checked. The server validates anchors, duplicates, scope and version stamps on both
+  paths, and compares the client's applied bytes against its own prediction on the plan path only:
+  on a resolved code action it can be wrong and silent, and `:Jev revert` does not know about it
+  either. The fix is the same correlation as above, and it is not built.
+- **The client's diagnostics already reach the server and are dropped.** The plugin fills
+  `CodeActionContext.diagnostics` from `vim.diagnostic.get(bufnr)` on every code-action request
+  (`nvim/lua/jev/picker.lua:204-226`), and pushes a versioned `{uri, version, definitions,
+  context}` document on every change with a 300 ms debounce
+  (`nvim/lua/jev/init.lua:354-423`, guard-tested server-side as `KnownDocument`); the server reads
+  `params.context.trigger_kind` and nothing else of the context. That is why the correlation above
+  is ~30–40 lines rather than a new subsystem — the wire already carries the signal.
