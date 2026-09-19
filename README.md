@@ -18,58 +18,43 @@ surfaces only. Neovim is the primary client; `nvim/` is the plugin.
 ```sh
 cargo build --release   # target/release/jev-lsp (the server) and target/release/jev (a CLI)
 
-# the plugin: the attach pass that covers files Neovim cannot identify, the keymaps and :Jev
+# 1. the plugin: the attach pass that covers files Neovim cannot identify, the keymaps and :Jev
 ln -s /path/to/jev-lsp/nvim ~/.local/share/nvim/site/pack/jev/start/jev
 ```
 
 ```lua
+-- 2. in your config
 require('jev').setup({ cmd = { '/path/to/jev-lsp/target/release/jev-lsp' } })
 ```
 
-```lua
--- with lazy.nvim, the same plugin as a local `dir` spec (no symlink)
-{ dir = '/path/to/jev-lsp/nvim', name = 'jev', lazy = false,
-  config = function()
-    require('jev').setup { cmd = { '/path/to/jev-lsp/target/release/jev-lsp' } }
-  end },
-```
+A lazy-managed config takes the same plugin as a local `dir` spec instead of the symlink:
+`{ dir = '/path/to/jev-lsp/nvim', name = 'jev', lazy = false, config = function() require('jev').setup { cmd = { … } } end }`.
 
-The two are equivalent: the `dir` spec is the shape a lazy-managed config consumes, the symlink is
-the plain one.
+3. Write a rule in `.jev/rules/*.json`, open a file and save. A finding appears on the line when the
+rule's inspection and the decision tier both accept it; with no rule files the pass publishes nothing
+and reports `no_rules`. `docs/TUTORIAL.md` §3.7 has the rule shape.
 
-Two tiers, two endpoints. The chat tiers answer actions, plans and explanations; the decision
-tier answers the rules pass.
+### Endpoints
+
+Nothing appears until a rule exists **and** the decision tier answers, so that tier is what a first
+run needs. It is hosted Jev by default, key from `TYPESAFE_API_KEY`:
 
 ```sh
-export JEV_BASE_URL=http://127.0.0.1:8080/v1   # chat model, OpenAI-compatible
-export JEV_MODEL=your-model-name
-export JEV_API_KEY_ENV=OPENROUTER_API_KEY   # hosted: the NAME of the variable holding the key
+export TYPESAFE_API_KEY=…                      # the hosted default (api.typesafe.ai)
+export JEV_DECIDE_WIRE=system_one              # or open_router -> {base}/alpha/decisions
 
-# the decision tier defaults to hosted Jev (api.typesafe.ai, key from TYPESAFE_API_KEY);
-# a local System One server instead:
+# or a local System One server, no key:
 export JEV_DECIDE_BASE_URL=http://127.0.0.1:8009/v1
 export JEV_DECIDE_MODEL=kev-latest
-export JEV_DECIDE_TIMEOUT_MS=20000   # a hosted cold start can exceed the 5000 ms default
+export JEV_DECIDE_TIMEOUT_MS=20000             # a hosted cold start can exceed 5000 ms
+
+# the chat tiers answer actions, plans and explanations — needed only for those:
+export JEV_BASE_URL=http://127.0.0.1:8080/v1   # chat model, OpenAI-compatible
+export JEV_MODEL=your-model-name
+export JEV_API_KEY_ENV=OPENROUTER_API_KEY      # a hosted chat tier: the NAME of the key variable
 ```
 
-A rule is a convention in prose plus the inspection that finds the lines it may apply to. Files
-are read from `.jev/rules/` in path order:
-
-```jsonc
-{ "schema": "jev.rules/1",
-  "rules": [
-    { "id": "no-unwrap-in-handlers",
-      "title": "Unwrap in a request handler",
-      "text": "A handler must not unwrap; return the error instead.",
-      "applies_to": ["**/*.rs"],
-      "inspection": { "kind": "regex", "pattern": "\\.unwrap\\(\\)" },
-      "judgement": { "question": "Is this unwrap reachable from a request handler?",
-                     "min_probability": 0.75 } } ] }
-```
-
-Open a file and save. A finding appears as a diagnostic on the line when the rule's inspection
-and the decision both accept it. With no rule files, the pass publishes nothing and reports
-`no_rules` rather than a clean file. `docs/TUTORIAL.md` §3.7 walks through writing one.
+`docs/TUTORIAL.md` §4 lists every setting.
 
 ## Use it with another LSP client
 
