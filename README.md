@@ -38,6 +38,7 @@ export JEV_API_KEY_ENV=OPENROUTER_API_KEY   # hosted: the NAME of the variable h
 # a local System One server instead:
 export JEV_DECIDE_BASE_URL=http://127.0.0.1:8009/v1
 export JEV_DECIDE_MODEL=kev-latest
+export JEV_DECIDE_TIMEOUT_MS=20000   # a hosted cold start can exceed the 5000 ms default
 ```
 
 A rule is a convention in prose plus the inspection that finds the lines it may apply to. Files

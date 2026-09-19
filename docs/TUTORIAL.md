@@ -154,10 +154,12 @@ it was — no rules loaded, nothing claiming this file, or the file git calls un
 ```
 
 → a JSON blob in the message line. The fields worth knowing: `enabled`, `documents`,
-`analysis_in_flight`, `rules_in_flight`, `cache`, `budget.{calls_last_minute,calls_last_hour,tokens_used}`
-and their `limit_*`, `models` (the endpoints actually in force, `decide` included),
-`rules.{enabled,loaded,hash,last_pass_ms,candidates,calls}`, `triggers.diagnostics` and
-`triggers.rules`.
+`config_ready` (whether the client's settings have arrived — until they have, the endpoints
+below are the built-in defaults), `analysis_in_flight`, `rules_in_flight`, `cache`,
+`budget.{calls_last_minute,calls_last_hour,decisions_last_minute,tokens_used}` and their
+`limit_*`, `models` (the endpoints actually in force, `decide` included, with its `wire` and
+`timeout_ms`), `rules.{enabled,loaded,hash,last_pass_ms,candidates,calls}`,
+`triggers.diagnostics` and `triggers.rules`.
 
 **7. Press the action key on a flagged line.**
 
@@ -429,7 +431,7 @@ cat > .jev/rules/handlers.json <<'JSON'
       "title": "Unwrap in a request handler",
       "text": "A handler must not unwrap: a bad request would take the worker down. Return the error instead.",
       "severity": "warning",
-      "applies_to": ["**/src/**/*.rs"],
+      "applies_to": ["src/**/*.rs"],
       "inspection": { "kind": "regex", "pattern": "\\.unwrap\\(\\)" },
       "judgement": {
         "question": "Is this unwrap reachable from a request handler, rather than from test or startup code?",
@@ -450,7 +452,7 @@ What each field decides, in the order you will care about them:
 
 | Field | What it decides |
 |---|---|
-| `applies_to` | globs over the document's path; a rule for `**/*.rs` never sees a Python file. The path is absolute, so a pattern that does not begin with `**/` is compared against the root's first segment (`Users`) and matches nothing — `**/src/**/*.rs`, not `src/**/*.rs`, and the leading `**` is what spans the path from the root |
+| `applies_to` | globs over the document's path **relative to the workspace root** (the absolute path when there is no root), so `src/**/*.rs` matches a file at the root's `src/`, and a leading `**/` is optional; a rule for `**/*.rs` never sees a Python file |
 | `inspection.kind` | `regex` (every matching line) or `absent` (the file is expected to contain the pattern and does not — a licence header, a module declaration) |
 | `inspection.pattern` | the candidate finder. It **decides nothing**: it names lines, nothing more |
 | `judgement.question` | what the decision tier is asked about each candidate. Ask about the *decision* ("is this reachable from a handler"), never the syntax the regex already matched |
@@ -539,7 +541,9 @@ settings = {
   never silently posts to the wrong path (`:Jev status` shows `models.decide.wire`). The API key
   is read from the variable **named by** `api_key_env` — `TYPESAFE_API_KEY` by default, with no
   environment override for the name — so a hosted provider needs either that variable exported or
-  `api_key_env` changed in settings. `docs/MODEL.md` §8 has the worked recipe.
+  `api_key_env` changed in settings. `JEV_DECIDE_TIMEOUT_MS` raises the 5000 ms ceiling for a
+  hosted cold start; a value that does not parse, or parses to zero, is ignored.
+  `docs/MODEL.md` §8 has the worked recipe.
 - `rules.enabled = false` also returns the ambient path to the `review` tier, which is what this
   server did before rules existed — and which is *also* remote by default.
 - `think = 'off'` sends `chat_template_kwargs: {enable_thinking: false}` and is the default for
@@ -607,6 +611,7 @@ It shares `jev-core` with the server and no state with it. Useful for scripts, a
 | `:Jev review` returns `findings: []`, no sign | Either the file is genuinely clean, or it was skipped | `:Jev log`: a skip says *"the file looks binary"*, *"N bytes exceeds the M byte analysis limit"*, or *"path matches the ignore pattern …"* |
 | `:Jev inspect` finds it, but the sign column never shows it | The pass runs on save and on `jev.inspect`; a client that never sends `didSave` never runs one, and an empty diagnostics pull looks exactly like a clean file | Save the buffer (or send `didSave`); `docs/UX.md` §1.1 |
 | `not_implemented` for a command | The server does not serve that name | `:Jev` completion lists the 18 subcommands; the server advertises its 15 commands in the `initialize` result (PROTOCOL §6) |
+| `:Jev status` shows an endpoint you did not configure, then the right one moments later | `config_ready` is false: the client's configuration pull has not been merged yet, and status reports the built-in defaults rather than waiting for it | Nothing to do; re-run `:Jev status` (model work does wait for the pull, so it never runs against the defaults) |
 | `jev: settings applied — reason … · review …` in the log shows an endpoint you did not configure | The environment is overriding your client settings | Unset `JEV_BASE_URL` / `JEV_MODEL` / `JEV_REVIEW_MODEL`, or set them to what you want |
 | The model call fails and the answer is empty | The endpoint refused or timed out | `:Jev log`. A reasoning model that spent its whole budget now says so explicitly (`finish_reason=length`) — raise `max_tokens`, or set `think = 'off'` |
 | Menu entry disabled: *"analysing in the background; reopen the menu in a moment"* | The cache is cold; the analysis is in flight | Wait for the sign and reopen the menu. `:Jev review` also warms the cache the menu reads, but it does not repaint the signs |
@@ -706,8 +711,8 @@ files** (a control run caught 4/4 — the miss is run-to-run variance); **real_m
 which is the model's anchor granularity and not a server check — nothing in `crates/` parses the
 result (`docs/VERIFICATION.md` §7, §11).
 
-Current state, measured on the checkout this document ships with: `cargo test` **274 passing**
-(49 `jev` + 179 `jev-core` + 46 `jev-lsp`), warning-free; `verify/rules_test.py` **45/45**;
+Current state, measured on the checkout this document ships with: `cargo test` **283 passing**
+(49 `jev` + 188 `jev-core` + 46 `jev-lsp`), warning-free; `verify/rules_test.py` **45/45**;
 `verify/rules_live.lua` **0 failures, 0 skips** on Neovim 0.12.5 and 0.12.1; smoke **44/44**
 (three consecutive full-table runs); the independent client **32 ok, 0 FAIL**;
 `verify/omp_lsp.sh` **0 failures**; `verify/lsp_framing_test.py` **9/9**; the plugin's own UI test

@@ -650,8 +650,8 @@ with no root, the document's own directory):
       "text": "A handler must not unwrap; return the error instead.",  // its detail
       "severity": "warning",                   // information | warning; error is reserved, and a
                                                // rule that asks for it gets warning
-      "applies_to": ["**/*.rs"],               // globs over the document's path; the path is
-                                               // absolute, so lead with `**/`
+      "applies_to": ["**/*.rs"],               // globs over the document's path, relative to
+                                               // the workspace root
       "inspection": { "kind": "regex", "pattern": "\\.unwrap\\(\\)", "max_matches": 0 },
       "judgement": { "question": "Is this unwrap reachable from a request handler?",
                      "criteria": { "true": "a request can reach it", "false": "test code" },
@@ -687,6 +687,7 @@ repository's rules document (§9), and no environment variables beyond the model
 { "enabled": true,
   "models": { "reason": {…}, "review": {…}, "decide": {…} },  // see docs/MODEL.md
   "budget": { "max_calls_per_min": 6, "max_calls_per_hour": 120,
+              "max_decisions_per_min": 60,
               "max_tokens_per_session": 500000, "timeout_ms": 30000 },
   "triggers": { "diagnostics": "save", "idle_ms": 1500, "severity_floor": "information",
                 "rules": { "on_save": true, "on_idle": true, "idle_ms": 1500 } },
@@ -719,7 +720,8 @@ time for it, where the reason tier's numbers are sized for a rewrite. Pointing i
 System One server is one config change away: `base_url = "http://127.0.0.1:8009/v1"`,
 `model = "kev-latest"`. `JEV_BASE_URL` — which names an OpenAI-compatible chat server —
 deliberately does **not** touch this tier; it has its own variables, `JEV_DECIDE_BASE_URL`,
-`JEV_DECIDE_MODEL` and `JEV_DECIDE_WIRE` (an empty or whitespace value is ignored).
+`JEV_DECIDE_MODEL`, `JEV_DECIDE_WIRE` and `JEV_DECIDE_TIMEOUT_MS` (an empty or whitespace value is
+ignored).
 `JEV_DECIDE_WIRE` takes `system_one`/`systemone` or `open_router`/`openrouter`, trimmed and
 case-insensitive, and selects the path appended to `base_url`; a value that is neither is
 **ignored with the wire already in force kept**, never coerced to the default, because a typo

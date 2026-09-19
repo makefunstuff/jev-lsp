@@ -37,7 +37,7 @@ was never established as the cause of those failures, and the checks that failed
 pushed context at all. The likeliest explanation is the one `docs/VERIFICATION.md` warns about:
 a stale stub process bound to the port, since a fresh stub on a free port makes every one of
 those checks pass. What is verified now: 32 ok / 0 FAIL on the independent client (including the
-assertion that no draft capability is advertised), smoke 44/44, plan 35/35, parity 25/25,
+assertion that no draft capability is advertised), smoke 44/44, plan 35/35, parity 30/30,
 queue 5/5, config race 3/3, supersede 7/7, dismiss 0 failures, rules 45/45 and rules_live 0
 failures on both Neovim versions, nvim_live and nvim_ui_test 0/0, latency 7/7 paths. The
 real-endpoint harnesses were re-run through OpenRouter (`docs/VERIFICATION.md` §7):
@@ -95,7 +95,7 @@ which a headless harness cannot drive.
 | Check | Result |
 |---|---|
 | `bash verify/run-suite.sh <out-file>` | the whole table, one run: supervised stub, every row captured, a verdict per row on stdout (`NVIM_ONLY=1`, `REFUSE_IF_BUSY=1`, `NVIM_BINS` in its header) |
-| `cargo test` | 274 passing (49 `jev` + 179 `jev-core` + 46 `jev-lsp`), 0 failed, no warnings |
+| `cargo test` | 283 passing (49 `jev` + 188 `jev-core` + 46 `jev-lsp`), 0 failed, no warnings |
 | `cargo build --release` | no warnings, no errors |
 | `verify/probes/run.sh` | 7 probes green |
 | `python3 verify/latency.py` | 7/7 paths within budget against a model made 2 s slow |
@@ -108,7 +108,7 @@ which a headless harness cannot drive.
 | `nvim --headless -l verify/nvim_live.lua` | 0 failures, 0 skips with a stub endpoint (1 skip without one: the resolve step has no model) |
 | `nvim --headless -l verify/rules_live.lua` | 0 failures, 0 skips on Neovim **0.12.5 and 0.12.1** — a rule's finding on the sign column after a save, `:Jev inspect` answering with the same finding, its counts and its skips, `--force` re-running an unchanged document |
 | `python3 verify/plan_test.py` | 35/35 |
-| `python3 verify/cli_parity.py` | 25/25 — the CLI and the LSP agree exactly, `jev inspect` included |
+| `python3 verify/cli_parity.py` | 30/30 — the CLI and the LSP agree exactly, `jev inspect` included; five of the checks are the nested-file case that pins the CLI's rules root |
 | `bash verify/omp_lsp.sh` | 0 failures, 0 skips — OMP, a client that shares no code with this repository, receives a rule's finding over `textDocument/diagnostic` and reaches `workspace/executeCommand jev.inspect`; a no-rules control finds nothing |
 | `python3 verify/outcome_test.py` | 18/18 — the `jev.outcome` record and the `jev.usage` counts |
 | `python3 verify/quality_eval.py --base-url https://openrouter.ai/api/v1 --model google/gemini-2.5-flash-lite` | **recall 3/4, precision 3/3, 0 findings on both clean files**, 6 calls / 2950 tokens billed, 4.5 s, exit 0 — the miss (`swallowed_error.py`) is run-to-run variance on a cheap model (a control run with the same model caught 4/4). Runnable whenever an endpoint and a key are given (`JEV_API_KEY_ENV` names the chat tiers' key variable); the suite reports the row as `?` when none is |

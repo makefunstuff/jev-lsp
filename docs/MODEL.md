@@ -24,14 +24,16 @@ why the tier has its own key shape, `{wire, base_url, model, api_key_env, timeou
 temperature, think}` with `timeout_ms` 5000 and `max_tokens` 64 rather than the chat tiers'
 90 000/8192 (PROTOCOL §10). `wire` names the path appended to `base_url`: `system_one`
 (`/systemone`) or `open_router` (`/alpha/decisions`). `JEV_DECIDE_BASE_URL`,
-`JEV_DECIDE_MODEL` and `JEV_DECIDE_WIRE` set the first three from the environment;
-`JEV_DECIDE_WIRE` accepts `system_one`/`systemone` and `open_router`/`openrouter` (trimmed,
-case-insensitive) and **ignores anything else**, keeping the wire in force — a typo must not
-silently post to the wrong path, which is indistinguishable from a dead endpoint. The key's
-variable *name* is `api_key_env` (default `TYPESAFE_API_KEY`) and is config-only; only its value
-comes from the environment. There is deliberately **no `Tier::Decide`** in the code:
-`Config::tier()` answers the chat tiers, and a decision is a different protocol, so
-`Config::decision()` answers this one.
+`JEV_DECIDE_MODEL`, `JEV_DECIDE_WIRE` and `JEV_DECIDE_TIMEOUT_MS` set those four from the
+environment; `JEV_DECIDE_WIRE` accepts `system_one`/`systemone` and `open_router`/`openrouter`
+(trimmed, case-insensitive) and **ignores anything else**, keeping the wire in force — a typo must
+not silently post to the wrong path, which is indistinguishable from a dead endpoint. An
+unparseable or zero `JEV_DECIDE_TIMEOUT_MS` is ignored the same way, keeping the 5000 ms default:
+a typo must not turn the ceiling into zero, which would fail every call instantly and look like an
+outage. The key's variable *name* is `api_key_env` (default `TYPESAFE_API_KEY`) and is
+config-only; only its value comes from the environment. There is deliberately **no
+`Tier::Decide`** in the code: `Config::tier()` answers the chat tiers, and a decision is a
+different protocol, so `Config::decision()` answers this one.
 
 Config is configuration-layer, not code (PROTOCOL §10 `models`). The chat tiers take
 `{base_url, model, api_key_env, timeout_ms, max_tokens, temperature, think}`. `think` mirrors
@@ -51,10 +53,11 @@ omp auth gateway, and the local `llama.cpp` server):
 
 The supported effort set is a property of the endpoint and the model, not of the levels this
 config offers, and an unsupported one fails loudly rather than falling back — which is the
-right shape (`:Jev log` shows `model call failed: POST …`). Two consequences worth knowing:
-this server's jobs are narrow and fully specified (locate an anchor, emit one JSON object),
-which is where thinking buys least; and a level spent against a fixed ceiling *removes* the
-answer rather than improving it. Raise `max_tokens` and `timeout_ms` with any level.
+right shape (`:Jev log` shows `model call failed: POST <url>: <cause>`: the whole `anyhow`
+chain, so a timeout reads as a timeout rather than as the URL alone). Two consequences worth
+knowing: this server's jobs are narrow and fully specified (locate an anchor, emit one JSON
+object), which is where thinking buys least; and a level spent against a fixed ceiling *removes*
+the answer rather than improving it. Raise `max_tokens` and `timeout_ms` with any level.
 
 ## 2. Routing
 
@@ -237,12 +240,16 @@ Accounted in `budget.rs`, checked before the call, incremented after:
 Exhaustion is a state, not an error. The user sees `over_budget` on the action and a
 statusline counter; nothing pops up twice.
 
-**The rules pass spends the same budget, one call per document.** A pass takes a single permit
-for the whole document — however many candidates its inspections found — so
-`budget.max_calls_per_min` (default 6) is six documents a minute, and a sweep of a larger
-workspace reports `over_budget` (PROTOCOL §6.1) until the window moves on. The cap exists to
-bound a sweep, not to save money: one decision is ~500 tokens in and ~29 out,
-≈$0.00002 and 0.3–0.6 s on the hosted tier. Raise it if you sweep whole workspaces deliberately.
+**Decision calls have their own per-minute cap.** A rules pass takes one permit per *document*,
+and it comes from `budget.max_decisions_per_min` (default 60) — a separate window from the chat
+tiers' `budget.max_calls_per_min` (6), so a decision no longer spends the chat minute and a sweep
+of a workspace is bounded by 60 files a minute instead of dying at six. The two caps exist for
+different reasons: one chat call can be a rewrite costing thousands of tokens, while a decision is
+~500 tokens in and ~29 out, ≈$0.00002 and 0.3–0.6 s. `0` means "no decision calls", exactly as it
+does for `max_calls_per_min`; the session token cap applies to decisions too; and the chat windows
+are untouched. `jev.status.budget` reports `decisions_last_minute` with
+`limit_decisions_per_minute` beside the chat counters, so the number a reader sees is the one that
+applies.
 
 ## 8. Local-first
 
@@ -266,11 +273,14 @@ for. Two ways to keep it local, both one setting:
 { "rules": { "enabled": false } }
 ```
 
-`JEV_DECIDE_BASE_URL` / `JEV_DECIDE_MODEL` do the same from the environment, and `JEV_BASE_URL`
-deliberately does **not** move this tier: it names an OpenAI-compatible chat server, and a
-decision is not a chat. Turning rules off returns the ambient path to the `review` tier (§2) —
-which is also remote by default, so a reader who wants *nothing* leaving the machine should point
-`models.reason` and `models.review` at a local endpoint too.
+`JEV_DECIDE_BASE_URL` / `JEV_DECIDE_MODEL` / `JEV_DECIDE_TIMEOUT_MS` do the same from the
+environment, and `JEV_BASE_URL` deliberately does **not** move this tier: it names an
+OpenAI-compatible chat server, and a decision is not a chat. `JEV_DECIDE_TIMEOUT_MS` exists for a
+hosted cold start — the endpoint's own p50 is ~0.3 s and 25 measured calls never came near the
+5000 ms default — and a value that does not parse, or parses to zero, is ignored rather than
+lowering the ceiling to nothing. Turning rules off returns the ambient path to the `review` tier
+(§2) — which is also remote by default, so a reader who wants *nothing* leaving the machine should
+point `models.reason` and `models.review` at a local endpoint too.
 
 **A hosted provider other than the default needs two things, and one of them is easy to miss.**
 

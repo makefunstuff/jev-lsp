@@ -17,7 +17,7 @@ not for the code they touch.
 | `verify/queue_test.py` | built | 5/5; proven to fail on the pre-fix behaviour |
 | `verify/supersede_probe.py` | built | 7/7 — written independently by the verifier agent; control case plus a race case, and it asserts the race was actually set up |
 | `verify/plan_test.py` | built | 35/35 — the plan loop, server-side apply, revert, staleness, divergence, multi-file creation |
-| `verify/cli_parity.py` | built | 25/25 — the CLI and the LSP produce identical findings and byte-identical edits, `jev.inspect` included |
+| `verify/cli_parity.py` | built | 30/30 — the CLI and the LSP produce identical findings and byte-identical edits, `jev.inspect` included; five checks are a nested-file case with a repository-relative `applies_to`, which is the regression test for the CLI resolving `.jev/rules/` at the repository root |
 | `verify/scope_containment_test.py` | built | green (exit 0) — a scope the client narrows is the scope the answer stays inside |
 | `verify/dismiss_test.lua` | built | 0 failures, 0 skips — a finding is dismissed, recorded per repository, and does not resurface |
 | `verify/rules_live.lua` | built | 0 failures, 0 skips on Neovim 0.12.5 **and** 0.12.1 — a rule's finding reaching the sign column, `:Jev inspect` answering with the same finding and its counts |
@@ -208,6 +208,10 @@ suite is the actual regression net; it is run in CI *and* as part of the design 
 | An answer below the rule's floor published anyway | `verify/rules_test.py` — a below-floor answer publishes nothing, and the counts still say it was looked at |
 | The test client's framing desynchronising on a header split across reads | `verify/lsp_framing_test.py` — the frame is completed on the next read, and a bad frame is reported and skipped by length instead of killing the reader |
 | A client the server was not written against cannot get a finding | `verify/omp_lsp.sh` — OMP receives the rule's finding through its own `lsp` tool and reaches `jev.inspect`; the no-rules control receives nothing |
+| A rule that matches nothing because the pattern is root-relative | `verify/cli_parity.py`'s nested-file case (a repository-relative `applies_to`, below the root) and `jev-core` `gates` tests — the path is reduced to the workspace root before matching |
+| The CLI finding no rules where the server finds them | `verify/cli_parity.py` — a nested file (`crates/.../rules.rs`) with the rules at the repository root: both front ends report the same findings. The CLI used to look for `.jev/rules/` beside the file |
+| A workspace sweep dying on the chat tiers' call cap | `verify/rules_test.py` and the budget tests — a rules pass takes a permit from `budget.max_decisions_per_min` (its own window), not `max_calls_per_min` |
+| A transport failure reported as a bare URL | `verify/soak.py` / `verify/real_model.py` against an unreachable endpoint — the row carries the whole `anyhow` chain (`POST <url>: <cause>`) |
 
 ## 5. Latency bench
 
@@ -303,9 +307,10 @@ JEV_DECIDE_MODEL=typesafe/jev-1.13 target/release/jev inspect --force handler.rs
   counts and exit code — with a different `id`, because the id hashes the detail and the two
   details differ;
 - the key had to be exported under the name `api_key_env` holds: with the wire corrected but the
-  key as `OPENROUTER_API_KEY`, the call failed loudly (`decision call failed: POST …`) rather
-  than silently; the settings channel can name another variable (`models.decide.api_key_env`),
-  the environment cannot.
+  key as `OPENROUTER_API_KEY`, the call failed loudly — `decision call failed: POST
+  https://openrouter.ai/api/alpha/decisions: <cause>`, exit 1 — rather than silently; the
+  settings channel can name another variable (`models.decide.api_key_env`), the environment
+  cannot. The cause is printed because the failure formats the whole `anyhow` chain (`{e:#}`).
 
 `JEV_DECIDE_WIRE` spellings were checked end to end: `openrouter`, `OPEN_ROUTER` and
 `" OpenRouter "` all selected `/alpha/decisions`; `openroute` (a typo) left the wire unchanged and
@@ -502,7 +507,9 @@ Recorded because each was invisible to a scripted model, and each is now pinned 
   `/alpha/decisions`, `typesafe/jev-1.13`, eight observations at p = 0.82–0.86 (§7) — so the
   wire, the body, the parsing and the key name are verified against a real decision endpoint;
   what remains untested is the vendor's own base URL and its credential. A local System One
-  server (`http://127.0.0.1:8009/v1`, model `kev-latest`) is likewise unexercised.
+  server (`http://127.0.0.1:8009/v1`, model `kev-latest`) is likewise unexercised. A hosted cold
+  start was seen to exceed the tier's 5000 ms default once (7.15 s, reported as a transport
+  error); `JEV_DECIDE_TIMEOUT_MS` is the knob for that, and no measured call has needed it since.
 - **Real-endpoint latency** beyond the samples in §7. The `codeAction` budget is asserted
   against the stub; the hosted chat numbers are ambient 0.6–60 s and resolve 0.7–2.1 s on a
   cheap model, which is a measurement rather than a budget.
