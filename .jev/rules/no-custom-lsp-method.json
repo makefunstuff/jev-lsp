@@ -1,0 +1,22 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "no-custom-lsp-method",
+      "title": "No custom jev/ LSP methods",
+      "text": "N6: no custom `jev/…` LSP methods — the standard surface plus `workspace/executeCommand` is the whole back-channel (PROTOCOL.md §1).",
+      "severity": "warning",
+      "applies_to": ["**/crates/**/*.rs"],
+      "inspection": { "kind": "regex", "pattern": "custom_method|\"jev/" },
+      "judgement": {
+        "question": "Is this a custom `jev/…` LSP method — a name the server answers, advertises or registers as a protocol method — rather than a standard `…/…` method or a command served through `workspace/executeCommand`?",
+        "criteria": {
+          "true": "the name is a `jev/…` method served on the wire as a method: a registration call, an entry in the served-method list, a match arm or handler dispatching on it, or an advertisement",
+          "false": "it is a `workspace/executeCommand` command spelled with a dot (`jev.x`), a standard `…/…` method, a doc comment, or a fixture that names one without serving it"
+        },
+        "min_probability": 0.8
+      },
+      "verb_hint": "rewrite"
+    }
+  ]
+}

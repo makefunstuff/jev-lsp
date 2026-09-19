@@ -1,0 +1,22 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "no-process-global-state",
+      "title": "No process-global state outliving a session",
+      "text": "N9: \"The server holds no cross-session memory. Caches are keyed by content hash and are never a source of truth\" (PROTOCOL.md §1).",
+      "severity": "warning",
+      "applies_to": ["**/crates/**/*.rs"],
+      "inspection": { "kind": "regex", "pattern": "static mut|static\\s+\\w+\\s*:\\s*(OnceLock|LazyLock)|lazy_static!|thread_local!" },
+      "judgement": {
+        "question": "Is this process-global state that outlives a document or a session — a `static mut`, a `OnceLock`/`LazyLock`/`lazy_static` cell or a `thread_local!` — rather than a `const` table, an import, per-session state the server owns, or a fixture?",
+        "criteria": {
+          "true": "a static or thread-local holds state the code consults across requests — a cache, buffer, counter or singleton that outlives the session, so two editors sharing the process would share it",
+          "false": "it is a `const` or other compile-time table, an `use` line, state owned by the session's own state object, a doc comment, or test code"
+        },
+        "min_probability": 0.8
+      },
+      "verb_hint": "fix"
+    }
+  ]
+}

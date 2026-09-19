@@ -1,0 +1,22 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "no-async-in-jev-core",
+      "title": "jev-core is synchronous by construction",
+      "text": "`jev-core` is \"synchronous by construction: no async runtime, no LSP types, no transport\" — async belongs in the shell, so the core stays pure steps (its module doc).",
+      "severity": "warning",
+      "applies_to": ["**/crates/jev-core/src/**/*.rs"],
+      "inspection": { "kind": "regex", "pattern": "async fn|\\.await|tokio::" },
+      "judgement": {
+        "question": "Is this async by construction — an `async` item, an await, or a tokio call — which `jev-core` refuses by construction, rather than a doc comment or a string that merely mentions the word?",
+        "criteria": {
+          "true": "the line itself is async: an `async` item, an `.await` expression, or a `tokio` call executed in this crate",
+          "false": "it is inside a doc comment, a string literal, or test code that only names the word"
+        },
+        "min_probability": 0.8
+      },
+      "verb_hint": "fix"
+    }
+  ]
+}

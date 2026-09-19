@@ -1,0 +1,22 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "no-language-gate",
+      "title": "Language is metadata, never a gate",
+      "text": "N10/N11: support is unconditional and no language or filetype may gate attachment, sync or the verb set; classification is metadata, never a filter (PROTOCOL.md §1).",
+      "severity": "warning",
+      "applies_to": ["**/crates/**/*.rs"],
+      "inspection": { "kind": "regex", "pattern": "filetype|file_type" },
+      "judgement": {
+        "question": "Does this gate attachment, sync, the verb set or an action on a language or filetype — rather than carry, resolve or merely document one as metadata?",
+        "criteria": {
+          "true": "the language or filetype decides whether a document is attached or synced, which verbs or actions are offered, or whether something is skipped",
+          "false": "the language or filetype is carried as metadata, resolved as a hint, aliased, logged, or named in a comment without changing what is offered"
+        },
+        "min_probability": 0.75
+      },
+      "verb_hint": "fix"
+    }
+  ]
+}

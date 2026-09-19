@@ -1,0 +1,22 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "no-document-read-from-disk",
+      "title": "No document is read from disk",
+      "text": "\"no document is read from disk\" — every byte arrives over the protocol — and the only things the server reads itself are the rule files and git's answer (PROTOCOL.md §6).",
+      "severity": "warning",
+      "applies_to": ["**/crates/jev-lsp/src/**/*.rs", "**/crates/jev/src/**/*.rs"],
+      "inspection": { "kind": "regex", "pattern": "fs::read_to_string|std::fs::read|File::open" },
+      "judgement": {
+        "question": "Does this read a document's text off disk to analyse it, rather than receiving it over the protocol — as opposed to the server's own record, a rule file, git's answer about changed files, the file the command line was explicitly pointed at, or a test fixture?",
+        "criteria": {
+          "true": "the read exists to obtain a document's text for analysis or to show the model, so the client's copy of that text is bypassed",
+          "false": "it reads the server's own record, a rule file, git's answer about which files changed, the file the CLI was explicitly pointed at, or a test fixture that never ships"
+        },
+        "min_probability": 0.8
+      },
+      "verb_hint": "fix"
+    }
+  ]
+}
