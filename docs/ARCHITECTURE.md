@@ -176,10 +176,14 @@ Properties:
 - **Backpressure.** Each queue has a depth cap (default 4). Beyond that, new work is
   dropped with a debug log — the next change re-requests it anyway.
 - **Progress.** The worker reports `begin`/`report`/`end` only under a token obtained per
-  PROTOCOL §3.5, never a self-minted one. `execute_command` owns both ends of it — `begin`
-  before the command runs and `end` after its value is built — so model errors, budget
+  PROTOCOL §3.5, never a self-minted one. The command body owns both ends of it — `begin`
+  before the work and `end` after its value is built — so model errors, budget
   refusals and cancellations close the token exactly once: the failure paths answer with a
-  `Result` envelope rather than an early return.
+  `Result` envelope rather than an early return, and an aborted command unwinds with its guard in
+  place. A panic in a command is contained: the body runs in its own task, so the unwind arrives
+  as a `JoinError` and the guard armed before `begin` closes the token. A panic anywhere else —
+  the transport loop, or a handler that is not spawned — is not contained and takes the process
+  down.
 - **Two passes, one slot each.** A save resolves to the *rules* pass (the ambient default) or,
   when `rules.enabled` is false, to the review tier; `jev.review` always resolves to the review
   tier, because asking for it is asking for that tier's opinion. Both go through the same
