@@ -492,7 +492,7 @@ settings = {
                timeout_ms = 5000, max_tokens = 64 },  -- the rules pass's questions
     reason = { base_url = '…', model = '…', timeout_ms = 90000, max_tokens = 8192,
                temperature = 0.0, think = 'off' },  -- actions, plans, explanations
-    review = { base_url = '…', model = '…' },       -- findings, post-apply verification
+    review = { base_url = '…', model = '…' },       -- the chat review's findings
   },
   budget = { max_calls_per_min = 6, max_calls_per_hour = 120,
              max_tokens_per_session = 500000 },
@@ -507,10 +507,12 @@ settings = {
 ```
 
 - **Three endpoints, and one of them is the ambient path.** `reason` serves
-  actions/plans/explanations; `review` serves findings and post-apply verification; `decide`
-  answers the rules pass's questions. The three are separate slots even when they point at the
-  same server, and they are tuned independently — the decide tier's ceilings are deliberately
-  tiny (64 tokens, 5 s) because a decision is one value per question, not prose.
+  actions/plans/explanations; `review` answers the chat review's findings (`:Jev review`);
+  `decide` answers the rules pass's questions. The three are separate slots even when they point
+  at the same server, and they are tuned independently — the decide tier's ceilings are
+  deliberately tiny (64 tokens, 5 s) because a decision is one value per question, not prose. The
+  check that runs after an edit is not a model call: the server compares the applied bytes
+  against its own prediction (`docs/VERIFICATION.md` §11, and nothing parses the result).
 - **The decide tier is remote by default**, so on a default install the text of a changed file
   goes to `api.typesafe.ai` on every rules pass. To keep it local, point `models.decide` at a
   System One server (`base_url = 'http://127.0.0.1:8009/v1'`, `model = 'kev-latest'`) or set
@@ -669,12 +671,25 @@ pass is the rules pass, so a harness that only sets `JEV_BASE_URL` watches every
 the default cloud endpoint. `verify/run-suite.sh` does all of that for you, and supervises the
 stub while it does.
 
-With a real model: `verify/quality_eval.py` (is the review *right*; `--think off|low|medium|high`
-runs the same fixtures with a reasoning level), `verify/repo_bench.py` (findings per 1000 lines
-over a repository), `verify/soak.py` (does the file still parse). None of these can run on a
-machine with no endpoint: `quality_eval` is the one the suite reports as `?` rather than running,
-and its last measured result — 2026-09-18, `deepseek/deepseek-v4-flash` — is 4/4 planted defects
-caught with 0 findings on the two clean files.
+With a real endpoint — all three are runnable whenever one is reachable, and the suite reports
+them as `?` when none is configured:
+
+```sh
+export OPENROUTER_API_KEY="$(cat ~/.omp/agent/openrouter.key)"   # the value
+export JEV_API_KEY_ENV=OPENROUTER_API_KEY                        # the NAME, for the chat tiers
+python3 verify/quality_eval.py --base-url https://openrouter.ai/api/v1 --model google/gemini-2.5-flash-lite
+python3 verify/real_model.py   --base-url https://openrouter.ai/api/v1 --model google/gemini-2.5-flash-lite
+python3 verify/soak.py         --base-url https://openrouter.ai/api/v1 --model google/gemini-2.5-flash-lite --rounds 2
+```
+
+`quality_eval.py` answers "is the review right" (`--think off|low|medium|high` runs the same
+fixtures with a reasoning level); `real_model.py` the end-to-end loop; `soak.py` "does the file
+still parse". Each exits non-zero when no model was reached. Latest runs on
+`google/gemini-2.5-flash-lite`: **quality_eval 3/4 recall, 3/3 precision, 0 findings on both clean
+files** (a control run caught 4/4 — the miss is run-to-run variance); **real_model** one finding in
+0.8 s and a `state=ready` resolve in 0.7 s; **soak 10/12 applied, 2 left the file unparseable**,
+which is the model's anchor granularity and not a server check — nothing in `crates/` parses the
+result (`docs/VERIFICATION.md` §7, §11).
 
 Current state, measured on the checkout this document ships with: `cargo test` **274 passing**
 (49 `jev` + 179 `jev-core` + 46 `jev-lsp`), warning-free; `verify/rules_test.py` **45/45**;

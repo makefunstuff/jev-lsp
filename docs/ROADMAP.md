@@ -85,8 +85,9 @@ stale and is not applied.
 
 ## U6 — Test generation and multi-file edits
 
-`test` verb with `resourceOperations: create`, file creation, post-apply verification pass
-via the `review` tier, divergence diagnostics.
+`test` verb with `resourceOperations: create`, file creation, a post-apply divergence check
+(the applied bytes against the server's own prediction — local, no model call), divergence
+diagnostics.
 
 **Accept**: golden test creates a test file and edits the source in one `WorkspaceEdit`;
 injected post-apply divergence produces an `ERROR` diagnostic naming the mismatch.

@@ -39,11 +39,10 @@ a stale stub process bound to the port, since a fresh stub on a free port makes 
 those checks pass. What is verified now: 32 ok / 0 FAIL on the independent client (including the
 assertion that no draft capability is advertised), smoke 44/44, plan 35/35, parity 25/25,
 queue 5/5, config race 3/3, supersede 7/7, dismiss 0 failures, rules 45/45 and rules_live 0
-failures on both Neovim versions, nvim_live and nvim_ui_test 0/0, latency 7/7 paths.
-`quality_eval` is deliberately not in that list: it needs a real endpoint, and the 4/4 recall /
-4/4 precision / zero findings on the two clean files was **measured on 2026-09-18 against
-`deepseek/deepseek-v4-flash`** — the suite reports the row as `?` on this machine rather than
-running it.
+failures on both Neovim versions, nvim_live and nvim_ui_test 0/0, latency 7/7 paths. The
+real-endpoint harnesses were re-run through OpenRouter (`docs/VERIFICATION.md` §7):
+`quality_eval` 3/4 recall and 3/3 precision with 0 findings on both clean files,
+`real_model` one finding in 0.8 s, `soak` 10/12 applied with 2 unparseable.
 
 **Previously**: everything in the roadmap is built. The next useful step is a longer
 real-model soak — the six runs so far are one language on one model, and the last three
@@ -54,11 +53,14 @@ which a headless harness cannot drive.
 
 ## Open questions
 
-1. **Which model, and at what cost.** Everything automated runs against `verify/stub_model.py`.
-   A real run needs an endpoint and a model name; the local servers serve
-   `qwen3.6-35b-a3b-iq3xxs` (port 37313) and `qwen3.8-27b-gsq-rco-iq3xxs` (port 40583). No
-   automated test has touched either, because waking a sleeping model consumes VRAM and GPU
-   arbitration here is manual. Awaiting the user's call.
+1. **Which model, and at what cost.** The suite runs against `verify/stub_model.py` by default;
+   the real-endpoint harnesses now run through OpenRouter (`google/gemini-2.5-flash-lite`, key
+   from `~/.omp/agent/openrouter.key`), and the decide tier was exercised against the hosted
+   `typesafe/jev-1.13` — see `docs/VERIFICATION.md` §7 for the numbers, including 3/4 recall on
+   that cheap model against 4/4 for `deepseek/deepseek-v4-flash`. The local servers serve
+   `qwen3.6-35b-a3b-iq3xxs` (port 37313) and `qwen3.8-27b-gsq-rco-iq3xxs` (port 40583); neither
+   has been woken for this work, because that consumes VRAM and GPU arbitration here is manual.
+   Awaiting the user's call.
 2. **Whether `triggers.diagnostics` should stay `save`.** `save` is predictable and cheap;
    `idle` is more ambient but fires while typing. Default is `save`; measured cost on a real
    model will decide it.
@@ -109,7 +111,7 @@ which a headless harness cannot drive.
 | `python3 verify/cli_parity.py` | 25/25 — the CLI and the LSP agree exactly, `jev inspect` included |
 | `bash verify/omp_lsp.sh` | 0 failures, 0 skips — OMP, a client that shares no code with this repository, receives a rule's finding over `textDocument/diagnostic` and reaches `workspace/executeCommand jev.inspect`; a no-rules control finds nothing |
 | `python3 verify/outcome_test.py` | 18/18 — the `jev.outcome` record and the `jev.usage` counts |
-| `python3 verify/quality_eval.py --base-url … --model deepseek/deepseek-v4-flash` | **cannot run here** (no real endpoint; the suite reports it as `?`). Last measured 2026-09-18: 4/4 recall, 4/4 precision, 0 findings on 2 clean files |
+| `python3 verify/quality_eval.py --base-url https://openrouter.ai/api/v1 --model google/gemini-2.5-flash-lite` | **recall 3/4, precision 3/3, 0 findings on both clean files**, 6 calls / 2950 tokens billed, 4.5 s, exit 0 — the miss (`swallowed_error.py`) is run-to-run variance on a cheap model (a control run with the same model caught 4/4). Runnable whenever an endpoint and a key are given (`JEV_API_KEY_ENV` names the chat tiers' key variable); the suite reports the row as `?` when none is |
 | `python3 verify/repo_bench.py --repo . --limit 40` | 40 files, 33 analysed, 62 findings, **3.21 per 1000 lines** (three runs: 3.21 / 3.48 / 3.71; 7 files per run outran the 60 s per-file bound and are reported as such). Measured 2026-09-18, before the inline-completion removal, which touches no findings path |
 | `nvim --headless -l verify/nvim_ui_test.lua` | 0 failures, 0 skips — three consecutive runs with a fresh stub (`--stub-model-url`-style endpoints matter: a stale stub on the port is what VERIFICATION.md §"red run" warns about) |
 

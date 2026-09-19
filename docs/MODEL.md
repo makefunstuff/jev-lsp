@@ -9,7 +9,7 @@ router does not care.
 |---|---|---|---|---|
 | `decide` | The rules pass's questions — one value per candidate | a **decision** model (System One), no prose | background, no user wait; `timeout_ms` 5000 | the rules pass (§2), `jev.inspect` |
 | `reason` | Actions, plans, explanations | 7–32B instruct | p50 < 2 s (resolve) | `codeAction/resolve`, `jev.plan` |
-| `review` | Findings, post-apply verification | 7–32B instruct, different prompt | background, no user wait | worker, `jev.review` |
+| `review` | Findings (the chat review), `jev.review` | 7–32B instruct, different prompt | background, no user wait | worker, `jev.review` |
 
 `reason` and `review` are deliberately separate endpoint slots even when they point at the
 same server: a finding review and a rewrite must not share a prompt template version, and
@@ -69,10 +69,14 @@ trigger -> verb -> tier
 | `codeAction/resolve` | fix, harden, types, docs, rewrite, test, generate | `reason` |
 | `codeAction/resolve` | explain, review | `reason` |
 | `jev.review` (the "Review this" action, or `:Jev review`) | — | `review` |
-| post-apply verification | — | `review` |
 
 No dynamic routing heuristics. A table, visible in one place, overridable per verb in
 config.
+
+**The post-apply check is not a model call.** After the client applies an edit the server
+compares the new bytes against its own prediction and publishes an `ERROR` diagnostic on a
+mismatch (PROTOCOL §8). It does not parse the result, and nothing in `crates/` does
+(`docs/VERIFICATION.md` §11).
 
 **The ambient row is the one that changed.** With rules on — the default — the pass that runs on
 save asks the `decide` tier one question per candidate and never touches a chat tier; the chat

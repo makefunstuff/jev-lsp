@@ -240,7 +240,7 @@ Not built in phases 1–2.
 | Model unreachable | Actions resolve with no edit; one `window/showMessage` per session; findings unaffected (cache served); CLI exit 1 |
 | Model timeout | Resolve returns the action unchanged; client falls back `[R4]`; no error surfaced as a popup |
 | Model returns invalid JSON | Bounded repair (2 attempts, `repair.rs`), then the action resolves unchanged and a debug log records the raw output |
-| Model returns an edit that will not parse | The edit is dropped, not applied; a `WARNING` finding is published naming the reason |
+| Model returns an edit that would not parse in its language | Nothing detects it: the contract check is structural (anchors locate, nothing duplicates) and the post-apply check is a text comparison, so the edit is applied as the answer wrote it. The real-endpoint harnesses report it (`docs/VERIFICATION.md` §11) |
 | Stale target at resolve | Action re-marked `stale`, no edit; the picker offers "recompute" |
 | Budget exhausted | `over_budget` state; work continues on cache; recovery is automatic at the window boundary |
 | Cache eviction mid-flight | Recomputed; correctness never depends on cache presence |

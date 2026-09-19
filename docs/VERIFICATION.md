@@ -22,10 +22,10 @@ not for the code they touch.
 | `verify/dismiss_test.lua` | built | 0 failures, 0 skips — a finding is dismissed, recorded per repository, and does not resurface |
 | `verify/rules_live.lua` | built | 0 failures, 0 skips on Neovim 0.12.5 **and** 0.12.1 — a rule's finding reaching the sign column, `:Jev inspect` answering with the same finding and its counts |
 | `verify/harness_log.lua` | built | shared by the Lua harnesses: a red run prints the server's own log lines |
-| `verify/real_model.py` | built | real endpoint, reports rather than asserts; run against DeepSeek through the omp auth gateway |
-| `verify/soak.py` | built | several languages through the whole loop against a real endpoint; last result (2026-09-18) 8/9 applied, 0 unparseable |
+| `verify/real_model.py` | built | the end-to-end loop against a real endpoint: ambient 0.8 s, 1 finding (`file handle is never closed`), 9 actions offered including `quickfix.jev`, resolve 0.7 s `state=ready`, 1371 tokens. Sets `rules.enabled = false` (it measures the chat review) and exits 1 when no model answered (§7) |
+| `verify/soak.py` | built | the whole loop over six languages against a real endpoint: **10/12 runs applied an edit, 2 left the file unparseable, 12/12 billed**; ambient 0.6–60 s, resolve 0.7–2.1 s; exit 1 when a run left a broken file (§7, §11) |
 | `verify/stub_model.py` | built | scripted endpoint; no GPU, no network. Answers the decision wire too (`/systemone`) |
-| `verify/quality_eval.py` | built | **not runnable here** (no real endpoint): the suite reports it as `?`. Last measured **2026-09-18 against `deepseek/deepseek-v4-flash`** — 4/4 planted defects caught, 4/4 precision, **0 findings across 2 clean files**, 0 discarded |
+| `verify/quality_eval.py` | built | runnable whenever an endpoint and a key are given; the suite reports it as `?` when none is. Last run (`google/gemini-2.5-flash-lite` via OpenRouter): **recall 3/4, precision 3/3, 0 findings on both clean files**, 6 calls / 2950 tokens billed, 4.5 s, exit 0 — `swallowed_error.py` was missed, run-to-run variance on a cheap model (a control with the same model caught 4/4); the older 4/4 was `deepseek/deepseek-v4-flash`, 2026-09-18 |
 | `verify/outcome_test.py` | built | 18/18 — `jev.outcome` recorded, `jev.usage` counted, the unknown event kept verbatim. Proven to fail on the pre-change binary |
 | `verify/repo_bench.py` | built | real endpoint, a measurement rather than a threshold: 40 files of this repository: 62 findings, **3.21 per 1000 lines** (three runs, 3.21/3.48/3.71; measured 2026-09-18) |
 | `verify/nvim_live.lua` | built | 0 failures, 0 skips — real plugin, real server, real buffer |
@@ -229,7 +229,7 @@ is measured separately and reported as `[U]` context, never as a pass condition.
 | "The frozen contract is implemented by a real client" | `verify/probes/trace.lua` green — a reference server's payloads for §2/§4/§8 are accepted, applied, and refused exactly as specified |
 | "Every file is supported, not just known filetypes" | `verify/probes/language.lua` green — 8/11 attached by the built-in path, 11/11 after the plugin pass, including files with no language at all |
 | "The model output is usable" | golden intents |
-| "The findings are quiet enough to live with" | `verify/quality_eval.py` — last measured 2026-09-18 against `deepseek/deepseek-v4-flash`: 4/4 planted defects caught and zero findings on the two clean files. It needs a real endpoint, so the suite reports the row as `?` rather than running it |
+| "The findings are quiet enough to live with" | `verify/quality_eval.py` against a real endpoint — `google/gemini-2.5-flash-lite` via OpenRouter: 3/4 defective files caught, 3/3 findings at a planted defect, **0 findings across the two clean files**, 0 discarded (one miss, run-to-run variance on a cheap model). The suite reports the row as `?` when no endpoint is configured; §7 has the invocation and the older `deepseek/deepseek-v4-flash` figures |
 | "What the user does with an offer is known" | `verify/outcome_test.py` — `jev.usage` counts it and the line is in `<root>/.git/jev/session.jsonl` |
 | "The repository's own rules are what runs ambiently" | `verify/rules_test.py` green, and `verify/rules_live.lua` green on both Neovim versions — the rule's finding reaches the sign column carrying the rule's title, the judgement's reason and `data.source = "rules"` |
 | "Both front ends answer a rule the same way" | `verify/cli_parity.py` — `jev inspect` and the LSP path produce identical findings for the same rules and text |
@@ -240,18 +240,80 @@ is measured separately and reported as `[U]` context, never as a pass condition.
 Anything not covered above is reported as unverified, with the exact probe that would
 settle it.
 
-## 7. Real model
+## 7. Real endpoints
 
-`verify/real_model.py` runs the live server against a real endpoint and reports what it
-observes rather than asserting stub-shaped expectations. Run through the omp auth gateway,
-which resolves the provider credential server-side, so no key is handled here:
+The three harnesses below run against a real endpoint on request. They are runnable whenever one
+is reachable — the suite's `?` means "no endpoint configured", not "cannot run". All three set
+`"rules": {"enabled": false}` in their `workspace/configuration` payload, because they measure the
+**chat review**, which is no longer the ambient pass (the rules pass is).
 
 ```sh
-python3 verify/real_model.py --base-url http://127.0.0.1:4000/v1 --model deepseek/deepseek-flash
+export OPENROUTER_API_KEY="$(cat ~/.omp/agent/openrouter.key)"   # the value, never printed
+export JEV_API_KEY_ENV=OPENROUTER_API_KEY                        # the NAME, for the chat tiers
+
+python3 verify/quality_eval.py --base-url https://openrouter.ai/api/v1 --model google/gemini-2.5-flash-lite
+python3 verify/real_model.py   --base-url https://openrouter.ai/api/v1 --model google/gemini-2.5-flash-lite
+python3 verify/soak.py         --base-url https://openrouter.ai/api/v1 --model google/gemini-2.5-flash-lite --rounds 2
 ```
 
-Against `deepseek/deepseek-flash`, six consecutive runs, after the three defects below were
-fixed:
+`JEV_API_KEY_ENV` names the variable holding the chat tiers' key (`models.reason` and
+`models.review`); the decide tier keeps its own name (`api_key_env`, default `TYPESAFE_API_KEY`).
+Each harness exits non-zero when no model was reached, so `0 findings, 0 edits` cannot be mistaken
+for a clean run.
+
+**`quality_eval.py`** — is the review right, on six labelled fixtures:
+
+| | |
+|---|---|
+| `google/gemini-2.5-flash-lite` (OpenRouter) | recall **3/4**, precision **3/3**, **0 findings on both clean files**, 0 discarded; 6 calls / 2950 tokens billed, 4.5 s, exit 0 |
+| the miss | `swallowed_error.py` drew no finding (`discarded=0`, so nothing was dropped for an unlocatable anchor). A control run with the same model caught 4/4 — run-to-run variance on a cheap model |
+| `deepseek/deepseek-v4-flash`, 2026-09-18 | 4/4 recall, 4/4 precision, 0 findings on the clean files |
+
+**`real_model.py`** — the end-to-end loop, one run: the ambient review pass 0.8 s and 1 finding
+(`file handle is never closed`, line 5), 9 actions offered including `quickfix.jev`, resolve 0.7 s
+with `state=ready`, 1371 tokens across 2 calls, exit 0.
+
+**`soak.py`** — two rounds over Python, Rust, Go, TypeScript, Markdown and an unknown file:
+**10/12 runs applied an edit, 2 left the file unparseable, 12/12 runs billed**; ambient
+0.6–60 s (the 60 s rows are runs where the review found nothing — the loop waits for a finding
+rather than for the pass to finish), resolve 0.7–2.1 s. It exits 1 because of the two broken
+files. Both markdown runs were model answers with no replacements, rejected by the server with
+the reason kept in the row.
+
+### The decide tier against a real Jev endpoint
+
+The rules pass's questions were put to the hosted decision model through OpenRouter, wire
+`open_router` (`POST {base}/alpha/decisions`), model `typesafe/jev-1.13`:
+
+```sh
+export TYPESAFE_API_KEY="$(cat ~/.omp/agent/openrouter.key)"   # the name api_key_env holds
+JEV_DECIDE_WIRE=open_router JEV_DECIDE_BASE_URL=https://openrouter.ai/api \
+JEV_DECIDE_MODEL=typesafe/jev-1.13 target/release/jev inspect --force handler.rs
+```
+
+- one `.unwrap()` in a handler-shaped Rust function answered `noul = true` at **p = 0.84**, above
+  the rule's 0.75 floor, and the finding reached stdout with `exit=0` (504 in / 29 out tokens,
+  0.33 s);
+- eight observations of the same question on the same fixture ranged **p = 0.82–0.86** — the
+  endpoint does not reproduce a fixed value even at `temperature: 0.0`, so a rule floor close to
+  the answer will flip between runs (measured, not inferred);
+- the endpoint billed **532 tokens ≈ $0.000021** for one decision (its own `usage.cost`, replayed
+  raw and matched against the server's `budget.tokens_used`), and the finding's shape was
+  identical to the stub's — same `label`, `line`, `start_line`/`end_line`, `severity`, `verb`,
+  counts and exit code — with a different `id`, because the id hashes the detail and the two
+  details differ;
+- the key had to be exported under the name `api_key_env` holds: with the wire corrected but the
+  key as `OPENROUTER_API_KEY`, the call failed loudly (`decision call failed: POST …`) rather
+  than silently; the settings channel can name another variable (`models.decide.api_key_env`),
+  the environment cannot.
+
+`JEV_DECIDE_WIRE` spellings were checked end to end: `openrouter`, `OPEN_ROUTER` and
+`" OpenRouter "` all selected `/alpha/decisions`; `openroute` (a typo) left the wire unchanged and
+posted to `/systemone`, which is the documented behaviour, not a fallback.
+
+**The older gateway run**, kept for comparison: `deepseek/deepseek-flash` through the omp auth
+gateway (which resolves the credential server-side), six consecutive runs after the three defects
+below were fixed:
 
 | | measured |
 |---|---|
@@ -261,10 +323,9 @@ fixed:
 | resulting file parses | 6/6 |
 
 This is what the fast path buys: the menu itself is still a cache read, and the seconds are
-spent only after a pick. It also closed the last untested claim — every earlier result came
-from the scripted endpoint.
+spent only after a pick.
 
-### Local model
+### Local model (2026-09-18)
 
 The same soak against the local `llama.cpp` server (`qwen3.6-35b-a3b-iq3xxs`,
 `127.0.0.1:37313`), two rounds over Python, Rust and TypeScript:
@@ -431,21 +492,20 @@ Recorded because each was invisible to a scripted model, and each is now pinned 
 - **Model quality** on any verb. The suite proves the pipeline, never the usefulness of a
   particular model's output; that is measured by the user, in the editor, and recorded
   separately.
-- **A real model.** Every automated run uses `verify/stub_model.py`. The HTTP client, the
-  tier config, the `think` control, and the response parser are unit-tested against canned
-  payloads, and the wiring is exercised end to end — but no automated test has talked to a
-  live `llama.cpp` server, because that costs a GPU. Run it deliberately:
-  `JEV_BASE_URL=http://127.0.0.1:<port>/v1 JEV_MODEL=<model> python3 verify/smoke.py`.
-- **A real decision endpoint.** The decide tier's default is remote
-  (`https://api.typesafe.ai/v1`, `TYPESAFE_API_KEY`), and no harness here has ever called it:
-  every rules run — `rules_test.py`, `rules_live.lua`, the negative controls — points
-  `JEV_DECIDE_BASE_URL` at `verify/stub_model.py`, which answers `/systemone` with a scripted
-  decision. What is verified is the wire's shape, both paths (`systemone` and
-  `/alpha/decisions`), and the parsing of every answer kind; what is *not* verified is the
-  hosted endpoint's own behaviour under this load. The local alternative
-  (`http://127.0.0.1:8009/v1`, model `kev-latest`) is likewise unexercised here.
-- **Real-model latency.** The `codeAction` budget is asserted against the stub. What a
-  7B–35B model costs on this machine in `codeAction/resolve` is unmeasured.
+- **A local model, since the rules pass became the ambient path.** The runs in §7 are hosted
+  (OpenRouter). The local `llama.cpp` soak in §7 is from 2026-09-18, before the ambient pass
+  changed, and no local server was started for the current numbers. The chat harnesses are run
+  the same way against one:
+  `JEV_BASE_URL=http://127.0.0.1:<port>/v1 JEV_MODEL=<model> python3 verify/real_model.py`.
+- **The hosted default decide endpoint.** `api.typesafe.ai` has not been called from here. What
+  *was* called is the same model through a different route — OpenRouter's
+  `/alpha/decisions`, `typesafe/jev-1.13`, eight observations at p = 0.82–0.86 (§7) — so the
+  wire, the body, the parsing and the key name are verified against a real decision endpoint;
+  what remains untested is the vendor's own base URL and its credential. A local System One
+  server (`http://127.0.0.1:8009/v1`, model `kev-latest`) is likewise unexercised.
+- **Real-endpoint latency** beyond the samples in §7. The `codeAction` budget is asserted
+  against the stub; the hosted chat numbers are ambient 0.6–60 s and resolve 0.7–2.1 s on a
+  cheap model, which is a measurement rather than a budget.
 
 ## 11. Known limitations
 
@@ -471,3 +531,26 @@ Recorded because they are deliberate boundaries, not oversights:
 - **`languages.overrides[].verbs` narrows the menu but nothing enforces the complement** —
   a client can invoke any verb through a hand-built action. The server validates the result,
   not the request (the version stamp and anchor rules are what protect the buffer).
+- **Nothing in `crates/` parses the result of an applied edit, and that is deliberate.** An
+  edit is validated *structurally*: `edit::build_proposal` checks that every anchor locates
+  exactly once and that a replacement does not duplicate lines it did not consume, the scope and
+  version stamps are applied, and after the client applies it the server compares the bytes to
+  its own prediction (PROTOCOL §8) — a text comparison, which catches a client that applied
+  something else, not text that is invalid in its language. There is no treesitter parser in the
+  server and no language-level check anywhere, so `state = "ready"` means *the contract passed*,
+  never *the file still compiles*.
+
+  The shape this misses, measured three times on `google/gemini-2.5-flash-lite` (§7): the answer
+  replaced one statement with a block header and did not re-indent the body —
+
+  ```diff
+  -    f = open(path)
+  +    with open(path, encoding="utf-8") as f:
+         return json.load(f)["port"]
+  ```
+
+  — `state = "ready"`, the anchor resolved where the server said it did, and the file no longer
+  parses. That is the model choosing the wrong anchor granularity, and it is why `soak.py` and
+  `real_model.py` call `ast.parse` on the result and report `BROKEN`/`unparseable`: the harness
+  is the only place that question is asked. `docs/MODEL.md` §5's repair loop answers a different
+  question (did the answer satisfy its contract, and can it be anchored).
