@@ -56,6 +56,36 @@ Open a file and save. A finding appears as a diagnostic on the line when the rul
 and the decision both accept it. With no rule files, the pass publishes nothing and reports
 `no_rules` rather than a clean file. `docs/TUTORIAL.md` §3.7 walks through writing one.
 
+## Use it with another LSP client
+
+`jev-lsp --stdio` is a language server, so any client that can start one can use it. The plugin
+is optional: without it you still get findings (pull diagnostics plus
+`workspace/diagnostic/refresh`), edits (`codeAction`, `codeAction/resolve`) and every command
+(`workspace/executeCommand`, including `jev.inspect`). What the plugin adds is Neovim-specific
+only: the attach pass, the keymaps, `:Jev`.
+
+The server reads its endpoints from the environment it is started with, so export
+`JEV_BASE_URL`, `JEV_MODEL`, `JEV_DECIDE_BASE_URL`, `JEV_DECIDE_MODEL` and `JEV_DECIDE_WIRE`
+before launching the harness, or set them in the client's server block if it has one.
+
+OMP, the entry `verify/omp_lsp.sh` exercises, written to `<project>/.omp/lsp.json` (or
+`~/.omp/agent/lsp.json` to apply it to every project):
+
+```json
+{"servers":{"jev-lsp":{"command":"/path/to/jev-lsp/target/release/jev-lsp","args":["--stdio"],"fileTypes":[".rs"],"rootMarkers":[".git"]}}}
+```
+
+OpenCode, from its schema (`https://opencode.ai/config.json`, `lsp`), where `command` is an
+array and `env` carries the endpoint variables:
+
+```json
+{"lsp":{"jev-lsp":{"command":["/path/to/jev-lsp/target/release/jev-lsp","--stdio"],"extensions":[".rs"],
+                    "env":{"JEV_DECIDE_BASE_URL":"http://127.0.0.1:8009/v1","JEV_DECIDE_MODEL":"kev-latest"}}}}
+```
+
+Other harnesses keep the same three things in their own file: a command, the extensions it
+applies to, and a root marker.
+
 ## What you get
 
 | key | |
