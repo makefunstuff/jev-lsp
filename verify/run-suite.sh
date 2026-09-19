@@ -20,6 +20,15 @@
 #                     stub that is already up may belong to another suite that is mid-run.
 #   NVIM_BINS="…"     space-separated Neovim binaries for the Lua harnesses.
 #                     Default: the 0.12.5 build plus the installed `nvim`.
+#   JEV_API_KEY_ENV   name of the variable holding the chat tiers' key (default
+#                     `OPENROUTER_API_KEY`); the *name* is handed to the harness, never the
+#                     value. `quality_eval` needs it — see `JEV_QUALITY_*` below.
+#   JEV_QUALITY_BASE_URL / JEV_QUALITY_MODEL
+#                     the real-endpoint row's endpoint and model. Defaults
+#                     `https://openrouter.ai/api/v1` and `google/gemini-2.5-flash-lite` (the
+#                     pair `docs/VERIFICATION.md` §7 records). If the named key variable is
+#                     empty or the endpoint does not answer, the row is `?` with the reason —
+#                     never a pass, never a failure.
 
 set -u
 
@@ -221,10 +230,47 @@ if [ "${NVIM_ONLY:-0}" != "1" ]; then
   # unavailable.
   run "omp_lsp" bash verify/omp_lsp.sh "$BIN_NAME"
 
-  {
-    echo "### quality_eval"
-    echo "(needs a real model endpoint; not run — none reachable on 4000/8080/37313)"
-  } >> "$OUT"
+  # The real-endpoint row. `JEV_API_KEY_ENV` names the variable that holds the key — the chat
+  # tiers read the *name*, never the value, and the value never reaches this script's output.
+  # A missing key or an endpoint that does not answer is `?` with the reason: never a pass, and
+  # never a failure. When it does run, the row's exit code is the harness's own, so a red
+  # harness is red here.
+  QUALITY_KEY_VAR="${JEV_API_KEY_ENV:-OPENROUTER_API_KEY}"
+  QUALITY_BASE="${JEV_QUALITY_BASE_URL:-https://openrouter.ai/api/v1}"
+  QUALITY_MODEL="${JEV_QUALITY_MODEL:-google/gemini-2.5-flash-lite}"
+  QUALITY_WHY=""
+  if [ -z "${!QUALITY_KEY_VAR:-}" ]; then
+    QUALITY_WHY="JEV_API_KEY_ENV names $QUALITY_KEY_VAR, which is unset or empty"
+  elif ! python3 - "$QUALITY_BASE" <<'PY'
+import socket, sys, urllib.parse
+url = urllib.parse.urlparse(sys.argv[1])
+if not url.hostname:
+    sys.exit(1)
+port = url.port or (443 if url.scheme == "https" else 80)
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(3)
+try:
+    s.connect((url.hostname, port))
+except Exception:
+    sys.exit(1)
+finally:
+    s.close()
+PY
+  then
+    QUALITY_WHY="$QUALITY_BASE does not answer (no TCP to its host)"
+  fi
+
+  if [ -n "$QUALITY_WHY" ]; then
+    {
+      echo "### quality_eval"
+      echo "? not run: $QUALITY_WHY"
+      echo "  (it measures the review against a real model: export the key variable, or set"
+      echo "   JEV_QUALITY_BASE_URL / JEV_QUALITY_MODEL for a different endpoint and model)"
+    } >> "$OUT"
+  else
+    run "quality_eval" python3 verify/quality_eval.py \
+      --base-url "$QUALITY_BASE" --model "$QUALITY_MODEL"
+  fi
 fi
 
 echo "=== summary ===" >> "$OUT"
