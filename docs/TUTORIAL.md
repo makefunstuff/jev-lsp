@@ -25,6 +25,12 @@ code and greenfield-*with-a-spike*.** It cannot help you think, and it will not 
 for you. But the moment you have typed something — even something you intend to delete — it can
 review it, explain it, answer about it, and rewrite it in place.
 
+**The other half of that seam is `clank`** (`~/Work/clank`, on `PATH` as `clank`): a unix filter
+that takes a prompt and whatever you pipe into it and returns an answer on stdout. It is for the
+questions that have no file behind them yet — *what does this error mean, which flag does this
+tool take, how is this API shaped* — and it is where an unfamiliar API stops being unfamiliar.
+§3.6 is the loop between the two tools, from an empty directory to code this server can work on.
+
 ### The spike loop
 
 This is the from-scratch workflow. It is not a lesser mode; for a new project it is the one
@@ -288,6 +294,105 @@ what it would take to change it, and it is deliberately not built.
 - `:Meta hints on|off` → inlay hints for this buffer.
 - `:Meta log` → opens Neovim's LSP log, which is where refusals and model errors are written.
 
+### 3.6 Starting from nothing: clank, then a spike, then this
+
+The greenfield loop, end to end, for the case §0 describes — a new thing against APIs you do not
+know. Two tools, one handoff, and a clear line between them: **`clank` while the answer is a
+paragraph, this server once the answer is code.**
+
+`clank` is the same shape as a shell tool: prompt and context in on argv/stdin, data out on
+stdout, breadcrumbs on stderr, exit `0` when every prompt was answered and `1` when one was not
+(a truncated or empty answer counts as failure — an answer that hit the token ceiling is not an
+answer). Its docs are `~/Work/clank/README.md`, `CHEATSHEET.md`, `PROTOCOL.md` and
+`docs/use-cases.md`; it defaults to your local server (`CLANK_MODEL`, `CLANK_BASE_URL` override,
+as do `--model`/`--base-url`). If the default endpoint is not listening — the router unloads
+idle models, so `:40583` is often down — that is a `connection refused`, not a clank bug: point
+`CLANK_BASE_URL` at the router or whichever endpoint is up.
+
+**Step 1 — ask, in the shell, with the material piped in.** No file exists yet, so nothing in
+the editor can help; the context is whatever you pipe.
+
+```sh
+# what is this thing telling me?
+cat build-error.log | clank --thinking off -m "what is the cause, and what is the smallest fix?"
+
+# how is this API shaped? (nothing to pipe, nothing to anchor)
+clank --thinking off -m "show the minimal Python call that paginates the foo API, one snippet"
+
+# let it look at the project itself instead of pasting files: four read-only tools
+clank --tools -m "where is the transcript cap defined? cite file:line"
+
+# when the answer should be data rather than prose
+clank --json-schema @schema.json -m "extract the required config keys" | jq -er .
+```
+
+(`--json-schema` needs an endpoint that honours the field the way llama.cpp does. Against an
+OpenAI-style gateway that ignores it, the model answers prose and clank exits `1` with
+*"final output is not valid JSON"* instead of passing it off — verified on both kinds of
+endpoint.)
+
+Observable: exactly one answer on stdout, nothing else; with `--tools` you also get `> tool …` /
+`< tool ok (N B)` lines on **stderr**, and `--jsonl` gives you one event per step with a `run`
+line first (model, endpoint, argv, thinking) so a trace says what produced it months later.
+
+**Pass `--thinking off` explicitly here.** The two tools differ on the default: this server
+sends `enable_thinking: false` unless told otherwise, while clank sends nothing at all unless
+told — so a local template that thinks by default will think, and bill for it, without saying
+so. It is the same switch in both (`chat_template_kwargs` for off, `reasoning_effort` for a
+level), it is portable on the local servers and advisory on a gateway, and the measured reason
+to prefer off is in `docs/MODEL.md` §1: with a level, the reasoning tokens eat the answer.
+
+**Step 2 — turn the answer into a file.** Ten to thirty lines that call the API the way you
+understood it. It does not need to work; it needs to exist:
+
+```sh
+mkdir -p ~/scratch/foo && cd ~/scratch/foo && git init
+vim probe.py     # the snippet, adapted to your guess
+```
+
+(`git init` is not decoration: dismissals and the session log live in `<root>/.git/meta/`, so a
+spike directory without a repository root gets no `:Meta dismiss` and no `:Meta session`.)
+
+**Step 3 — cross the handoff.** `:w` in that file. From here `clank` has nothing to add,
+because the question is no longer about the world — it is about *your* text:
+
+```vim
+:w                          " the analysis runs; a sign appears on any line worth talking about
+:Meta ask is this the right way to paginate, and what happens on a 429?
+<leader>ma                  " have it propose the edit in place, or:
+:Meta explain               " have it explain what you wrote, in a streamed buffer
+:Meta review                " findings for the file now, without saving
+```
+
+The difference from step 1 is not the model: it is that the file *is* the context, automatically,
+and the answer comes back as an edit that lands on the exact bytes or a diagnostic on the exact
+line. Note what the editor hands it for free — imports, the buffers you have been in, the scope
+under the cursor — and that `:Meta ask` needs no paste.
+
+**Step 4 — iterate.** Each new unknown goes back to the shell, each new file comes back here:
+
+```sh
+clank -c /tmp/foo.jsonl --thinking off -m "now add retry with backoff to that snippet"   # continue a chain
+clank --jsonl --thinking off -m "explain the 429 branch" > /tmp/foo.jsonl                # keep it for later turns
+```
+
+Then, as the spike becomes the project: `:Meta plan` over files that exist (steps need anchors —
+a from-scratch plan is refused, §7.2), findings on every save, `:Meta dismiss` for the ones you
+will not fix, `:Meta usage` to see whether any of it is paying off.
+
+| The question | Reach for | Because |
+|---|---|---|
+| What does this error mean, what does this tool take, how is this API shaped | `clank` | there is no document yet; the context is a pipe, and the answer is prose |
+| Where is X defined, in a project I have open | `clank --tools` **or** `:Meta where` | `:Meta where` greps locally first and asks with a bounded number of places, inside the editor — no shell hop |
+| Is this call right, what does this function do | `:Meta ask` / `:Meta explain` | the open file is the context, and the answer comes back anchored to it |
+| Change this, add a test, harden this | `<leader>ma` | needs a document and a unique anchor; that is the whole point of the trade |
+| Do this across three files | `:Meta plan` | one step per file, applied by the server with staleness refusal |
+
+Both keep stdout for data and stderr for diagnostics, both take the same thinking switch, and
+both refuse rather than guess: clank exits `1` on a truncated or empty answer rather than
+returning half of one, and this server refuses an edit it cannot anchor. That is why they compose
+instead of overlapping — the seam between them is *whether a file exists yet*, not quality.
+
 ---
 
 ## 4. Settings that matter
@@ -407,8 +512,8 @@ Recorded so they are not rediscovered as bugs. None of these is built.
 3. **`ask` can read one page, chosen by the model.** 64 KiB, https only, no redirects, requested
    as a bare `FETCH <url>` line. For an unfamiliar API that is often not the page you need, and
    there is no search, no `--help`, no man page, no registry. *Fix I would make:* nothing here —
-   a read-only command runner belongs in a shell tool, not in a language server. That is what
-   `clank` is for; this tool should keep proposing edits, not executing things.
+   a read-only command runner belongs in a shell tool, not in a language server. That is exactly
+   what `clank` is for (§3.6, step 1); this tool should keep proposing edits, not running things.
 4. **No repo index, no session memory, no chat pane.** Deliberate, and in PROTOCOL §12: the
    client owns document state, the cache is content-keyed and evictable, and the plan artifact
    is the continuation. Anything else would be a second source of truth.

@@ -32,7 +32,7 @@ removes all four:
 | `docs/ARCHITECTURE.md` | living | Components, process topology, document store, scheduler |
 | `docs/LANGUAGE.md` | living | Unconditional support, attachment ladder, language resolution, scope strategies |
 | `docs/UX.md` | living | The experience: scenarios, keymaps, plan buffer, approval, noise policy |
-| `docs/TUTORIAL.md` | living | **Start here** — install it, the four keys, the five workflows, the settings that matter, troubleshooting |
+| `docs/TUTORIAL.md` | living | **Start here** — install it, the four keys, the six workflows (including the `clank` → spike → meta-lsp loop for code that does not exist yet), the settings that matter, troubleshooting |
 | `docs/MODEL.md` | living | Model tiers, routing, context builder, output contracts, budgets |
 | `docs/VERIFICATION.md` | living | How each claim gets proven; independent client, live Nvim, defect injection |
 | `docs/ROADMAP.md` | living | Units with acceptance criteria |
