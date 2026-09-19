@@ -14,7 +14,7 @@
           "true": "code that ships can reach it and the value is not guaranteed",
           "false": "it is in a test module, quoted in a doc comment, or behind an invariant the surrounding lines state"
         },
-        "min_probability": 0.75
+        "min_probability": 0.85
       },
       "verb_hint": "fix"
     }
