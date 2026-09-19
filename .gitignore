@@ -11,6 +11,11 @@ tags
 # Runtime artifacts — never tracked, always deletable
 /meta.log
 *.meta-cache
+# A path a client derives from an artifact's `meta://` URI when it treats it as a file
+# (`meta://explanation/<id>` → `meta:/explanation/<id>`). One such directory was written by an
+# ad-hoc check in an earlier session and committed by accident; the harness in this tree is not
+# the writer, and this keeps the next one out of the repository rather than out of git history.
+meta:/
 
 # Python bytecode from the verification harness
 __pycache__/

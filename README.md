@@ -74,7 +74,7 @@ ln -s /path/to/meta-lsp/nvim ~/.local/share/nvim/site/pack/meta/start/meta
 
 # 2. point the server at a model (or use settings.meta.models.* instead)
 export META_BASE_URL=http://127.0.0.1:8080/v1
-export META_MODEL=qwen2.5-coder-7b-instruct
+export META_MODEL=your-model-name        # the built-in name is a placeholder, not a suggestion
 ```
 
 ```lua
@@ -98,9 +98,6 @@ This is not aspirational — `verify/nvim_live.lua` bootstraps through exactly t
 Two products and four keys. Findings → actions, and ask, are what this server is for;
 everything else is reachable by typing. There is no ghost text: inline completion was removed
 on 2026-09-19 (STATUS.md), and generated code is asked for through an action or `:Meta ask`.
-
-Served today: `status`, `explain`, `review`, `plan`, `session`, `usage`, `recompute`, `cancel`,
-plus the plugin-local `undo`, `dismiss`, `stop`, `start`, `log`.
 
 Model endpoints come from config, never from a file of ours: point `settings.meta.models.*`
 at a local llama.cpp OpenAI-compatible server, or set `api_key_env` for a remote tier.
@@ -160,11 +157,8 @@ fallback, and `scope_source` says which was used. `docs/ROADMAP.md` tracks the r
 ```sh
 cargo build --release
 
-# try it by hand: see test/visual/README.md for what to press and what to expect
-nvim -u test/visual/init.lua
-
 # no GPU, no network: a scripted endpoint stands in for the model
-python3 verify/smoke.py                       # 32 end-to-end checks, self-hosting its stub
+python3 verify/smoke.py                       # 44 end-to-end checks, self-hosting its stub
 python3 verify/queue_test.py                  # the mid-flight-edit race, stalled stub
 # real model (via the omp auth gateway, which resolves the credential server-side)
 python3 verify/real_model.py --base-url http://127.0.0.1:4000/v1 --model deepseek/deepseek-flash
