@@ -1,0 +1,22 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "no-success-without-a-measurement",
+      "title": "A harness must not report success it did not measure",
+      "text": "A harness that measured nothing must not exit 0: a zero result and a missing result look identical in a table, and only one of them is a defect.",
+      "severity": "warning",
+      "applies_to": ["**/verify/**/*.py"],
+      "inspection": { "kind": "regex", "pattern": "return 0\\b|sys\\.exit\\(0\\)" },
+      "judgement": {
+        "question": "Is this success path reachable when nothing was measured — no model call, no finding, no assertion — so that a run which did nothing reports success?",
+        "criteria": {
+          "true": "an empty result set, a skipped model call, or a check that never ran reaches this return with exit 0, so a run that did nothing reports success",
+          "false": "reaching it requires a measurement or an assertion before the return"
+        },
+        "min_probability": 0.75
+      },
+      "verb_hint": "fix"
+    }
+  ]
+}
