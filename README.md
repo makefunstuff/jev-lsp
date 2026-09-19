@@ -3,6 +3,7 @@
 > [!WARNING]
 > **Heavily work in progress.** The interface, the contract and the
 > configuration keys may change without notice; nothing here should be relied on yet.
+> this is PoC and heavily under slop-generating phases to proof that lsp approach actually work first
 
 An LSP server that turns your editor into an agent harness: the model observes your code in the
 background and proposes work through **standard LSP surfaces** — diagnostics, code actions, code
