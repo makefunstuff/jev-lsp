@@ -517,6 +517,13 @@ settings = {
   `rules.enabled = false` to end the ambient pass entirely (`docs/MODEL.md` §8). `JEV_BASE_URL`
   does **not** move this tier: it names an OpenAI-compatible chat server, and a decision is not a
   chat. `JEV_DECIDE_BASE_URL` / `JEV_DECIDE_MODEL` do.
+- **`wire` picks the path, and the key's name comes from `api_key_env`.** `wire` (or
+  `JEV_DECIDE_WIRE`) is `system_one` → `{base_url}/systemone` or `open_router` →
+  `{base_url}/alpha/decisions`; anything else is ignored and the wire in force is kept, so a typo
+  never silently posts to the wrong path (`:Jev status` shows `models.decide.wire`). The API key
+  is read from the variable **named by** `api_key_env` — `TYPESAFE_API_KEY` by default, with no
+  environment override for the name — so a hosted provider needs either that variable exported or
+  `api_key_env` changed in settings. `docs/MODEL.md` §8 has the worked recipe.
 - `rules.enabled = false` also returns the ambient path to the `review` tier, which is what this
   server did before rules existed — and which is *also* remote by default.
 - `think = 'off'` sends `chat_template_kwargs: {enable_thinking: false}` and is the default for

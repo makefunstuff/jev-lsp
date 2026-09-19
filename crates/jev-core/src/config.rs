@@ -399,6 +399,20 @@ impl Config {
                 self.models.decide.model = model;
             }
         }
+        if let Ok(wire) = std::env::var("JEV_DECIDE_WIRE") {
+            let value = wire.trim();
+            if !value.is_empty() {
+                // An unrecognised value is *ignored*, keeping whatever was in force, never
+                // coerced to the default: a typo that quietly sent every decision to the wrong
+                // path would be indistinguishable from the endpoint being down, and it would
+                // be the operator's own spelling that was wrong. The value actually in force is
+                // visible in `jev.status` (`models.decide.wire`) and in the server's
+                // "settings applied" line, so a mistyped override can be seen there.
+                if let Some(parsed) = Wire::parse(value) {
+                    self.models.decide.wire = parsed;
+                }
+            }
+        }
     }
 
     pub fn with_env_overrides(mut self) -> Config {
@@ -552,6 +566,42 @@ mod tests {
         // The rest of the decision tier survives a patch that mentions only one key.
         assert_eq!(merged.decision().timeout_ms, c.decision().timeout_ms);
         assert_eq!(merged.decision().wire, c.decision().wire);
+    }
+
+    #[test]
+    fn the_decision_wire_is_overridable_by_environment_in_both_spellings() {
+        // The wire decides the path, so reaching a provider's own endpoint depends on this
+        // being settable from the shell — `JEV_DECIDE_BASE_URL=https://openrouter.ai/api` with
+        // the default wire would POST `/api/systemone`, which is not the endpoint.
+        for (value, want) in [
+            ("system_one", Wire::SystemOne),
+            ("systemone", Wire::SystemOne),
+            ("open_router", Wire::OpenRouter),
+            ("openrouter", Wire::OpenRouter),
+            ("  OpenRouter  ", Wire::OpenRouter),
+        ] {
+            std::env::set_var("JEV_DECIDE_WIRE", value);
+            let mut c = Config::default();
+            c.apply_env_overrides();
+            std::env::remove_var("JEV_DECIDE_WIRE");
+            assert_eq!(c.decision().wire, want, "{value:?}");
+        }
+
+        // A typo keeps the previous value: silently coercing it to the default would send
+        // requests somewhere the operator never asked for.
+        let mut held = Config::default();
+        held.models.decide.wire = Wire::OpenRouter;
+        std::env::set_var("JEV_DECIDE_WIRE", "openroute");
+        held.apply_env_overrides();
+        std::env::remove_var("JEV_DECIDE_WIRE");
+        assert_eq!(held.decision().wire, Wire::OpenRouter, "an unrecognised value is ignored");
+
+        // And whitespace is not an opinion, exactly as for the neighbouring variables.
+        std::env::set_var("JEV_DECIDE_WIRE", "   ");
+        let mut blank = Config::default();
+        blank.apply_env_overrides();
+        std::env::remove_var("JEV_DECIDE_WIRE");
+        assert_eq!(blank.decision().wire, Wire::SystemOne);
     }
 
     #[test]

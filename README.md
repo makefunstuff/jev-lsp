@@ -102,6 +102,13 @@ export JEV_MODEL=your-model-name        # the built-in name is a placeholder, no
 #    System One server instead:
 export JEV_DECIDE_BASE_URL=http://127.0.0.1:8009/v1
 export JEV_DECIDE_MODEL=kev-latest
+
+#    or another provider — the *wire* selects the path, and the key is read from the
+#    variable named by `api_key_env` (TYPESAFE_API_KEY unless you change it in settings):
+export JEV_DECIDE_BASE_URL=https://openrouter.ai/api
+export JEV_DECIDE_WIRE=open_router          # -> {base}/alpha/decisions, not /systemone
+export TYPESAFE_API_KEY=your-key            # an unrecognised JEV_DECIDE_WIRE is ignored,
+                                            # never coerced; `:Jev status` shows the wire in force
 ```
 
 ```lua

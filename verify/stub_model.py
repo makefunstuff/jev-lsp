@@ -335,7 +335,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, {"error": str(e)})
                 return
             with LOCK:
-                STATE["decisions"].append(body)
+                # The body, plus the path it arrived on: which *wire* a client used is
+                # otherwise invisible to a harness, and the two wires differ only in the path.
+                STATE["decisions"].append(dict(body, _path=path))
             self._send(200, _decision_body(body))
             return
 

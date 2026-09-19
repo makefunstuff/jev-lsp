@@ -717,8 +717,16 @@ a decision generates one value per question, so 64 tokens is generous and five s
 time for it, where the reason tier's numbers are sized for a rewrite. Pointing it at a local
 System One server is one config change away: `base_url = "http://127.0.0.1:8009/v1"`,
 `model = "kev-latest"`. `JEV_BASE_URL` — which names an OpenAI-compatible chat server —
-deliberately does **not** touch this tier; it has its own pair, `JEV_DECIDE_BASE_URL` and
-`JEV_DECIDE_MODEL` (an empty or whitespace value is ignored).
+deliberately does **not** touch this tier; it has its own variables, `JEV_DECIDE_BASE_URL`,
+`JEV_DECIDE_MODEL` and `JEV_DECIDE_WIRE` (an empty or whitespace value is ignored).
+`JEV_DECIDE_WIRE` takes `system_one`/`systemone` or `open_router`/`openrouter`, trimmed and
+case-insensitive, and selects the path appended to `base_url`; a value that is neither is
+**ignored with the wire already in force kept**, never coerced to the default, because a typo
+that quietly posted every decision to the wrong path would look exactly like the endpoint being
+down (`jev.status` reports `models.decide.wire`, so a mistyped override is visible). The API
+key's **variable name** comes from `api_key_env` (default `TYPESAFE_API_KEY`) and has no
+environment override — only its value is read from the environment, so a hosted provider means
+exporting the key under the configured name or changing `api_key_env`.
 
 **`rules` is the ambient pass.** With `rules.enabled` true — the default — the ambient pass is
 the rules pass, and the chat review runs only when it is asked for explicitly (`jev.review`,

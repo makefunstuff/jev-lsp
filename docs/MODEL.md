@@ -23,9 +23,15 @@ to run on every save — a decision costs a few dozen tokens where a review cost
 why the tier has its own key shape, `{wire, base_url, model, api_key_env, timeout_ms, max_tokens,
 temperature, think}` with `timeout_ms` 5000 and `max_tokens` 64 rather than the chat tiers'
 90 000/8192 (PROTOCOL §10). `wire` names the path appended to `base_url`: `system_one`
-(`/systemone`) or `open_router` (`/alpha/decisions`). There is deliberately **no
-`Tier::Decide`** in the code: `Config::tier()` answers the chat tiers, and a decision is a
-different protocol, so `Config::decision()` answers this one.
+(`/systemone`) or `open_router` (`/alpha/decisions`). `JEV_DECIDE_BASE_URL`,
+`JEV_DECIDE_MODEL` and `JEV_DECIDE_WIRE` set the first three from the environment;
+`JEV_DECIDE_WIRE` accepts `system_one`/`systemone` and `open_router`/`openrouter` (trimmed,
+case-insensitive) and **ignores anything else**, keeping the wire in force — a typo must not
+silently post to the wrong path, which is indistinguishable from a dead endpoint. The key's
+variable *name* is `api_key_env` (default `TYPESAFE_API_KEY`) and is config-only; only its value
+comes from the environment. There is deliberately **no `Tier::Decide`** in the code:
+`Config::tier()` answers the chat tiers, and a decision is a different protocol, so
+`Config::decision()` answers this one.
 
 Config is configuration-layer, not code (PROTOCOL §10 `models`). The chat tiers take
 `{base_url, model, api_key_env, timeout_ms, max_tokens, temperature, think}`. `think` mirrors
@@ -251,3 +257,22 @@ deliberately does **not** move this tier: it names an OpenAI-compatible chat ser
 decision is not a chat. Turning rules off returns the ambient path to the `review` tier (§2) —
 which is also remote by default, so a reader who wants *nothing* leaving the machine should point
 `models.reason` and `models.review` at a local endpoint too.
+
+**A hosted provider other than the default needs two things, and one of them is easy to miss.**
+
+```sh
+# the path is selected by the wire, not guessed from the host: without this the request would
+# POST {base}/systemone at OpenRouter and miss
+export JEV_DECIDE_BASE_URL=https://openrouter.ai/api
+export JEV_DECIDE_WIRE=open_router          # -> https://openrouter.ai/api/alpha/decisions
+export JEV_DECIDE_MODEL=<model>
+
+# the key is read from the variable *named by* `api_key_env`, which defaults to
+# TYPESAFE_API_KEY and has no environment override of its own — so export it under that name,
+# or set models.decide.api_key_env in config. Any other variable name is simply not read.
+export TYPESAFE_API_KEY=<key>
+```
+
+An unrecognised `JEV_DECIDE_WIRE` is ignored rather than coerced, so a typo leaves the previous
+wire in force; `jev.status` (`models.decide.wire`) and the server's `settings applied` log line
+are where you see which one is actually in force.

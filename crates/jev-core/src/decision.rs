@@ -27,6 +27,19 @@ pub enum Wire {
 }
 
 impl Wire {
+    /// Read a wire name.
+    ///
+    /// Both spellings are accepted: the serde spelling a config file uses (`system_one`) and
+    /// the one the service itself uses (`systemone`). Someone copying a base URL out of a
+    /// provider's documentation should not have to guess an underscore convention.
+    pub fn parse(value: &str) -> Option<Wire> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "system_one" | "systemone" => Some(Wire::SystemOne),
+            "open_router" | "openrouter" => Some(Wire::OpenRouter),
+            _ => None,
+        }
+    }
+
     /// The path appended to the configured base URL.
     pub fn path(self) -> &'static str {
         match self {
@@ -401,6 +414,18 @@ mod tests {
             instructions: format!("decide {id}"),
             criteria,
             reasons,
+        }
+    }
+
+    #[test]
+    fn both_spellings_of_a_wire_name_parse_and_nothing_else_does() {
+        assert_eq!(Wire::parse("system_one"), Some(Wire::SystemOne));
+        assert_eq!(Wire::parse("systemone"), Some(Wire::SystemOne));
+        assert_eq!(Wire::parse("open_router"), Some(Wire::OpenRouter));
+        assert_eq!(Wire::parse("openrouter"), Some(Wire::OpenRouter));
+        assert_eq!(Wire::parse("  OpenRouter  "), Some(Wire::OpenRouter));
+        for nonsense in ["openroute", "system", "", "  ", "open-router"] {
+            assert_eq!(Wire::parse(nonsense), None, "{nonsense:?}");
         }
     }
 
