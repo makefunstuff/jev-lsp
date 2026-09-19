@@ -63,9 +63,9 @@ cursor: inline completion was removed on 2026-09-19 (STATUS.md).
 <leader>ms   status: queue, budgets, cache hit rate
 ```
 
-Reachable by typing: `:Meta explain|review|plan|session|usage|stop|start`, alongside
-`ask|followup|where|hints|undo|dismiss|cancel|log|recompute` — the full subcommand set, since
-a keymap is an accelerator and not the surface. `:Meta ask --web <question>` is the
+Reachable by typing — the full subcommand set, since a keymap is an accelerator and not the
+surface: `ask|followup|where|explain|review|plan|dismiss|undo|hints|usage|session|recompute|`
+`status|stop|start|cancel|log`. `:Meta ask --web <question>` is the
 fetch-enabled form of ask: one https page may be read to answer, and the artifact names it.
 
 `:Meta usage` is the answer to "is this working": published findings, files analysed, and

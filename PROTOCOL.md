@@ -461,6 +461,15 @@ only answer "not implemented". Any command that is not served — an unknown nam
 future version adds before it is implemented — still answers with a structured
 `{ok: false, error: {code: "not_implemented"}}` rather than failing silently.
 
+**What the model may read off the machine.** Only `meta.ask` with `web: true`, and only this:
+the answer may be exactly one line, `FETCH <https url>`, which the server fetches once
+(https only, 64 KiB, no redirect following), shows the model the text under a heading naming
+the url, and records in the artifact as `_Read: <url>_`. A fetch that fails answers
+`fetch_failed` rather than dropping the page silently. Nothing else in this contract reaches
+the network or the filesystem: the server reads no file, and every other byte it sees arrived
+over the protocol from the client. This is the boundary that keeps a model from pulling
+arbitrary bytes into its own prompt without the user being able to see which page it read.
+
 **A plan step is applied by the server, not the client.** `meta.apply` resolves the step
 against the content the server currently holds, builds the edit, and sends
 `workspace/applyEdit` back to the client — so a step that has become stale is refused before
@@ -695,4 +704,5 @@ Recorded so the refusals are not relitigated:
 | 2026-09-18 | **§6.1 added: the command error codes are named.** They were already contract in practice — the CLI maps them to exit codes and the plugin surfaces them verbatim — but only `not_implemented` and `unknown_edit` were written down, so a harness asserting the real codes could be broken by a rename the document never mentioned. |
 | 2026-09-18 | **Resolve timeout raised 30 s → 90 s, ceilings raised, repair widened.** Measured against a real reasoning model: an 8192-token answer took over 60 s on a Rust rewrite, so the old 30 s cap converted valid-but-slow answers into transport errors; and a rejected answer is often answered the same way again, so the repair budget went from one attempt to two. `MAX_REPAIR_ATTEMPTS` now covers *applicability* failures as well as JSON ones — an anchor that cannot be located, or a replacement that repeats lines it did not consume — which docs/MODEL.md §5 specified and the implementation had not. Over a nine-run soak on three languages: 8 applied, 0 left a file unparseable, against 2/6 and 8/12 before. |
 | 2026-09-18 | **U7 built.** Inline completion is served and advertised: `textDocument/inlineCompletion` is registered as a custom method (the pinned `lsp-types` has no handler for a 3.18-draft method) and `inlineCompletionProvider` is injected into the `initialize` response, because Neovim attaches its completor only for a client that advertises it. Gates: off by default, binary/size/ignore, a content-hash answer cache, a prefix floor that applies only to timed requests, and its own per-minute window so completions cannot starve explicit work. Also implemented `workspace/didChangeConfiguration`, without which the plugin's kill switch could never take effect. |
+| 2026-09-19 | **The model's reach is written down.** §6 gains the `meta.ask --web` policy it had been relying on the implementation to keep: one `FETCH <https url>` line, one page, https only, 64 KiB, no redirects, the url named in the artifact, and `fetch_failed` when it does not arrive — plus the statement that nothing else in this contract touches the network or the filesystem (the server reads no file; everything else arrives over the protocol). Found by reading the tutorial against the code: the caps existed and were tested, but the contract did not say them. |
 | 2026-09-19 | **Inline completion withdrawn.** The feature was removed at the user's decision — generated code is asked for, not suggested under the cursor — so this contract no longer carries it: §2's capability block and the paragraph about injecting `inlineCompletionProvider`, §3.2's latency row for `textDocument/inlineCompletion`, §5's 200 ms debounce and 8-character prefix floor, §10's `models.fim` and `inline_completion` section, and the method itself. `crates/meta-lsp/src/{inline,advertised}.rs` are deleted with it. A client whose settings still mention `fim` or `inline_completion` is unaffected: unknown sections are ignored. |
