@@ -474,12 +474,13 @@ property that decides it, add the criterion that separates the cases, split one 
 — and measure again. Note also that a `false` answer is **invisible through `:Jev inspect`**,
 which publishes only what clears the floor: read the negative side by posting the request
 directly, or with the floor set to `0.0` (which still hides a `false`). On this repository's own
-code, with a floor of 0.75: the rule `no-unwrap-outside-tests` over `crates/jev-lsp/src/server.rs`
-found 2 candidates on every one of 15 runs, answers in a **0.75–0.81** band, and **2 of the 15
-runs published only one of the two lines** — 28 of the 30 individual line-answers cleared the
-floor, so a line whose answer lands just under it publishes nothing. That is a floor placed on the
-spread rather than endpoint flakiness; the fixture that *should* fire scored 0.96–0.97, which is
-the gap a floor belongs in.
+code: the rule `no-unwrap-outside-tests` over `crates/jev-lsp/src/server.rs` (two `.unwrap()` calls
+on literal URLs — an invariant, not a defect) answered in a **0.75–0.79** band, and at the 0.75
+floor it shipped with, **4 of 15 runs published one line and not the other**. It ships a floor of
+**0.85** now, where none of 15 runs published either line, while the fixture that must fire
+answered **0.97–0.98** and published on 15 of 15 at both floors — the false band's top is 0.79 and
+the true sample's bottom is 0.97, and 0.85 sits in that gap, deliberately below its midpoint (0.88)
+because a floor that is too high costs a missed defect.
 
 Three things that will otherwise cost you an hour:
 
