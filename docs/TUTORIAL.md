@@ -473,7 +473,13 @@ value of `min_probability` makes a boundary-straddling question stable, so sharp
 property that decides it, add the criterion that separates the cases, split one question into two
 — and measure again. Note also that a `false` answer is **invisible through `:Jev inspect`**,
 which publishes only what clears the floor: read the negative side by posting the request
-directly, or with the floor set to `0.0` (which still hides a `false`).
+directly, or with the floor set to `0.0` (which still hides a `false`). On this repository's own
+code, with a floor of 0.75: the rule `no-unwrap-outside-tests` over `crates/jev-lsp/src/server.rs`
+found 2 candidates on every one of 15 runs, answers in a **0.75–0.81** band, and **2 of the 15
+runs published only one of the two lines** — 28 of the 30 individual line-answers cleared the
+floor, so a line whose answer lands just under it publishes nothing. That is a floor placed on the
+spread rather than endpoint flakiness; the fixture that *should* fire scored 0.96–0.97, which is
+the gap a floor belongs in.
 
 Three things that will otherwise cost you an hour:
 

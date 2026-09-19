@@ -380,6 +380,16 @@ Two lessons, both now enforced:
 The ambient pass is the rules pass, and it is pinned from two directions — the protocol and the
 editor:
 
+**What the shipped floors do on real code.** This repository's ten-rule set, at the floors the
+rules state, over **30 `crates/**/*.rs` documents**: **99 candidates and 2 findings** — both from
+`no-unwrap-outside-tests`, on one line of `crates/jev-lsp/src/server.rs` — with 7 rules considered
+per document and every other rule publishing nothing. Per-rule candidate counts summed to the
+server's own per-document total, so the attribution is the server's, not a harness's. Fifteen runs
+of that rule on that document: 2 candidates every time, answers in a **0.75–0.81** band, and **2
+of the 15 runs published only one of the two lines** — the floor of 0.75 sits on the bottom edge
+of that line's answer mass, so a line landing just under it publishes nothing (`docs/TUTORIAL.md`
+§3.7 has the guidance this is the worked instance of).
+
 - **`verify/rules_test.py`** (45 checks) drives it end to end against the real binary and the
   scripted endpoint: a malformed rule file skipped with a reason while the rest still load,
   `regex` and `absent` semantics, `max_matches` meaning "only when the file holds more than
