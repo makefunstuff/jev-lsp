@@ -216,7 +216,10 @@ Required for a harness to be learnable:
 
 - `temperature = 0` for the `reason` tier on the fast paths that produce titles and
   findings, and `0.0` for the `decide` tier by default — a decision is a probability, and it
-  should not move between two runs over the same state.
+  should not move between two runs over the same state. It still moves with how close the
+  *question* sits to the decision boundary: hosted Jev answered 0.96–0.97 across 25 runs on a
+  sharply-posed question and 0.82–0.86 across 8 on one nearer the boundary, which is why a
+  rule's `min_probability` belongs outside the measured spread (`docs/TUTORIAL.md` §3.7).
 - Title construction is a pure function of `(verb, scope name, finding label)`; the model
   supplies the label, never the whole title.
 - Identical `context_hash` + identical prompt template version ⇒ byte-identical output is
@@ -233,6 +236,13 @@ Accounted in `budget.rs`, checked before the call, incremented after:
 
 Exhaustion is a state, not an error. The user sees `over_budget` on the action and a
 statusline counter; nothing pops up twice.
+
+**The rules pass spends the same budget, one call per document.** A pass takes a single permit
+for the whole document — however many candidates its inspections found — so
+`budget.max_calls_per_min` (default 6) is six documents a minute, and a sweep of a larger
+workspace reports `over_budget` (PROTOCOL §6.1) until the window moves on. The cap exists to
+bound a sweep, not to save money: one decision is ~500 tokens in and ~29 out,
+≈$0.00002 and 0.3–0.6 s on the hosted tier. Raise it if you sweep whole workspaces deliberately.
 
 ## 8. Local-first
 

@@ -429,7 +429,7 @@ cat > .jev/rules/handlers.json <<'JSON'
       "title": "Unwrap in a request handler",
       "text": "A handler must not unwrap: a bad request would take the worker down. Return the error instead.",
       "severity": "warning",
-      "applies_to": ["src/**/*.rs"],
+      "applies_to": ["**/src/**/*.rs"],
       "inspection": { "kind": "regex", "pattern": "\\.unwrap\\(\\)" },
       "judgement": {
         "question": "Is this unwrap reachable from a request handler, rather than from test or startup code?",
@@ -450,14 +450,28 @@ What each field decides, in the order you will care about them:
 
 | Field | What it decides |
 |---|---|
-| `applies_to` | globs over the document path; a rule for `**/*.rs` never sees a Python file |
+| `applies_to` | globs over the document's path; a rule for `**/*.rs` never sees a Python file. The path is absolute, so a pattern that does not begin with `**/` is compared against the root's first segment (`Users`) and matches nothing — `**/src/**/*.rs`, not `src/**/*.rs`, and the leading `**` is what spans the path from the root |
 | `inspection.kind` | `regex` (every matching line) or `absent` (the file is expected to contain the pattern and does not — a licence header, a module declaration) |
 | `inspection.pattern` | the candidate finder. It **decides nothing**: it names lines, nothing more |
 | `judgement.question` | what the decision tier is asked about each candidate. Ask about the *decision* ("is this reachable from a handler"), never the syntax the regex already matched |
 | `judgement.criteria`, `reasons` | passed through to the decision wire unchanged; this question kind wants `{"true": …, "false": …}` |
-| `judgement.min_probability` | the floor a `true` must clear. Default 0.5 — a coin flip is not a finding |
+| `judgement.min_probability` | the floor a `true` must clear. Default 0.5; put it outside the answer's measured spread, not on it (below) |
 | `title`, `text` | the finding's label (clipped at 60 characters) and its detail |
 | `verb_hint` | the verb the menu offers first for it: `fix`, `harden`, `types`, `docs`, `rewrite`, `test`, `generate` |
+
+**Choosing `min_probability`.** Measure the answer's spread before you choose the floor, and put
+the floor outside it with room to spare — not on it. Measured against hosted Jev
+(`typesafe/jev-1.13`, the tier's `temperature: 0.0`): a sharply-posed question answered **0.96–0.97
+across 25 real runs** (median 0.97, sd 0.0048), while the same endpoint on a question sitting
+nearer the decision boundary varied **0.82–0.86 across 8 runs** — a floor at the answer's median
+therefore turns the endpoint's own noise into a coin flip, with identical input publishing on half
+the runs and not the other half, and nothing in the report saying which run was the odd one out.
+If the spread straddles the floor you want, **the question is the problem, not the floor**: no
+value of `min_probability` makes a boundary-straddling question stable, so sharpen it — name the
+property that decides it, add the criterion that separates the cases, split one question into two
+— and measure again. Note also that a `false` answer is **invisible through `:Jev inspect`**,
+which publishes only what clears the floor: read the negative side by posting the request
+directly, or with the floor set to `0.0` (which still hides a `false`).
 
 Three things that will otherwise cost you an hour:
 
@@ -591,6 +605,7 @@ It shares `jev-core` with the server and no state with it. Useful for scripts, a
 | `:Jev inspect` reports `unchanged` and no findings | git reports the file untouched since HEAD, so the pass skipped it | That is the point of the check; `--force` inspects it anyway |
 | The ambient pass fails with `model_error` / `contract_error` | The *decision* tier did not answer, or answered something unreadable | `:Jev log`, then check `models.decide` and `TYPESAFE_API_KEY` (`JEV_DECIDE_BASE_URL` does not come from `JEV_BASE_URL`) |
 | `:Jev review` returns `findings: []`, no sign | Either the file is genuinely clean, or it was skipped | `:Jev log`: a skip says *"the file looks binary"*, *"N bytes exceeds the M byte analysis limit"*, or *"path matches the ignore pattern …"* |
+| `:Jev inspect` finds it, but the sign column never shows it | The pass runs on save and on `jev.inspect`; a client that never sends `didSave` never runs one, and an empty diagnostics pull looks exactly like a clean file | Save the buffer (or send `didSave`); `docs/UX.md` §1.1 |
 | `not_implemented` for a command | The server does not serve that name | `:Jev` completion lists the 18 subcommands; the server advertises its 15 commands in the `initialize` result (PROTOCOL §6) |
 | `jev: settings applied — reason … · review …` in the log shows an endpoint you did not configure | The environment is overriding your client settings | Unset `JEV_BASE_URL` / `JEV_MODEL` / `JEV_REVIEW_MODEL`, or set them to what you want |
 | The model call fails and the answer is empty | The endpoint refused or timed out | `:Jev log`. A reasoning model that spent its whole budget now says so explicitly (`finish_reason=length`) — raise `max_tokens`, or set `think = 'off'` |

@@ -72,11 +72,20 @@ The server reads its endpoints from the environment it is started with, so expor
 before launching the harness, or set them in the client's server block if it has one.
 
 OMP, the entry `verify/omp_lsp.sh` exercises, written to `<project>/.omp/lsp.json` (or
-`~/.omp/agent/lsp.json` to apply it to every project):
+`~/.omp/agent/lsp.json` to apply it to every project). OMP answers the server's
+`workspace/configuration` pull with `settings.jev`, so the entry can carry the endpoints:
 
 ```json
-{"servers":{"jev-lsp":{"command":"/path/to/jev-lsp/target/release/jev-lsp","args":["--stdio"],"fileTypes":[".rs"],"rootMarkers":[".git"]}}}
+{"servers":{"jev-lsp":{"command":"/path/to/jev-lsp/target/release/jev-lsp","args":["--stdio"],
+  "fileTypes":[".rs",".py",".md",".toml",".json",".lua",".sh"],"rootMarkers":[".git"],
+  "settings":{"jev":{"models":{"decide":{"wire":"open_router","base_url":"https://openrouter.ai/api",
+                                          "model":"typesafe/jev-1.13","api_key_env":"TYPESAFE_API_KEY"}}}}}}}
 ```
+
+`settings` can name the key's **variable** (`api_key_env`) but cannot carry the key itself, so
+export it before the harness starts (`export TYPESAFE_API_KEY=…`); without it a hosted decision
+call fails with `model_error`. Environment variables win over the `settings` block, which is what
+lets the stub and local-server recipes work without editing the client config.
 
 OpenCode, from its schema (`https://opencode.ai/config.json`, `lsp`), where `command` is an
 array and `env` carries the endpoint variables:

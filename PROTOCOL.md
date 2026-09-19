@@ -650,7 +650,8 @@ with no root, the document's own directory):
       "text": "A handler must not unwrap; return the error instead.",  // its detail
       "severity": "warning",                   // information | warning; error is reserved, and a
                                                // rule that asks for it gets warning
-      "applies_to": ["**/*.rs"],               // globs over the document path
+      "applies_to": ["**/*.rs"],               // globs over the document's path; the path is
+                                               // absolute, so lead with `**/`
       "inspection": { "kind": "regex", "pattern": "\\.unwrap\\(\\)", "max_matches": 0 },
       "judgement": { "question": "Is this unwrap reachable from a request handler?",
                      "criteria": { "true": "a request can reach it", "false": "test code" },

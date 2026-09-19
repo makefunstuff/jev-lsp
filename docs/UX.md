@@ -97,11 +97,18 @@ rules pass for the current buffer through the `jev.inspect` command and opens th
 buffer, like any other artifact: the counts (rules considered, candidates found, findings
 published), one line per finding with the rule's prose under it, and every skip — `unchanged`
 (git reports the file untouched), `no_rules` (nothing in `.jev/rules/` claims this file, or no
-rules loaded at all), or a rule file that could not be loaded, with its reason.
+rules loaded at all), or a rule file that could not be loaded, with its reason. A `false` answer
+leaves no trace here: only a `true` that clears the floor is published, so the negative side of a
+question can only be read by posting the request directly or with the floor at `0.0`.
 `:Jev inspect --force` re-runs the pass even when git reports the file unchanged. The LSP command
 `jev.inspect` is the contract — any client can call it, and the CLI's `jev inspect` is the same
 call from a shell — while `:Jev inspect` is this plugin's convenience over it, like every other
 row of §1.
+
+**A pull with no pass behind it answers clean.** The pass runs on save and on `jev.inspect`; a
+client that never sends `didSave` sees nothing, and that empty answer looks exactly like a clean
+file. Measured in one fixture: `diagnostics` alone → `OK`, then `jev.inspect` and `diagnostics`
+→ the finding. Save the buffer (or run `:Jev inspect`) before concluding that a rule is broken.
 
 **A rule edit does not repaint what is already on screen.** Diagnose the surprise in the order
 it happens: the findings every surface reads are one shared display slot, keyed by content
