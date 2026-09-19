@@ -1,7 +1,8 @@
 # jev-lsp
 
-**Heavily work in progress.** The interface and the contract change without notice, and nothing
-here should be relied on yet.
+> [!WARNING]
+> **Heavily work in progress.** The interface, the contract and the
+> configuration keys may change without notice; nothing here should be relied on yet.
 
 An LSP server that turns your editor into an agent harness: the model observes your code in the
 background and proposes work through **standard LSP surfaces** — diagnostics, code actions, code
