@@ -12,6 +12,15 @@ long does it take, what did the model actually produce, and does the edit apply 
     # the omp auth gateway (resolves the provider credential server-side; no key handling)
     python3 verify/real_model.py --base-url http://127.0.0.1:4000/v1 --model deepseek/deepseek-flash
 
+    # a hosted endpoint that wants a key: JEV_API_KEY_ENV names the variable holding it
+    JEV_API_KEY_ENV=OPENROUTER_API_KEY python3 verify/real_model.py \
+        --base-url https://openrouter.ai/api/v1 --model google/gemini-2.5-flash-lite
+
+The ambient pass measured here is the *chat review*: `rules.enabled` is off in this harness's
+settings, because the ambient pass is the rules pass while rules are on and a workspace with no
+`.jev/rules` gives it nothing to run. A run whose endpoint billed no tokens and logged a failure
+exits non-zero with the server's words rather than reporting zeros as a result.
+
 Exits 0 if the loop completed end to end; prints everything it observed either way.
 """
 import argparse
@@ -76,6 +85,12 @@ def main():
     print(f"server  : {args.bin}\n")
 
     server = Lsp([args.bin, "--stdio"], env)
+    # The ambient pass is the rules pass while `rules.enabled` is at its default, and this
+    # workspace carries no `.jev/rules` — so with rules on, the save below runs a pass with
+    # nothing to run and the review tier is never asked. This harness is about the model's
+    # opinion, so the ambient slot is handed to the chat review explicitly (the same setting
+    # `lsp_client.py` and `outcome_test.py` carry).
+    server.settings = {"rules": {"enabled": False}}
     observed = {"loop": False}
     try:
         server.request("initialize", {
@@ -192,8 +207,10 @@ def main():
                 print(f"  applied to {fixture}")
                 observed["edit"] = True
             else:
-                print(f"  no edit returned. reason: {resolved.get('disabled', {}).get('reason', '(none)')}")
+                reason = (resolved.get("disabled") or {}).get("reason", "(none)")
+                print(f"  no edit returned. reason: {reason}")
                 observed["edit"] = False
+                observed["resolve_reason"] = reason
             for m in server.saw_notification("window/showMessage"):
                 print(f"  message    : {m['params']['message'][:200]}")
 
@@ -202,6 +219,22 @@ def main():
         b = status.get("budget", {})
         print(f"\ntotals: calls_last_minute={b.get('calls_last_minute')} tokens={b.get('tokens_used')} "
               f"refusals={status.get('counters', {}).get('refusals')}")
+
+        # A harness that reached no model must not report zeros as a result. A failed pass still
+        # refreshes diagnostics, so `loop` above is true while nothing was asked of any model;
+        # the endpoint billing no tokens plus a failure in the server's log is what says so.
+        if not b.get("tokens_used"):
+            failure = observed.get("resolve_reason") or next(
+                (
+                    m["params"].get("message", "")
+                    for m in server.saw_notification("window/logMessage")
+                    if "failed" in (m["params"].get("message") or "")
+                ),
+                "",
+            )
+            if failure:
+                print(f"  unreachable: {failure}")
+                return 1
 
         server.request("shutdown", None)
         server.notify("exit", None)

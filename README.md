@@ -5,6 +5,8 @@
 > configuration keys may change without notice; nothing here should be relied on yet.
 > this is PoC and heavily under slop-generating phases to proof that lsp approach actually work first
 
+![OMP writing a Rust handler, with jev-lsp's rule finding on the generated line steering the fix](docs/assets/jev-steering.svg)
+
 An LSP server that runs a model over the files you have open and reports through your editor's
 own surfaces: diagnostics, code actions, code lens. The ambient pass runs the rules your
 repository states in `.jev/rules/*.json`; each line a rule points at is sent to **Jev**, a
@@ -30,6 +32,7 @@ tier answers the rules pass.
 ```sh
 export JEV_BASE_URL=http://127.0.0.1:8080/v1   # chat model, OpenAI-compatible
 export JEV_MODEL=your-model-name
+export JEV_API_KEY_ENV=OPENROUTER_API_KEY   # hosted: the NAME of the variable holding the key
 
 # the decision tier defaults to hosted Jev (api.typesafe.ai, key from TYPESAFE_API_KEY);
 # a local System One server instead:

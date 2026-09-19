@@ -10,6 +10,15 @@ the second.
 
     python3 verify/quality_eval.py --base-url http://127.0.0.1:37313/v1 --model qwen3.6-35b-a3b-iq3xxs
 
+    # a hosted endpoint that wants a key: JEV_API_KEY_ENV names the variable holding it
+    JEV_API_KEY_ENV=OPENROUTER_API_KEY python3 verify/quality_eval.py \
+        --base-url https://openrouter.ai/api/v1 --model google/gemini-2.5-flash-lite
+
+The subject is the *chat review* tier: `rules.enabled` is turned off in this harness's settings,
+because the ambient pass is the rules pass while rules are on and a rules pass over a workspace
+with no `.jev/rules` scores zero without asking any model anything. A run that reached no model
+exits non-zero with the server's own reason rather than reporting zeros as a result.
+
 What it measures:
 
   * **recall** — a defective file where a finding landed within two lines of the planted defect
@@ -183,6 +192,11 @@ def main():
     env["JEV_BASE_URL"] = args.base_url
     env["JEV_MODEL"] = args.model
     env["JEV_REVIEW_MODEL"] = args.model
+    # The name of the variable that holds the key is the one thing the server reads out of its
+    # own environment, and the filter above strips every `JEV_*`. Put it back, or a run against
+    # a keyed endpoint sends no credential at all and this harness measures nothing.
+    if os.environ.get("JEV_API_KEY_ENV"):
+        env["JEV_API_KEY_ENV"] = os.environ["JEV_API_KEY_ENV"]
 
     server = Lsp([args.bin, "--stdio"], env)
     # One analysis per file and this run is not about the limiter, so the ceiling is raised the
@@ -194,7 +208,12 @@ def main():
     if args.think:
         for tier in tiers.values():
             tier["think"] = args.think
+    # The ambient pass is the rules pass while `rules.enabled` is at its default, and this
+    # workspace has written no `.jev/rules` — so with rules on, every save below runs a pass
+    # with nothing to run and this metric scores *that* pass. The chat review is the subject
+    # here, so the ambient slot is handed to it explicitly.
     server.settings = {
+        "rules": {"enabled": False},
         "budget": {"max_calls_per_min": 120, "max_calls_per_hour": 600},
         "models": tiers,
     }
@@ -244,6 +263,12 @@ def main():
             # wait is attributable and the number is about the file in front of it.
             deadline = time.time() + args.timeout
             items = []
+            unreachable = None
+            seen_failures = [
+                m for m in server.saw_notification("window/logMessage")
+                if "analysis failed" in (m["params"].get("message") or "")
+                or "skipping analysis" in (m["params"].get("message") or "")
+            ]
             while time.time() < deadline:
                 if analysed(trace_path, uri):
                     report = server.request(
@@ -253,8 +278,20 @@ def main():
                         report.get("fullDocumentDiagnosticReport", {}) or {}
                     ).get("items", [])
                     break
+                # A pass that failed or was skipped writes no session entry — the server appends
+                # one only for a pass that returned — so waiting out the whole timeout is waiting
+                # for something that cannot arrive. The server logs the reason; take it and go.
+                failures = [
+                    m["params"].get("message", "")
+                    for m in server.saw_notification("window/logMessage")
+                    if "analysis failed" in (m["params"].get("message") or "")
+                    or "skipping analysis" in (m["params"].get("message") or "")
+                ]
+                if len(failures) > len(seen_failures):
+                    unreachable = failures[-1]
+                    break
                 time.sleep(0.2)
-            if not items and time.time() >= deadline:
+            if not items and unreachable is None and time.time() >= deadline:
                 print(f"{fixture['name']:<24} {'-':>8}  no analysis within {args.timeout:.0f}s")
 
             findings_total += len(items)
@@ -285,7 +322,10 @@ def main():
                 text = message["params"].get("message", "")
                 if "discarded because their anchors" in text:
                     discarded += int(text.split()[1] or 0)
-            if fixture["defect"]:
+            if unreachable is not None:
+                # Not a miss: the review never ran, so the row must not read like one that did.
+                verdict = f"NOT ANALYSED ({unreachable})"
+            elif fixture["defect"]:
                 if hit:
                     verdict = "caught"
                 elif discarded:
@@ -307,6 +347,7 @@ def main():
         # can produce findings and still leave none in the diagnostics — discarded on an anchor
         # that cannot be located, or refused before the call.
         trace = trace_path
+        sources = []
         if os.path.isfile(trace):
             print()
             print("server-side record:")
@@ -322,13 +363,48 @@ def main():
                         # before that list existed.
                         listed = entry.get("findings")
                         kept = len(listed) if isinstance(listed, list) else entry.get("count")
+                        sources.append(entry.get("source"))
                         print(
-                            "  {uri:<32} findings={findings} discarded={discarded}".format(
+                            "  {uri:<32} findings={findings} discarded={discarded} "
+                            "source={source}".format(
                                 uri=entry.get("uri", "").rsplit("/", 1)[-1],
                                 findings=kept,
                                 discarded=entry.get("discarded"),
+                                source=entry.get("source"),
                             )
                         )
+
+        # A run that reached no model is not a result. `0/4` with two quiet clean files is
+        # exactly what a review that was never called looks like, and this harness reported that
+        # shape for as long as the ambient pass had been the rules pass. Fail, and say why: the
+        # server's own log line, or which pass actually answered.
+        status = server.request(
+            "workspace/executeCommand", {"command": "jev.status", "arguments": []}
+        ).get("result", {})
+        budget = status.get("budget", {}) or {}
+        calls = (status.get("counters", {}) or {}).get("calls", 0)
+        print()
+        print(
+            f"model     {calls} call(s) admitted, {budget.get('tokens_used', 0)} token(s) "
+            "billed by the endpoint"
+        )
+        if "rules" in sources:
+            print(
+                "no review was measured: the rules pass answered, and this harness turns rules "
+                "off so that the ambient pass is the chat review"
+            )
+            return 1
+        if not budget.get("tokens_used"):
+            why = next(
+                (
+                    m["params"].get("message", "")
+                    for m in server.saw_notification("window/logMessage")
+                    if "failed" in (m["params"].get("message") or "")
+                ),
+                "the endpoint billed no tokens and the server logged no failure",
+            )
+            print(f"no review was measured: {why}")
+            return 1
 
         print()
         recall = caught / len(defective) if defective else 0.0

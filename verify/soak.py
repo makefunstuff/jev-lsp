@@ -18,7 +18,16 @@ no unit test can see it.
     python3 verify/soak.py --base-url http://127.0.0.1:4000/v1 --model deepseek/deepseek-flash \\
         --rounds 2 [--bin target/release/jev-lsp] [--only python,rust]
 
-Exits 0 unless a *parsed* file was left broken.
+    # a hosted endpoint that wants a key: JEV_API_KEY_ENV names the variable holding it
+    JEV_API_KEY_ENV=OPENROUTER_API_KEY python3 verify/soak.py \\
+        --base-url https://openrouter.ai/api/v1 --model google/gemini-2.5-flash-lite --rounds 2
+
+The ambient pass measured here is the *chat review*: `rules.enabled` is off in each run's
+settings, because the ambient pass is the rules pass while rules are on and a scratch workspace
+has no `.jev/rules` to run. If no run reached a model, the soak says so and exits non-zero — its
+"0 edits, 0 broken" is otherwise the shape of a clean run.
+
+Exits 0 unless a *parsed* file was left broken, or no model was reached at all.
 """
 import argparse
 import ast
@@ -109,8 +118,13 @@ def run_once(binary, language, base_url, model, workdir, timeout):
 
     env = dict(os.environ, JEV_BASE_URL=base_url, JEV_MODEL=model, JEV_REVIEW_MODEL=model)
     server = Lsp([binary, "--stdio"], env)
+    # The ambient pass is the rules pass while `rules.enabled` is at its default, and every
+    # scratch workspace here has no `.jev/rules` — so with rules on, the save below measures a
+    # pass with nothing to run and the review tier is never asked. This soak is about the loop's
+    # edits, so the ambient slot is handed to the chat review explicitly.
+    server.settings = {"rules": {"enabled": False}}
     result = {"language": language, "findings": 0, "edit": False, "parses": None,
-              "ambient_ms": None, "resolve_ms": None, "note": ""}
+              "ambient_ms": None, "resolve_ms": None, "tokens": 0, "note": ""}
     try:
         server.request("initialize", {
             "processId": os.getpid(), "rootUri": "file://" + workdir,
@@ -138,6 +152,11 @@ def run_once(binary, language, base_url, model, workdir, timeout):
             time.sleep(0.05)
         result["ambient_ms"] = int((time.time() - started) * 1000)
         result["findings"] = len(items)
+        # Endpoint-reported, so a run that never reached a model is distinguishable from one the
+        # model answered with nothing. Read after the ambient pass, which is now the chat review.
+        status = server.request("workspace/executeCommand",
+                                {"command": "jev.status", "arguments": []}).get("result", {})
+        result["tokens"] = (status.get("budget", {}) or {}).get("tokens_used", 0)
 
         actions = server.request("textDocument/codeAction", {
             "textDocument": {"uri": uri},
@@ -210,6 +229,13 @@ def main():
     edits = sum(1 for r in rows if r["edit"])
     print(f"\n[soak] {edits}/{len(rows)} runs produced an applied edit; "
           f"{broken} left the file unparseable")
+    answered = [r["tokens"] for r in rows if r.get("tokens")]
+    print(f"[soak] the endpoint billed tokens in {len(answered)}/{len(rows)} runs")
+    if rows and not answered:
+        # A soak in which no model answered measured nothing: its "0 edits, 0 broken" is the
+        # shape of a clean run, which is the one thing it must never be mistaken for.
+        print(f"[soak] no model answered — {rows[-1].get('note') or '(no reason recorded)'}")
+        return 1
     if rows:
         amb = [r["ambient_ms"] for r in rows if r["ambient_ms"]]
         res = [r["resolve_ms"] for r in rows if r["resolve_ms"]]
