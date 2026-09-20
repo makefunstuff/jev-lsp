@@ -180,6 +180,12 @@ line in a message with a **Details** action that reveals the channel — measure
 `Jev: 2 finding(s) · 1 rule(s) considered · 2 candidate(s)`. A command you run *while* looking at
 a file must not replace what you are looking at with six lines you then have to close.
 
+**One consequence of opening in place, said plainly.** The answer becomes the active editor, so a
+command that reads *this file* — `inspect`, `review`, `explain`, `followup`, `plan`, `ask` — needs
+the code tab focused again and otherwise answers `Jev: open a file first.` The commands that read
+no file never refuse for that reason, which is what keeps `status` and `session` usable as the way
+to check that anything is working at all: with an answer on screen, both still answer.
+
 **Save first.** This is the trap that costs the most time. A pull with no pass behind it answers
 *clean*: the rules pass runs on save and on `jev.inspect`, so a client that never sends
 `didSave` sees an empty answer that is indistinguishable from a clean file. If a rule looks

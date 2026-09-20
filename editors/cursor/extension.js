@@ -645,6 +645,17 @@ function findingsBody(result) {
 // the commands, and what each needs from the editor
 // ---------------------------------------------------------------------------
 
+/**
+ * The commands that cannot be answered without a file — the whole refusal list, now that the
+ * "any non-file active document" guard is gone.
+ *
+ * Each entry's `build` reads `document.uri` or the cursor, which is what makes a file a
+ * requirement rather than a preference: `inspect` and `review` name a document; `explain`,
+ * `followup` and `plan` name the scope at the cursor; `ask` names the file its question is
+ * about. The rest — `status`, `recompute`, `session`, `usage`, `revert` — read no file, so an
+ * open artifact or an empty window must not refuse them: `status` and `session` in particular
+ * are how a user checks whether anything is working at all.
+ */
 const NEEDS_A_FILE = new Set([
   'jev.inspect',
   'jev.review',
@@ -1601,11 +1612,13 @@ async function activate(context) {
         }
         const editor = vscode.window.activeTextEditor;
         const document = editor?.document;
-        if (document !== undefined && !isAnalysable(document)) {
-          vscode.window.showWarningMessage('Jev: open a file first.');
-          return;
-        }
-        if (NEEDS_A_FILE.has(definition.id) && document === undefined) {
+        // One refusal, and it is the exclusion list that decides. The earlier version had a
+        // second guard — "any active document that is not a file → refuse" — which fired for the
+        // `jev-artifact:` document this extension opens itself, so after one answer *every*
+        // command answered "open a file first", including `jev.status` and `jev.session`, which
+        // `NEEDS_A_FILE` deliberately excludes because they read no file at all. The list
+        // documented the intent and the guard defeated it.
+        if (NEEDS_A_FILE.has(definition.id) && !isAnalysable(document)) {
           vscode.window.showWarningMessage('Jev: open a file first.');
           return;
         }
