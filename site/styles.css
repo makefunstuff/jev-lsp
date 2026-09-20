@@ -87,8 +87,10 @@ img, svg, video, canvas { max-width: 100%; height: auto; }
 
 .shell {
   max-width: var(--shell);
+  width: 100%;
   margin-inline: auto;
   padding-inline: var(--gutter);
+  box-sizing: border-box;
 }
 
 /* ---------- header ---------- */
@@ -833,13 +835,34 @@ tr.mark strong { color: var(--accent); }
     --gutter: 1rem;
   }
   h1, h2 { max-width: none; }
+  .lead, .sec-lead, .muted-line, .pull, .sec-head, p, li {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .hero-layout,
+  .split,
+  .loop-layout,
+  .start-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+    width: 100%;
+  }
+  .hero-copy, .hero-stage, .split-copy, .compare-stack, .start-copy, .start-wins {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
   .float-rule { display: none; }
   .hero { padding-block: 2rem 2.75rem; }
   .hero-stage { padding: 0; min-height: 0; overflow: hidden; }
-  .float-diag {
-    transform: none;
-    width: 100%;
-    margin-left: 0;
+  .float-diag,
+  .win,
+  .win-lg,
+  .cost-card {
+    transform: none !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin-left: 0 !important;
+    overflow: hidden;
   }
   .float-diag .editor-pane,
   .editor-pane.embedded,
@@ -883,6 +906,9 @@ tr.mark strong { color: var(--accent); }
     flex: 1 1 calc(50% - 0.4rem);
     min-width: 8rem;
     text-align: center;
+  }
+  .sec-start .hero-actions .btn {
+    flex: 1 1 100%;
   }
   .fact-strip {
     flex-direction: column;
