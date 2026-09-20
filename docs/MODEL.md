@@ -299,10 +299,11 @@ export JEV_DECIDE_BASE_URL=https://opencode.ai/zen/v1
 export JEV_DECIDE_MODEL=jev-1.13            # not jev-1.13-free: 429 FreeUsageLimitError in bursts
 export JEV_DECIDE_TIMEOUT_MS=15000          # the 5000 ms default is too close to its tail
 
-# the key is read from the variable *named by* `api_key_env`, which defaults to
-# TYPESAFE_API_KEY and has no environment override of its own — so export it under that name,
-# or set models.decide.api_key_env in config. Any other variable name is simply not read.
-export TYPESAFE_API_KEY=<key>
+# the key is read from the variable *named by* `api_key_env` (default TYPESAFE_API_KEY).
+# JEV_DECIDE_API_KEY_ENV names a different one from the environment — a name, never a key,
+# and an empty value is ignored; JEV_API_KEY_ENV does the same for the chat tiers.
+export JEV_DECIDE_API_KEY_ENV=OPENCODE_API_KEY
+export OPENCODE_API_KEY=<key>
 ```
 
 The OpenRouter route is the alternative, and its price is visible from its API:

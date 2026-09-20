@@ -551,9 +551,9 @@ settings = {
   `{base_url}/alpha/decisions`; anything else is ignored and the wire in force is kept, so a typo
   never silently posts to the wrong path (`:Jev status` shows `models.decide.wire`). Zen needs
   `system_one` — its `open_router` path is a 404. The API key is read from the variable **named
-  by** `api_key_env` — `TYPESAFE_API_KEY` by default, with no environment override for the name —
-  so a hosted provider needs either that variable exported or `api_key_env` changed in settings
-  (which only a client can send; the CLI cannot). `JEV_DECIDE_TIMEOUT_MS` raises the 5000 ms
+  by** `api_key_env` — `TYPESAFE_API_KEY` by default — and `JEV_DECIDE_API_KEY_ENV` names a
+  different one from the environment (`JEV_API_KEY_ENV` does the same for the chat tiers; both
+  take a name, never a key, and ignore an empty value). `JEV_DECIDE_TIMEOUT_MS` raises the 5000 ms
   ceiling, and a hosted route needs it: at 5000 a client-attached call failed with
   `timeout: global` while the CLI on the same route succeeded, and 15000 answered `ok`. A value
   that does not parse, or parses to zero, is ignored. `docs/MODEL.md` §8 has the worked recipe.
@@ -600,12 +600,12 @@ jev status                             # budget, queue and cache
 - `jev inspect` prints the same body the LSP command `jev.inspect` returns: `findings`,
   `considered`, `candidates` and `skipped`. It is the same code the ambient pass runs, which is
   the whole point — a CLI that disagreed with the server about a rule would be worse than none.
-- **The decide tier's key has to be exported as `TYPESAFE_API_KEY`** (`TYPESAFE_API_KEY="$OTHER_KEY"
-  jev inspect …`): the variable *name* comes from `models.decide.api_key_env` and has no
-  environment override — `JEV_API_KEY_ENV` covers the chat tiers only — so a CLI user pointing at
-  another provider either uses that name or changes the setting in a client config the CLI does
-  not read. `JEV_DECIDE_BASE_URL`, `JEV_DECIDE_MODEL`, `JEV_DECIDE_WIRE` and
-  `JEV_DECIDE_TIMEOUT_MS` do the rest of the pointing; a hosted route needs the raised ceiling.
+- **The decide tier's key variable is nameable from the shell**: `api_key_env` defaults to
+  `TYPESAFE_API_KEY`, and `JEV_DECIDE_API_KEY_ENV` points it at another variable
+  (`JEV_DECIDE_API_KEY_ENV=OPENCODE_API_KEY OPENCODE_API_KEY=… jev inspect …`). It takes a *name*,
+  never a key, and an empty value keeps the name in force. `JEV_DECIDE_BASE_URL`,
+  `JEV_DECIDE_MODEL`, `JEV_DECIDE_WIRE` and `JEV_DECIDE_TIMEOUT_MS` do the rest of the pointing; a
+  hosted route needs the raised ceiling.
 - stdout is exactly one JSON value; stderr carries diagnostics including one cost line per
   model call.
 - Exit codes are the contract: `0` success, `1` transport or model failure, `2` usage or
@@ -730,8 +730,8 @@ files** (a control run caught 4/4 — the miss is run-to-run variance); **real_m
 which is the model's anchor granularity and not a server check — nothing in `crates/` parses the
 result (`docs/VERIFICATION.md` §7, §11).
 
-Current state, measured on the checkout this document ships with: `cargo test` **286 passing**
-(49 `jev` + 188 `jev-core` + 49 `jev-lsp`), warning-free; `verify/rules_test.py` **45/45**;
+Current state, measured on the checkout this document ships with: `cargo test` **289 passing**
+(49 `jev` + 191 `jev-core` + 49 `jev-lsp`), warning-free; `verify/rules_test.py` **45/45**;
 `verify/rules_live.lua` **0 failures, 0 skips** on Neovim 0.12.5 and 0.12.1; smoke **44/44**
 (three consecutive full-table runs); the independent client **44 ok, 0 FAIL** (step 10 is the
 three §3.5 failure paths);

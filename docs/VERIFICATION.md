@@ -7,7 +7,7 @@ not for the code they touch.
 
 | Artefact | State | Last result |
 |---|---|---|
-| `verify/run-suite.sh` | built | the whole table below in one run — 23 harness rows `ok`, `quality_eval` reported as `?` (it needs a real model) |
+| `verify/run-suite.sh` | built | the whole table below in one run — 24 rows `ok`, `quality_eval` reported as `?` (it needs a real model) |
 | `verify/probes/` | built | 7 probes, all green (`verify/probes/run.sh`) |
 | `verify/lsp_client.py` | built | 44 ok, 0 FAIL, 0 skip, 0 warn against the real binary (step 10 is the three §3.5 failure paths) |
 | `verify/smoke.py` | built | 44/44 against the real binary — and three consecutive full-table runs after the two harness defects in §8 were fixed, which is the point |

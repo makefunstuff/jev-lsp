@@ -95,7 +95,7 @@ which a headless harness cannot drive.
 | Check | Result |
 |---|---|
 | `bash verify/run-suite.sh <out-file>` | the whole table, one run: supervised stub, every row captured, a verdict per row on stdout (`NVIM_ONLY=1`, `REFUSE_IF_BUSY=1`, `NVIM_BINS` in its header) |
-| `cargo test` | 286 passing (49 `jev` + 188 `jev-core` + 49 `jev-lsp`), 0 failed, no warnings |
+| `cargo test` | 289 passing (49 `jev` + 191 `jev-core` + 49 `jev-lsp`), 0 failed, no warnings |
 | `cargo build --release` | no warnings, no errors |
 | `verify/probes/run.sh` | 7 probes green |
 | `python3 verify/latency.py` | 7/7 paths within budget against a model made 2 s slow |

@@ -311,6 +311,11 @@ Rules that follow, and are enforced by the streaming module:
   asserted by `verify/lsp_client.py` step 10, including that the `end` arrives **before** the
   response — the token is valid only until then. A token left open is a defect, not a leak to
   tolerate.
+- **Cancellation is honoured, and the `begin` says so.** Every command's `begin` carries
+  `cancellable: true` (`crates/jev-lsp/src/server.rs`): the command body runs in its own task, so
+  `$/cancelRequest` aborts it — the request answers `-32800 Canceled`, the token is closed exactly
+  once, and the answer is discarded. Unconditional, because `begin` is only ever sent from inside
+  the spawned body: by the time a client can see the flag and act on it, there is a task to abort.
 - **Cancelled means the command stops, not that the call is interrupted.** The model client in
   `jev-core` is synchronous and runs in `spawn_blocking`, so a cancelled request's HTTP call keeps
   running to the tier's `timeout_ms` and holds its budget permit until it returns (`jev.status`
@@ -757,9 +762,12 @@ case-insensitive, and selects the path appended to `base_url`; a value that is n
 **ignored with the wire already in force kept**, never coerced to the default, because a typo
 that quietly posted every decision to the wrong path would look exactly like the endpoint being
 down (`jev.status` reports `models.decide.wire`, so a mistyped override is visible). The API
-key's **variable name** comes from `api_key_env` (default `TYPESAFE_API_KEY`) and has no
-environment override — only its value is read from the environment, so a hosted provider means
-exporting the key under the configured name or changing `api_key_env`.
+key's **variable name** comes from `api_key_env` (default `TYPESAFE_API_KEY`) and is
+config-only; only its value comes from the environment. The *name* is nameable from the
+environment too: `JEV_DECIDE_API_KEY_ENV` assigns it to `models.decide.api_key_env` — a name,
+never a key, trimmed, and an empty or whitespace-only value keeps the name in force rather than
+clearing it — while `JEV_API_KEY_ENV` names the chat tiers' and never repoints this one. The two
+variables name different tiers' keys, because the tiers can sit behind different providers.
 
 **`rules` is the ambient pass.** With `rules.enabled` true — the default — the ambient pass is
 the rules pass, and the chat review runs only when it is asked for explicitly (`jev.review`,

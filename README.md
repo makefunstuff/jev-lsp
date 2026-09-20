@@ -62,10 +62,12 @@ export JEV_API_KEY_ENV=OPENROUTER_API_KEY      # a hosted chat tier: the NAME of
 ```
 
 `opencode-go` (`…/zen/go/v1`) is the subscription gateway and carries **no Jev** — its decision
-route answers `Model is unavailable`. The key's *name* comes from `api_key_env` and has no
-environment override (`JEV_API_KEY_ENV` covers the chat tiers only), so the CLI exports its key
-under `TYPESAFE_API_KEY` whatever the provider; a client that sends settings can name another
-variable there. `docs/TUTORIAL.md` §4 lists every setting.
+route answers `Model is unavailable`. The key's *name* comes from `api_key_env` (default
+`TYPESAFE_API_KEY`), and the environment can name another one: `JEV_DECIDE_API_KEY_ENV` for the
+decide tier, `JEV_API_KEY_ENV` for the chat tiers. Both take the **name** of the variable holding
+the key — never the key itself — and an empty value is ignored, so a shell pointing the decide tier
+at another provider names its own key variable instead of borrowing a name that belongs to
+somebody else's service. `docs/TUTORIAL.md` §4 lists every setting.
 
 ## Use it with another LSP client
 
