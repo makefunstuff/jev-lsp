@@ -305,24 +305,8 @@ impl Engine {
             .root()
             .or_else(|| parent_dir(&doc.path))
             .unwrap_or_else(|| ".".to_string());
-        let rule_set = self.state.rule_set(std::path::Path::new(&root));
+        let rule_set = self.state.rule_set(std::path::Path::new(&root), cfg.rules.defaults);
         let mut skipped = rule_set.skipped.clone();
-
-        // Everything wrong with the rules *document*, reported beside everything wrong with the
-        // pass, in the one list a caller reads (`skipped`, PROTOCOL §6). A rule whose pattern does
-        // not compile finds no candidates and would otherwise be inert in silence — the same
-        // answer a repository gets from a convention it keeps perfectly — which is the failure
-        // mode `rules::lint` exists for and the reason it is called from here rather than from
-        // nowhere.
-        //
-        // It is a fact about the *rule set*, not about this document, which is why the unchanged
-        // shortcut below reports it too: a user who has just edited a rule, saved, and watched an
-        // untouched file change nothing is exactly who needs to be told why.
-        let lint: Vec<(String, String)> = jev_core::rules::lint(&rule_set)
-            .into_iter()
-            .map(|message| ("lint".to_string(), message))
-            .collect();
-        skipped.extend(lint.iter().cloned());
 
         // Steps 2-4: the rules that claim this path, and the candidates their inspections found.
         // All of it is local work that decides nothing.
@@ -337,12 +321,20 @@ impl Engine {
         );
         let candidates = asked.len();
 
-        // A pass with nothing to run says so, in the one place both front ends ask
-        // (`inspections::nothing_to_run`), so `jev inspect` cannot report a silent zero while
-        // the server reports the reason.
-        if let Some(skip) = inspections::nothing_to_run(&rule_set, considered, &doc.path, &root) {
-            skipped.push(skip);
-        }
+        // Everything wrong with the rules *document* and everything a reader needs to know about
+        // where they came from, reported beside everything wrong with the pass, in the one list a
+        // caller reads (`skipped`, PROTOCOL §6), from the one function both front ends call. A
+        // rule whose pattern does not compile finds no candidates and would otherwise be inert in
+        // silence — the same answer a repository gets from a convention it keeps perfectly —
+        // which is the failure mode `rules::lint` exists for; and `("default_rules", …)` is what
+        // stops a pass running on the shipped set from looking like a pass running on files the
+        // reader cannot find, and `no_rules` from reading as "you have rules" when none applies.
+        //
+        // All of it is a fact about the *rule set*, not about this document, which is why the
+        // unchanged shortcut below reports it too: a user who has just edited a rule, saved, and
+        // watched an untouched file change nothing is exactly who needs to be told why.
+        let notes = inspections::pass_notes(&rule_set, considered, &doc.path, &root);
+        skipped.extend(notes.iter().cloned());
 
         // Step 5: the cache is consulted once the candidate count is known, so a hit can still
         // answer with the numbers this pass would have reported.
@@ -364,7 +356,7 @@ impl Engine {
                     // `("unchanged", path)`: a pass-level skip names its reason and the path it is
                     // about, exactly as a file-level skip does. The rules' own problems come
                     // first, because they are true whatever this document is.
-                    let mut listed = lint.clone();
+                    let mut listed = notes;
                     listed.push(("unchanged".to_string(), doc.path.clone()));
                     return Ok(InspectOutcome {
                         skipped: listed,
@@ -378,6 +370,10 @@ impl Engine {
         }
 
         let started = std::time::Instant::now();
+        // The lint messages, for `jev.status`'s count. Counted off the notes rather than by
+        // linting a second time: `lint` compiles each rule's pattern, and a pass runs on every
+        // save.
+        let lint_count = notes.iter().filter(|(code, _)| code == "lint").count();
 
         // Nothing to ask: no rules matched, or none of them found anything. A decision call with
         // zero questions would spend a permit to be told nothing. The pass is still recorded, so
@@ -389,7 +385,7 @@ impl Engine {
                 started.elapsed().as_millis() as u64,
                 candidates,
                 0,
-                lint.len(),
+                lint_count,
             );
             self.state.cache.put(
                 &key,
@@ -469,7 +465,7 @@ impl Engine {
             started.elapsed().as_millis() as u64,
             candidates,
             1,
-            lint.len(),
+            lint_count,
         );
 
         Ok(InspectOutcome {
@@ -942,8 +938,18 @@ mod tests {
         responses: &[&str],
         decision: Arc<ScriptedDecision>,
     ) -> (Engine, Arc<Scripted>) {
+        engine_full(responses, decision, &[])
+    }
+
+    /// The same, with the shipped rule set substituted: what `main` passes the embedded set for,
+    /// so the pass under test does not depend on whether `default_rules/` has been filled in yet.
+    fn engine_full(
+        responses: &[&str],
+        decision: Arc<ScriptedDecision>,
+        builtin: &'static [(&'static str, &'static str)],
+    ) -> (Engine, Arc<Scripted>) {
         let scripted = Scripted::new(responses);
-        let state = AppState::new(scripted.clone(), decision, Config::default());
+        let state = AppState::new(scripted.clone(), decision, Config::default(), builtin);
         (Engine::new(state), scripted)
     }
 
@@ -1598,6 +1604,124 @@ mod tests {
         let f = e.inspect(&doc(UNWRAP), true).unwrap_err();
         assert!(matches!(f, Failure::Refused(_)), "{f:?}");
         assert_eq!(decision.calls(), 0, "the permit is taken before the call, never after");
+    }
+
+    /// A shipped rule set a test can read: the same document shape `default_rules/*.json`
+    /// holds, so nothing here depends on the authoring sessions having landed their files.
+    const SHIPPED: &[(&str, &str)] = &[(
+        "code/shipped-unwrap.json",
+        r#"{"schema": "jev.rules/1", "rules": [{
+            "id": "shipped-unwrap",
+            "title": "Shipped: unwrap in a handler",
+            "text": "A handler must not unwrap.",
+            "severity": "warning",
+            "applies_to": ["**/*.rs"],
+            "inspection": {"kind": "regex", "pattern": "\\.unwrap\\(\\)"},
+            "judgement": {"question": "Is this unwrap reachable?", "min_probability": 0.75}
+        }]}"#,
+    )];
+
+    /// An engine over `rules` with the shipped set in play, the way a fresh checkout runs.
+    fn shipped_inspector(rules: &Rules, decision: Arc<ScriptedDecision>) -> Engine {
+        let (e, _) = engine_full(&[], decision, SHIPPED);
+        e.state.set_root(Some(rules.root.display().to_string()));
+        e
+    }
+
+    #[test]
+    fn a_repository_with_no_rules_of_its_own_is_inspected_by_the_shipped_set() {
+        // The whole point of shipping defaults: a repository that has written no rules still
+        // gets findings, through the pass the server runs, with the source of each finding said
+        // out loud. Before this, the answer here was `no_rules` and nothing else — which is what
+        // made a fresh install and a broken one indistinguishable.
+        let rules = Rules::new("shipped-only");
+        let decision = ScriptedDecision::with(&[("shipped-unwrap#1", 0.9), ("shipped-unwrap#2", 0.9)]);
+        let e = shipped_inspector(&rules, decision.clone());
+
+        let out = e.inspect(&doc(UNWRAP), true).unwrap();
+        assert_eq!(out.considered, 1, "the shipped rule claimed the file");
+        assert_eq!(out.findings.len(), 2, "and its candidates became findings");
+        assert_eq!(decision.calls(), 1, "one decision call, as any rules pass makes");
+        assert_eq!(
+            out.findings[0].rule_source,
+            Some(jev_core::types::RuleSource::Builtin),
+            "and a reader can tell it came from the shipped set"
+        );
+        assert_eq!(out.findings[0].label, "Shipped: unwrap in a handler");
+
+        // `no_rules` is not the answer any more, and the pass says what it ran on instead:
+        // the reader is told where the rules came from and how to get them on disk.
+        let codes: Vec<&str> = out.skipped.iter().map(|(c, _)| c.as_str()).collect();
+        assert!(!codes.contains(&"no_rules"), "{:?}", out.skipped);
+        assert!(codes.contains(&"default_rules"), "{:?}", out.skipped);
+        assert!(
+            out.skipped
+                .iter()
+                .any(|(_, d)| d.contains("jev rules init")),
+            "and how to see them: {:?}",
+            out.skipped
+        );
+    }
+
+    #[test]
+    fn the_repositorys_own_rule_shadows_the_shipped_one_and_is_not_reported_twice() {
+        let rules = Rules::new("shadow");
+        // The same id, the repository's own text, and a pattern that matches one line of the
+        // two the shipped rule matches — so a pass that ran both would publish three findings
+        // rather than two, under a label the reader could not attribute.
+        rules.file(
+            "mine.json",
+            &rules
+                .rule("shipped-unwrap", r"a\.unwrap\(\)", "**/*.rs", 0.75)
+                .replace("Unwrap in a handler", "Ours: unwrap in a handler"),
+        );
+        let decision = ScriptedDecision::with(&[("shipped-unwrap#1", 0.9), ("shipped-unwrap#2", 0.9)]);
+        let e = shipped_inspector(&rules, decision.clone());
+
+        let out = e.inspect(&doc(UNWRAP), true).unwrap();
+        assert_eq!(out.considered, 1, "one rule claims the file, not two");
+        assert_eq!(out.candidates, 1, "the repository's pattern is the one that ran");
+        assert_eq!(out.findings.len(), 1);
+        assert_eq!(out.findings[0].label, "Ours: unwrap in a handler");
+        assert_eq!(
+            out.findings[0].rule_source,
+            Some(jev_core::types::RuleSource::Repository)
+        );
+        assert!(
+            !out.skipped.iter().any(|(c, _)| c == "default_rules"),
+            "the repository has rules of its own: {:?}",
+            out.skipped
+        );
+    }
+
+    #[test]
+    fn a_repository_with_no_rules_and_defaults_off_says_the_shipped_set_is_off() {
+        // The other half of the setting: through the config path the server uses
+        // (`workspace/configuration` → `merge_config`), with nothing else changed. The pass must
+        // not report "none shipped in this build" while the build ships them — that sentence
+        // would send the reader looking for a missing file that is right there.
+        let rules = Rules::new("defaults-off");
+        let decision = ScriptedDecision::with(&[("shipped-unwrap#1", 0.9)]);
+        let e = shipped_inspector(&rules, decision.clone());
+        e.state.merge_config(Some(&serde_json::json!({
+            "rules": {"defaults": false}
+        })));
+
+        let out = e.inspect(&doc(UNWRAP), true).unwrap();
+        assert_eq!(out.considered, 0);
+        assert!(out.findings.is_empty());
+        assert_eq!(decision.calls(), 0, "nothing to ask costs nothing");
+        let no_rules = out
+            .skipped
+            .iter()
+            .find(|(c, _)| c == "no_rules")
+            .expect("the pass says why it did nothing");
+        assert!(
+            no_rules.1.contains("rules.defaults = false"),
+            "and names the switch: {}",
+            no_rules.1
+        );
+        assert!(!out.skipped.iter().any(|(c, _)| c == "default_rules"));
     }
 
     #[test]

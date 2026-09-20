@@ -170,6 +170,12 @@ pub struct AppState {
     /// The decision tier: the ambient path's only model client. Injected for the same reason the
     /// chat backend is — the whole rules pass is exercisable without a socket.
     pub decision: Arc<dyn DecisionBackend>,
+    /// The shipped rule set this server merges under the repository's own (PROTOCOL.md §9).
+    ///
+    /// Injected rather than read from the crate's `builtin_files()` at the call site, for the
+    /// same reason the two backends are: the pass a server runs and the pass a test runs are
+    /// then the same pass over a substitutable input. `main` passes the embedded set.
+    builtin: &'static [(&'static str, &'static str)],
     root: RwLock<Option<String>>,
 }
 
@@ -178,6 +184,7 @@ impl AppState {
         backend: Arc<dyn Backend>,
         decision: Arc<dyn DecisionBackend>,
         config: Config,
+        builtin: &'static [(&'static str, &'static str)],
     ) -> Arc<AppState> {
         Arc::new(AppState {
             docs: RwLock::new(HashMap::new()),
@@ -201,6 +208,7 @@ impl AppState {
             config_notify: tokio::sync::Notify::new(),
             backend,
             decision,
+            builtin,
             root: RwLock::new(None),
         })
     }
@@ -482,15 +490,22 @@ impl AppState {
 
     // ---- the rules pass -----------------------------------------------------
 
-    /// The rules for a workspace root, read from `.jev/rules/*.json`.
+    /// The rules for a workspace root: `.jev/rules/*.json`, plus the shipped set when
+    /// `rules.defaults` is on.
     ///
     /// The files are read on every call, because a rule the user just edited has to take effect
     /// on the next save; what the cache buys is the identity, not the I/O — when the hash is
     /// unchanged the previous `Arc` is handed back, so the parsed set is shared rather than
-    /// rebuilt for every document in a pass.
-    pub fn rule_set(&self, root: &Path) -> Arc<RuleSet> {
+    /// rebuilt for every document in a pass. The hash covers the merged set, so flipping
+    /// `rules.defaults` between passes is a different hash and re-parses rather than serving the
+    /// previous mixture.
+    ///
+    /// `defaults` is passed in rather than read here so the caller's already-resolved config is
+    /// the one that applies: a pass must not read one setting from the config it was given and
+    /// another from the state's current one.
+    pub fn rule_set(&self, root: &Path, defaults: bool) -> Arc<RuleSet> {
         let key = root.display().to_string();
-        let loaded = Arc::new(rules::load(root));
+        let loaded = Arc::new(rules::load(root, defaults, self.builtin));
         let mut cache = self.rule_sets.lock();
         if let Some(existing) = cache.get(&key) {
             if existing.hash == loaded.hash {
@@ -643,7 +658,7 @@ mod tests {
     }
 
     fn state() -> Arc<AppState> {
-        AppState::new(Arc::new(Null), Arc::new(NoDecision), Config::default())
+        AppState::new(Arc::new(Null), Arc::new(NoDecision), Config::default(), &[])
     }
 
     /// A plan with nothing in it: the store keys, counts and evicts by identity alone.
@@ -667,7 +682,7 @@ mod tests {
 
     #[test]
     fn client_definitions_are_used_only_for_the_version_they_describe() {
-        let s = AppState::new(Arc::new(Null), Arc::new(NoDecision), Config::default());
+        let s = AppState::new(Arc::new(Null), Arc::new(NoDecision), Config::default(), &[]);
         let defs = || {
             vec![ClientDefinition {
                 start_line: 4,
@@ -705,7 +720,7 @@ mod tests {
 
     #[test]
     fn the_oldest_plan_is_the_one_evicted() {
-        let s = AppState::new(Arc::new(Null), Arc::new(NoDecision), Config::default());
+        let s = AppState::new(Arc::new(Null), Arc::new(NoDecision), Config::default(), &[]);
         for i in 0..40 {
             s.put_plan(plan_with(&format!("plan-{i}")));
         }

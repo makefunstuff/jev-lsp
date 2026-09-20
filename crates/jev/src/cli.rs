@@ -16,6 +16,7 @@ USAGE:
     jev action --verb <verb> <path>[:<range>]   proposed edit (JSON), never applied
     jev plan --goal <text> <path>               plan artifact (JSON) to stdout
     jev inspect <path> [--force]                the repository's rules, run over <path>
+    jev rules init [--dir <dir>] [--force]      write the shipped rule set out to read/edit
     jev status                                  budget, queue and cache (JSON) to stdout
 
     <path>     the one file to read. `-` reads the document from stdin instead.
@@ -30,6 +31,8 @@ OPTIONS:
     --verb <verb>       action: which transformation to propose (required)
     --goal <text>       plan: what the plan is for (required)
     --force             inspect: run the rules even if the file is unchanged since HEAD
+                        rules init: overwrite rule files that are already there
+    --dir <dir>         rules init: where to write (default <root>/.jev/rules)
     --base-url <url>    override the model endpoint for every tier (also JEV_BASE_URL)
     --model <name>      override the model name for every tier (also JEV_MODEL,
                         JEV_REVIEW_MODEL)
@@ -45,6 +48,7 @@ OUTPUT:
 EXIT CODES:
     0  success                       1  transport or model failure
     2  usage error or contract violation
+       (a `rules init` that would have overwritten a file you edited exits 2 and says which)
     3  budget exhausted              4  stale target (the file changed in flight)
 ";
 
@@ -89,6 +93,9 @@ pub enum Command {
     /// Run the repository's `.jev/rules/*.json` over one file. `force` skips the
     /// git-changed-set check.
     Inspect { target: Target, force: bool },
+    /// `jev rules init [--dir <dir>] [--force]`: write the shipped rule set into a directory
+    /// the user can read and edit (PROTOCOL.md §9). No model is called and no document is read.
+    RulesInit { dir: Option<String>, force: bool },
     Status,
 }
 
@@ -174,6 +181,7 @@ pub fn parse(args: &[String]) -> Result<Invocation, UsageError> {
     let mut overrides = Overrides::default();
     let mut verb: Option<Verb> = None;
     let mut goal: Option<String> = None;
+    let mut dir: Option<String> = None;
     let mut force = false;
     let mut positional: Vec<String> = Vec::new();
 
@@ -222,6 +230,13 @@ pub fn parse(args: &[String]) -> Result<Invocation, UsageError> {
                     }
                 }
             }
+            "--dir" => {
+                let value = value_of(args, &mut i, inline, "--dir")?;
+                if value.trim().is_empty() {
+                    return Err(UsageError("--dir needs a directory to write into".to_string()));
+                }
+                dir = Some(value);
+            }
             "--force" => {
                 if inline.is_some() {
                     return Err(UsageError("--force takes no value".to_string()));
@@ -247,17 +262,20 @@ pub fn parse(args: &[String]) -> Result<Invocation, UsageError> {
         "explain" => {
             no_flag(verb.is_some(), "--verb", "explain")?;
             no_flag(goal.is_some(), "--goal", "explain")?;
+            no_flag(dir.is_some(), "--dir", "explain")?;
             no_flag(force, "--force", "explain")?;
             Command::Explain(one_target("explain", &rest, Position::LineCol)?)
         }
         "review" => {
             no_flag(verb.is_some(), "--verb", "review")?;
             no_flag(goal.is_some(), "--goal", "review")?;
+            no_flag(dir.is_some(), "--dir", "review")?;
             no_flag(force, "--force", "review")?;
             Command::Review(one_target("review", &rest, Position::None)?)
         }
         "action" => {
             no_flag(goal.is_some(), "--goal", "action")?;
+            no_flag(dir.is_some(), "--dir", "action")?;
             no_flag(force, "--force", "action")?;
             let Some(verb) = verb else {
                 return Err(UsageError(
@@ -271,6 +289,7 @@ pub fn parse(args: &[String]) -> Result<Invocation, UsageError> {
         }
         "plan" => {
             no_flag(verb.is_some(), "--verb", "plan")?;
+            no_flag(dir.is_some(), "--dir", "plan")?;
             no_flag(force, "--force", "plan")?;
             let Some(goal) = goal else {
                 return Err(UsageError("plan needs --goal <text>".to_string()));
@@ -283,14 +302,40 @@ pub fn parse(args: &[String]) -> Result<Invocation, UsageError> {
         "inspect" => {
             no_flag(verb.is_some(), "--verb", "inspect")?;
             no_flag(goal.is_some(), "--goal", "inspect")?;
+            no_flag(dir.is_some(), "--dir", "inspect")?;
             Command::Inspect {
                 target: one_target("inspect", &rest, Position::None)?,
                 force,
             }
         }
+        "rules" => {
+            no_flag(verb.is_some(), "--verb", "rules")?;
+            no_flag(goal.is_some(), "--goal", "rules")?;
+            let mut rest = rest.into_iter();
+            match rest.next().as_deref() {
+                // `init` is the only subcommand: the shipped set is written out to be read and
+                // edited, and there is nothing to list, enable or delete that the files
+                // themselves do not already say.
+                Some("init") => {
+                    if let Some(extra) = rest.next() {
+                        return Err(UsageError(format!(
+                            "rules init takes no arguments, got `{extra}`"
+                        )));
+                    }
+                    Command::RulesInit { dir, force }
+                }
+                Some(other) => {
+                    return Err(UsageError(format!(
+                        "unknown `rules` subcommand `{other}`; the only one is `init`"
+                    )))
+                }
+                None => return Err(UsageError("rules needs a subcommand: `jev rules init`".to_string())),
+            }
+        }
         "status" => {
             no_flag(verb.is_some(), "--verb", "status")?;
             no_flag(goal.is_some(), "--goal", "status")?;
+            no_flag(dir.is_some(), "--dir", "status")?;
             no_flag(force, "--force", "status")?;
             if !rest.is_empty() {
                 return Err(UsageError(format!(
@@ -769,10 +814,12 @@ mod tests {
         for command in ["explain", "review", "action", "plan", "inspect", "status"] {
             assert!(USAGE.contains(&format!("jev {command} ")), "{command}");
         }
+        assert!(USAGE.contains("jev rules init "), "rules init");
         for flag in [
             "--verb",
             "--goal",
             "--force",
+            "--dir",
             "--base-url",
             "--model",
             "--max-tokens",

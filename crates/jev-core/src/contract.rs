@@ -4,6 +4,7 @@
 //! are computed here and stamped by the LSP layer, which is what makes PROTOCOL.md N5
 //! enforceable rather than aspirational.
 
+use crate::types::RuleSource;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -51,6 +52,11 @@ pub struct RawFinding {
     pub detail: Option<String>,
     #[serde(default)]
     pub verb_hint: Option<String>,
+    /// Which rule set this finding came from, when a rule produced it. Absent on everything a
+    /// model writes — the chat review's findings have no rule behind them — and set by the
+    /// rules pass (`inspections::resolve`), which knows which source each rule came from.
+    #[serde(default)]
+    pub rule_source: Option<RuleSource>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

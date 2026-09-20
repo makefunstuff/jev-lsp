@@ -365,6 +365,7 @@ mod tests {
             label: "unchecked".into(),
             detail: "detail".into(),
             verb_hint: Verb::Fix,
+            rule_source: None,
         }
     }
 

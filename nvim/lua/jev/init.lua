@@ -1156,8 +1156,14 @@ end
 --- The artifact `:Jev inspect` opens: the findings, the counts, and every skip.
 ---
 --- The skips are the point of the surface. "No finding" and "nothing was inspected" look
---- identical on a sign column, and only one of them is a bug — so `unchanged`, `no_rules`, and
---- a rule file that failed to load each get a line of their own rather than being counted away.
+--- identical on a sign column, and only one of them is a bug — so `unchanged`, `no_rules`,
+--- `default_rules` and a rule file that failed to load each get a line of their own rather than
+--- being counted away.
+---
+--- Each finding also names the *rule set* it came from (`rule_source`, PROTOCOL §9): a shipped
+--- default and a rule this repository wrote are turned off in different places, and a reader who
+--- cannot tell which they are looking at can do neither. Absent on a review finding, which is the
+--- review tier's opinion and has no rule behind it at all.
 --- @param path string  the document this is about, for the title
 --- @param result table  the `jev.inspect` Result
 --- @return table artifact  `{ kind, id, summary, markdown }` (PROTOCOL §7)
@@ -1180,8 +1186,12 @@ local function inspect_artifact(path, result)
     lines[#lines + 1] = 'No finding was published for this document.'
   else
     for _, f in ipairs(findings) do
-      -- 1-based, the way the line is numbered in the editor.
-      lines[#lines + 1] = ('- line %d: %s'):format((tonumber(f.line) or 0) + 1, tostring(f.label))
+      -- 1-based, the way the line is numbered in the editor. `rule_source` is `builtin` for a
+      -- rule this build ships and `repository` for one in `.jev/rules/`; `nil` on a finding no
+      -- rule stands behind (a review), which needs no marker.
+      local from = type(f.rule_source) == 'string' and (' [%s]'):format(f.rule_source) or ''
+      lines[#lines + 1] = ('- line %d: %s%s')
+        :format((tonumber(f.line) or 0) + 1, tostring(f.label), from)
       if type(f.detail) == 'string' and f.detail ~= '' then
         lines[#lines + 1] = ('  %s'):format(f.detail)
       end

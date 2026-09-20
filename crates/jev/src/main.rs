@@ -27,6 +27,9 @@ fn main() {
         budget: &budget,
         cache: &cache,
         files: &files,
+        // The shipped set, embedded at build time; `jev rules init` writes it out and the rules
+        // pass merges it under the repository's own (PROTOCOL.md §9).
+        builtin: jev_core::rules::builtin_files(),
     };
 
     let outcome = run::run(&args, &deps);
