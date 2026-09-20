@@ -384,8 +384,8 @@ impl Config {
     ///
     /// `JEV_BASE_URL` deliberately does **not** touch the decision tier. It names an
     /// OpenAI-compatible chat server, and the decision tier speaks System One — pointing one at
-    /// the other answers every decision with an HTTP error. The decision tier has its own pair
-    /// of variables.
+    /// the other answers every decision with an HTTP error. The decision tier has its own set of
+    /// variables.
     pub fn apply_env_overrides(&mut self) {
         if let Ok(url) = std::env::var("JEV_BASE_URL") {
             if !url.trim().is_empty() {
@@ -420,9 +420,10 @@ impl Config {
                 // `api_key_env` already states ("never the key itself"): a key exported into the
                 // environment is a key in every process listing.
                 //
-                // The chat tiers only. The decision tier keeps its own `api_key_env`: it speaks
-                // a different wire and can sit behind a different provider, so one shell
-                // variable must not silently repoint it at the wrong credential.
+                // The chat tiers only. The decision tier names its own variable
+                // (`JEV_DECIDE_API_KEY_ENV`): it speaks a different wire and can sit behind a
+                // different provider, so one shell variable must not silently repoint it at the
+                // wrong credential.
                 self.models.reason.api_key_env = Some(name.to_string());
                 self.models.review.api_key_env = Some(name.to_string());
             }
@@ -451,6 +452,18 @@ impl Config {
                 if let Some(parsed) = Wire::parse(value) {
                     self.models.decide.wire = parsed;
                 }
+            }
+        }
+        if let Ok(name) = std::env::var("JEV_DECIDE_API_KEY_ENV") {
+            let name = name.trim();
+            if !name.is_empty() {
+                // The value is the *name* of the variable holding the key, never a key, exactly
+                // as for `JEV_API_KEY_ENV` above. The decision tier needs its own: it speaks a
+                // different wire and can sit behind a different provider, and its default names
+                // `TYPESAFE_API_KEY` — so without this, a shell pointing it elsewhere could only
+                // say where its key lives by exporting it under a name that belongs to somebody
+                // else's service.
+                self.models.decide.api_key_env = Some(name.to_string());
             }
         }
     }
@@ -716,6 +729,54 @@ mod tests {
         blank.apply_env_overrides();
         std::env::remove_var("JEV_DECIDE_WIRE");
         assert_eq!(blank.decision().wire, Wire::SystemOne);
+    }
+
+    #[test]
+    fn the_decision_tiers_key_variable_is_nameable_from_the_environment() {
+        let _env = ENV_LOCK.lock();
+        // The decision tier's default names `TYPESAFE_API_KEY` and it can sit behind a provider
+        // that is not that one. Without an override of its own, the only way to point it at a
+        // hosted endpoint *and* give it a credential was to export the key under a name that
+        // belongs to somebody else's service: a workaround a user has to be told about, and one
+        // nothing in the settings can tell them.
+        std::env::set_var("JEV_DECIDE_API_KEY_ENV", "OPENROUTER_API_KEY");
+        let mut named = Config::default();
+        named.apply_env_overrides();
+        std::env::remove_var("JEV_DECIDE_API_KEY_ENV");
+        assert_eq!(named.decision().api_key_env.as_deref(), Some("OPENROUTER_API_KEY"));
+    }
+
+    #[test]
+    fn naming_the_decision_tiers_key_variable_leaves_the_chat_tiers_alone() {
+        let _env = ENV_LOCK.lock();
+        // Two providers, two credentials: this names the decision tier's key variable and
+        // nothing else. An assignment that caught `reason`/`review` too — one line of copy-paste
+        // — would send a decision provider's key to the chat endpoint.
+        let mut c = Config::default();
+        c.models.reason.api_key_env = Some("CHAT_KEY".to_string());
+        c.models.review.api_key_env = Some("CHAT_KEY".to_string());
+        std::env::set_var("JEV_DECIDE_API_KEY_ENV", "DECIDE_KEY");
+        c.apply_env_overrides();
+        std::env::remove_var("JEV_DECIDE_API_KEY_ENV");
+        assert_eq!(c.decision().api_key_env.as_deref(), Some("DECIDE_KEY"));
+        assert_eq!(c.models.reason.api_key_env.as_deref(), Some("CHAT_KEY"));
+        assert_eq!(c.models.review.api_key_env.as_deref(), Some("CHAT_KEY"));
+    }
+
+    #[test]
+    fn an_empty_decision_key_variable_is_not_an_opinion() {
+        let _env = ENV_LOCK.lock();
+        // Whitespace is not a name, exactly as for the neighbouring variables. An exported empty
+        // variable must not *clear* the name in force either: `None` means no key at all, so a
+        // blank override would turn a working endpoint into 401s.
+        for blank in ["", "   "] {
+            std::env::set_var("JEV_DECIDE_API_KEY_ENV", blank);
+            let mut held = Config::default();
+            held.models.decide.api_key_env = Some("KEPT".to_string());
+            held.apply_env_overrides();
+            std::env::remove_var("JEV_DECIDE_API_KEY_ENV");
+            assert_eq!(held.decision().api_key_env.as_deref(), Some("KEPT"), "{blank:?}");
+        }
     }
 
     #[test]
