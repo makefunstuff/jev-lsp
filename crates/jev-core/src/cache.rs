@@ -4,6 +4,7 @@
 //! miss is always recoverable by recomputation. Keys embed the content hash, so an entry
 //! for changed content simply never hits — invalidation is free.
 
+use crate::config::Config;
 use crate::types::{Finding, Proposal};
 use parking_lot::Mutex;
 use std::collections::{HashMap, VecDeque};
@@ -110,7 +111,7 @@ pub fn findings_key(content_hash: &str, language: &str, max_findings: usize) -> 
     format!("findings|{content_hash}|{language}|{max_findings}")
 }
 
-/// Findings from the rules pass, keyed by the content, the rules, and the path.
+/// Findings from the rules pass, keyed by **every** input the conclusion is a function of.
 ///
 /// The rules axis is why this key exists at all: editing a rule changes what it finds, so a
 /// conclusion taken under the old text must not be served for the new one.
@@ -120,8 +121,34 @@ pub fn findings_key(content_hash: &str, language: &str, max_findings: usize) -> 
 /// extensions are asked different questions and can answer differently. Without the path in the
 /// key, a `.py` file whose bytes match an already-inspected `.rs` file would be served the `.rs`
 /// file's findings — a violation reported in a file the rule never claimed.
-pub fn rules_key(content_hash: &str, rule_hash: &str, path: &str) -> String {
-    format!("rules|{content_hash}|{rule_hash}|{path}")
+///
+/// The decide tier is the third: this conclusion *is* that tier's answer, so a changed classifier
+/// was asked the same words and answered them differently. It is the same failure [`op_key`]'s
+/// docstring records as measured on the chat axis, and the rules pass has it in the same shape.
+/// The `wire` rides along with the endpoint because it selects the *path* the request goes to (the
+/// service's own route against a provider's chat route): same host, different question.
+///
+/// The bounds are the fourth, and they are inputs for the same reason.
+/// `max_candidates_per_rule` decides how many candidates become questions, and `max_state_lines`
+/// and `max_state_bytes` decide how much of the file the decision is shown
+/// (`inspections::select`, `inspections::request`). Narrow any of them and identical bytes under
+/// identical rules can answer differently.
+///
+/// `rules.enabled` and `max_files_per_pass` are deliberately absent: the first is not an input to
+/// an answer that was produced (a disabled pass produces none, and re-enabling asks the same
+/// question again), and the second bounds a *pass*, not a document.
+pub fn rules_key(content_hash: &str, rule_hash: &str, path: &str, cfg: &Config) -> String {
+    let decide = &cfg.models.decide;
+    let bounds = &cfg.rules;
+    format!(
+        "rules|{content_hash}|{rule_hash}|{path}|{:?}|{}|{}|{}|{}|{}",
+        decide.wire,
+        decide.base_url,
+        decide.model,
+        bounds.max_candidates_per_rule,
+        bounds.max_state_lines,
+        bounds.max_state_bytes
+    )
 }
 
 /// A generated edit or artifact, keyed by **every** input the answer is a function of.
@@ -157,6 +184,7 @@ pub fn op_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::decision::Wire;
 
     fn conclusion(tag: &str) -> Conclusion {
         Conclusion {
@@ -218,20 +246,97 @@ mod tests {
 
     #[test]
     fn the_rules_key_separates_content_rules_and_path() {
-        let base = rules_key("h", "r", "/w/a.rs");
-        assert_eq!(base, rules_key("h", "r", "/w/a.rs"));
-        assert_ne!(base, rules_key("h2", "r", "/w/a.rs"), "content");
+        let cfg = Config::default();
+        let base = rules_key("h", "r", "/w/a.rs", &cfg);
+        assert_eq!(base, rules_key("h", "r", "/w/a.rs", &cfg));
+        assert_ne!(base, rules_key("h2", "r", "/w/a.rs", &cfg), "content");
         assert_ne!(
             base,
-            rules_key("h", "r2", "/w/a.rs"),
+            rules_key("h", "r2", "/w/a.rs", &cfg),
             "a rule edit must not serve the old conclusion"
         );
         // Two files with the same bytes but different names are asked different questions: a
         // rule's `applies_to` is matched against the path.
         assert_ne!(
             base,
-            rules_key("h", "r", "/w/a.py"),
+            rules_key("h", "r", "/w/a.py", &cfg),
             "`applies_to` makes the answer depend on the path"
+        );
+    }
+
+    #[test]
+    fn the_rules_key_names_the_classifier_and_the_bounds() {
+        let cfg = Config::default();
+        let key = |cfg: &Config| rules_key("h", "r", "/w/a.rs", cfg);
+        assert_eq!(key(&cfg), key(&cfg), "the same inputs are the same key");
+
+        // The tier that answered. A different model, endpoint or wire asked the same words of a
+        // different classifier, and this conclusion *is* its answer.
+        let mut model = cfg.clone();
+        model.models.decide.model = "another-model".into();
+        assert_ne!(key(&cfg), key(&model), "another model answered the question");
+
+        let mut wire = cfg.clone();
+        wire.models.decide.wire = Wire::OpenRouter;
+        assert_ne!(key(&cfg), key(&wire), "the wire selects the path");
+
+        let mut endpoint = cfg.clone();
+        endpoint.models.decide.base_url = "https://elsewhere.example/v1".into();
+        assert_ne!(key(&cfg), key(&endpoint), "another endpoint is another classifier");
+
+        // The bounds the questions were built under.
+        let mut candidates = cfg.clone();
+        candidates.rules.max_candidates_per_rule -= 1;
+        assert_ne!(
+            key(&cfg),
+            key(&candidates),
+            "the candidate cap decides how many questions there were"
+        );
+        let mut lines = cfg.clone();
+        lines.rules.max_state_lines -= 1;
+        assert_ne!(key(&cfg), key(&lines), "how much of the file the decision read");
+        let mut bytes = cfg.clone();
+        bytes.rules.max_state_bytes -= 1;
+        assert_ne!(key(&cfg), key(&bytes), "and its byte budget");
+
+        // Two that are not inputs to this conclusion, and must not cost a hit: the switch (a
+        // disabled pass produces no conclusion to serve) and the file budget (a property of a
+        // pass, not of a document).
+        let mut switched = cfg.clone();
+        switched.rules.enabled = false;
+        switched.rules.max_files_per_pass += 1;
+        assert_eq!(
+            key(&cfg),
+            key(&switched),
+            "neither changes what the answer to this question is"
+        );
+    }
+
+    #[test]
+    fn a_conclusion_is_not_served_for_another_classifier_or_another_view() {
+        // The key is the whole mechanism: two runs that differ only in the tier, or only in what
+        // the decision was shown, must not share a conclusion. This is `op_key`'s measured
+        // failure on the chat axis, asserted on the rules axis.
+        let cache = Cache::new(8);
+        let path = "/w/a.rs";
+        let mut cfg = Config::default();
+        cache.put(&rules_key("h", "r", path, &cfg), conclusion("from the first tier"));
+        assert!(
+            cache.get(&rules_key("h", "r", path, &cfg)).is_some(),
+            "the same question hits"
+        );
+
+        cfg.models.decide.model = "another-model".into();
+        assert!(
+            cache.get(&rules_key("h", "r", path, &cfg)).is_none(),
+            "the stored answer came from a different model"
+        );
+
+        cfg.models.decide.model = Config::default().models.decide.model;
+        cfg.rules.max_state_lines += 1;
+        assert!(
+            cache.get(&rules_key("h", "r", path, &cfg)).is_none(),
+            "and it was given a different view of the file"
         );
     }
 

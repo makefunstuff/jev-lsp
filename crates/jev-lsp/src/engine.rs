@@ -341,7 +341,7 @@ impl Engine {
 
         // Step 5: the cache is consulted once the candidate count is known, so a hit can still
         // answer with the numbers this pass would have reported.
-        let key = cache::rules_key(&doc.hash, &rule_set.hash, &doc.path);
+        let key = cache::rules_key(&doc.hash, &rule_set.hash, &doc.path, &cfg);
         if let Some(hit) = self.state.cache.get(&key) {
             return Ok(InspectOutcome {
                 findings: hit.findings.clone(),

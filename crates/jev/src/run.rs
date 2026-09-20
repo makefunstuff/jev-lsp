@@ -510,7 +510,7 @@ fn inspect(
     // One process, one command: the cache is always cold here, so a hit can only come from
     // something this invocation already did. Kept anyway, because the key is what a *rule edit*
     // invalidates and having the shape right is what stops the CLI and the server drifting.
-    let key = cache::rules_key(&doc.hash, &set.hash, &doc.path);
+    let key = cache::rules_key(&doc.hash, &set.hash, &doc.path, config);
     let built = match deps.cache.get(&key) {
         Some(hit) => findings::FindingBuild {
             findings: hit.findings.clone(),
