@@ -24,9 +24,10 @@ name: ci
 #     job covers.
 #   * the `quality_eval` row measures a review against a real model. There is no API key in CI,
 #     so the row reports `?` with its reason: never a pass, never a failure.
-#   * the suite's own `rules_gate` row runs the same gate the step below runs. This workflow
-#     exports no decide endpoint into the verify jobs, so the row reports its own SKIP with the
-#     reason and `EXIT=0` — visible in the summary as a `?` row, not as a pass.
+#   * the suite's own `rules_gate` row runs the same gate the step below runs, against the
+#     suite's own model stub: `run-suite.sh` hands the row `JEV_DECIDE_BASE_URL` itself, so the
+#     row reports `ok` here rather than skipping. The keyed check is the step below, which names
+#     the `TYPESAFE_API_KEY` secret and reports NOT CHECKED without it.
 #   * the gate itself needs a decide endpoint and a key. It is a step of the build-and-test job,
 #     below, with the endpoint as a plain value and the key read from the `TYPESAFE_API_KEY`
 #     repository secret — which does not exist yet, so the step reports NOT CHECKED, with the
@@ -268,10 +269,10 @@ jobs:
             exit 1
           fi
           # `?` is a row that could not run. It carries its own reason in the log, and this step
-          # names it rather than letting it read as a pass: the suite's own `rules_gate` row is
-          # one of these in CI, because no decide endpoint is exported into this job (see the
-          # header). The keyed check is the build-and-test job's gate step, which names the
-          # `TYPESAFE_API_KEY` secret and reports NOT CHECKED without it.
+          # names it rather than letting it read as a pass. `quality_eval` is the one in CI: there
+          # is no API key here, so it reports `?` with that reason. The keyed check is the
+          # build-and-test job's gate step, which names the `TYPESAFE_API_KEY` secret and reports
+          # NOT CHECKED without it.
           if sed -n '/^=== summary ===$/,$p' /tmp/suite.log | grep -q '^? '; then
             echo "::notice::rows that could not run in CI (each names its reason in the log):"
             # Inside this branch there is at least one match, so nothing here needs `|| true`.
