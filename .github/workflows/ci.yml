@@ -255,14 +255,14 @@ jobs:
       # restored: one built from an earlier commit, and nothing at all on a cold cache. A verdict
       # about a stale binary is exactly the failure this repository's bar is against, so the binary
       # is built here, from this checkout, with the same command the build-and-test job runs.
-      # Measured on a runner with the cache restored: 46 s for this step, and 1m03s for the same
-      # command in the full-table job (the cache makes the dependencies free, not the workspace
-      # crates). `RUSTFLAGS: -D warnings` above applies, and a build that fails is a red step,
-      # never a warning.
+      # Measured on a runner with the cache restored: 46 s for this step — run 35505703708 logs a
+      # 46.42s `Finished` line for it, 10:40:24Z to 10:41:10Z. `RUSTFLAGS: -D warnings` above
+      # applies, and a build that fails is a red step, never a warning.
       #
       # Guarded to the narrow row because that is the one place the two rows genuinely differ: the
-      # full run builds the same binary inside the suite, and a second release build there would
-      # be a minute of the same work.
+      # full-table job builds the same binary as one of the suite's own rows — its table output
+      # carries `ok   cargo build --release` — so a second release build at this step would be
+      # the same work twice.
       - name: the binary the Lua rows run, built from this checkout
         if: matrix.nvim_only == '1'
         run: cargo build --release --locked
