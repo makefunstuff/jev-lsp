@@ -249,12 +249,12 @@
   </div>
 </section>
 
-<!-- ========== CLIENTS: three equal product cards ========== -->
+<!-- ========== CLIENTS: one-at-a-time showcase (CSS radio tabs) ========== -->
 <section id="clients" class="sec sec-clients">
   <div class="shell">
     <header class="sec-head">
-      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Protocol</p>
-      <h2>Standard LSP — three surfaces, one protocol</h2>
+      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Clients</p>
+      <h2>Same findings in a harness, Neovim, or VS Code</h2>
       <p class="sec-lead">No custom methods. Neovim is primary (<code>nvim/</code>). Anything that starts a language server works — harnesses included. VS Code / Cursor via <code>editors/cursor/</code>.</p>
       <p class="chips" aria-label="LSP surfaces">
         <span class="chip">diagnostics</span>
@@ -263,86 +263,62 @@
       </p>
     </header>
 
-    <div class="client-grid">
+    <div class="client-showcase">
+      <input class="client-radio" type="radio" name="client-view" id="client-harness" checked>
+      <input class="client-radio" type="radio" name="client-view" id="client-nvim">
+      <input class="client-radio" type="radio" name="client-view" id="client-vsc">
 
-      <!-- Harness -->
-      <figure class="client-card">
-        <div class="win mock-harness" aria-label="Harness client mockup">
-          <div class="win-chrome">
-            <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
-            <span class="win-title">Harness</span>
-            <span class="win-meta">agent · diagnostics</span>
-          </div>
-          <div class="term compact">
-            <div class="term-line dim">lsp publishDiagnostics · server.rs</div>
-            <div class="editor-pane embedded tight">
-              <div class="ed-gutter" aria-hidden="true">
-                <span>411</span><span class="g-warn">412</span><span>413</span>
-              </div>
-              <div class="ed-lines">
-                <div class="ed-row">    <span class="tok">let</span> body = msg.payload();</div>
-                <div class="ed-row find">
-                  <span class="find-bar" aria-hidden="true"></span>
-                  <span>    <span class="tok">let</span> data = body.<span class="fn">unwrap</span>();</span>
+      <div class="client-seg" role="tablist" aria-label="Client">
+        <label class="client-seg-btn" for="client-harness" role="tab">Harness</label>
+        <label class="client-seg-btn" for="client-nvim" role="tab">Neovim</label>
+        <label class="client-seg-btn" for="client-vsc" role="tab">VS Code</label>
+      </div>
+
+      <div class="client-stage">
+        <!-- Harness -->
+        <figure class="client-panel panel-harness">
+          <div class="win mock-harness" aria-label="Harness client mockup">
+            <div class="win-chrome">
+              <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span class="win-title">Harness</span>
+              <span class="win-meta">agent · diagnostics</span>
+            </div>
+            <div class="term">
+              <div class="term-line dim">lsp publishDiagnostics · server.rs</div>
+              <div class="editor-pane embedded">
+                <div class="ed-gutter" aria-hidden="true">
+                  <span>411</span><span class="g-warn">412</span><span>413</span>
                 </div>
-                <div class="ed-row">    process(data);</div>
+                <div class="ed-lines">
+                  <div class="ed-row">    <span class="tok">let</span> body = msg.payload();</div>
+                  <div class="ed-row find">
+                    <span class="find-bar" aria-hidden="true"></span>
+                    <span>    <span class="tok">let</span> data = body.<span class="fn">unwrap</span>();</span>
+                  </div>
+                  <div class="ed-row">    process(data);</div>
+                </div>
               </div>
+              <div class="diag-pill">jev · fail · p=0.91 · no-unwrap</div>
+              <div class="term-line dim">harness reads Diagnostic[] → steers next write</div>
             </div>
-            <div class="diag-pill">jev · fail · p=0.91 · no-unwrap</div>
-            <div class="term-line dim">harness reads Diagnostic[] → steers next write</div>
           </div>
-        </div>
-        <figcaption>Terminal / agent loop: finding on the generated line, ordinary diagnostic payload.</figcaption>
-      </figure>
+          <figcaption>Terminal / agent loop: finding on the generated line, ordinary diagnostic payload.</figcaption>
+        </figure>
 
-      <!-- Neovim -->
-      <figure class="client-card">
-        <div class="win mock-nvim" aria-label="Neovim client mockup">
-          <div class="win-chrome">
-            <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
-            <span class="win-title">Neovim</span>
-            <span class="win-meta">primary client</span>
-          </div>
-          <div class="nvim-status">
-            <span class="nvim-mode">NORMAL</span>
-            <span class="dim">server.rs</span>
-            <span class="nvim-right">utf-8 · rust</span>
-          </div>
-          <div class="editor-pane nvim-pane">
-            <div class="ed-gutter" aria-hidden="true">
-              <span>410</span><span>411</span><span class="g-warn">412</span><span>413</span><span>414</span>
+        <!-- Neovim -->
+        <figure class="client-panel panel-nvim">
+          <div class="win mock-nvim" aria-label="Neovim client mockup">
+            <div class="win-chrome">
+              <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span class="win-title">Neovim</span>
+              <span class="win-meta">primary client</span>
             </div>
-            <div class="ed-lines">
-              <div class="ed-row"><span class="tok">fn</span> <span class="fn">handle_request</span>(msg: Request) {</div>
-              <div class="ed-row">    <span class="tok">let</span> body = msg.payload();</div>
-              <div class="ed-row find">
-                <span class="find-bar" aria-hidden="true"></span>
-                <span>    <span class="tok">let</span> data = body.<span class="fn">unwrap</span>();</span>
-                <span class="virt">■ jev: fail p=0.91</span>
-              </div>
-              <div class="ed-row">    process(data);</div>
-              <div class="ed-row">}</div>
+            <div class="nvim-status">
+              <span class="nvim-mode">NORMAL</span>
+              <span class="dim">server.rs</span>
+              <span class="nvim-right">utf-8 · rust</span>
             </div>
-          </div>
-        </div>
-        <figcaption>Gutter sign + virtual text beside the line — next to clangd or your other LS.</figcaption>
-      </figure>
-
-      <!-- VS Code -->
-      <figure class="client-card">
-        <div class="win mock-vsc" aria-label="VS Code client mockup">
-          <div class="win-chrome">
-            <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
-            <span class="win-title">VS Code</span>
-            <span class="win-meta">editors/cursor/</span>
-          </div>
-          <div class="vsc-tabs">
-            <span class="vsc-tab on">server.rs</span>
-            <span class="vsc-tab">mod.rs</span>
-          </div>
-          <div class="vsc-body">
-            <div class="vsc-rail" aria-hidden="true"></div>
-            <div class="editor-pane vsc-pane">
+            <div class="editor-pane nvim-pane">
               <div class="ed-gutter" aria-hidden="true">
                 <span>410</span><span>411</span><span class="g-warn">412</span><span>413</span><span>414</span>
               </div>
@@ -351,36 +327,61 @@
                 <div class="ed-row">    <span class="tok">let</span> body = msg.payload();</div>
                 <div class="ed-row find">
                   <span class="find-bar" aria-hidden="true"></span>
-                  <span class="squiggle">    <span class="tok">let</span> data = body.<span class="fn">unwrap</span>();</span>
-                  <span class="bulb" title="code action">💡</span>
+                  <span>    <span class="tok">let</span> data = body.<span class="fn">unwrap</span>();</span>
+                  <span class="virt">■ jev: fail p=0.91</span>
                 </div>
                 <div class="ed-row">    process(data);</div>
                 <div class="ed-row">}</div>
               </div>
-              <div class="vsc-hover">
-                <div class="hover-title">jev · no-unwrap</div>
-                <div class="hover-body"><span class="amb">fail</span> · p=0.91</div>
-                <div class="hover-lens">jev: explain</div>
-              </div>
             </div>
           </div>
-          <div class="vsc-problems">
-            <span class="prob-label">Problems</span>
-            <span class="prob-item"><span class="amb">●</span> unwrap may fail · server.rs:412</span>
+          <figcaption>Gutter sign + virtual text beside the line — next to clangd or your other LS.</figcaption>
+        </figure>
+
+        <!-- VS Code -->
+        <figure class="client-panel panel-vsc">
+          <div class="win mock-vsc" aria-label="VS Code client mockup">
+            <div class="win-chrome">
+              <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span class="win-title">VS Code</span>
+              <span class="win-meta">editors/cursor/</span>
+            </div>
+            <div class="vsc-tabs">
+              <span class="vsc-tab on">server.rs</span>
+              <span class="vsc-tab">mod.rs</span>
+            </div>
+            <div class="vsc-body">
+              <div class="vsc-rail" aria-hidden="true"></div>
+              <div class="editor-pane vsc-pane">
+                <div class="ed-gutter" aria-hidden="true">
+                  <span>410</span><span>411</span><span class="g-warn">412</span><span>413</span><span>414</span>
+                </div>
+                <div class="ed-lines">
+                  <div class="ed-row"><span class="tok">fn</span> <span class="fn">handle_request</span>(msg: Request) {</div>
+                  <div class="ed-row">    <span class="tok">let</span> body = msg.payload();</div>
+                  <div class="ed-row find">
+                    <span class="find-bar" aria-hidden="true"></span>
+                    <span class="squiggle">    <span class="tok">let</span> data = body.<span class="fn">unwrap</span>();</span>
+                    <span class="bulb" title="code action">💡</span>
+                  </div>
+                  <div class="ed-row">    process(data);</div>
+                  <div class="ed-row">}</div>
+                </div>
+                <div class="vsc-hover">
+                  <div class="hover-title">jev · no-unwrap</div>
+                  <div class="hover-body"><span class="amb">fail</span> · p=0.91</div>
+                  <div class="hover-lens">jev: explain</div>
+                </div>
+              </div>
+            </div>
+            <div class="vsc-problems">
+              <span class="prob-label">Problems</span>
+              <span class="prob-item"><span class="amb">●</span> unwrap may fail · server.rs:412</span>
+            </div>
           </div>
-        </div>
-        <figcaption>Squiggle + hover + lightbulb; explain as code lens. Problems panel lists the finding.</figcaption>
-      </figure>
-
-    </div>
-
-    <div class="win win-config">
-      <div class="win-chrome">
-        <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
-        <span class="win-title">init.lua</span>
-        <span class="win-meta">after symlink</span>
+          <figcaption>Squiggle + hover + lightbulb; explain as code lens. Problems panel lists the finding.</figcaption>
+        </figure>
       </div>
-      <pre class="win-body">require(<span class="s">'jev'</span>).setup({})</pre>
     </div>
   </div>
 </section>
@@ -403,13 +404,23 @@
         <a class="btn btn-ghost" href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/GUIDE.md">Guide</a>
       </div>
     </div>
-    <div class="win win-install">
-      <div class="win-chrome">
-        <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
-        <span class="win-title">install</span>
-        <span class="win-meta">cargo · locked</span>
+    <div class="start-wins">
+      <div class="win win-install">
+        <div class="win-chrome">
+          <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="win-title">install</span>
+          <span class="win-meta">cargo · locked</span>
+        </div>
+        <pre class="win-body">cargo install --git https://github.com/makefunstuff/jev-lsp --locked jev-lsp jev</pre>
       </div>
-      <pre class="win-body">cargo install --git https://github.com/makefunstuff/jev-lsp --locked jev-lsp jev</pre>
+      <div class="win win-config">
+        <div class="win-chrome">
+          <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="win-title">init.lua</span>
+          <span class="win-meta">after symlink</span>
+        </div>
+        <pre class="win-body">require(<span class="s">'jev'</span>).setup({})</pre>
+      </div>
     </div>
   </div>
 </section>
@@ -418,7 +429,7 @@
 
 <footer class="site-foot">
   <div class="shell">
-    <p>jev-lsp · MIT · proof of concept — interface may change · <a href="https://github.com/makefunstuff/jev-lsp">source</a></p>
+    <p>jev-lsp — MIT. Early PoC; APIs may change. <a href="https://github.com/makefunstuff/jev-lsp">Source on GitHub</a>.</p>
   </div>
 </footer>
 
