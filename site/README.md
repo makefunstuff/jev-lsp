@@ -54,6 +54,11 @@ subpath rather than a domain root. That is why every link and every asset refere
 `docs/assets/jev-steering.svg`, `docs/assets/jev-neovim.webp` and `docs/assets/jev-cursor.webp`,
 under the same names. The site is served as its own root, so a path to `../docs/assets/` would
 404 in production and still work in a local preview, which is the failure mode this avoids.
+
+`assets/demo-slop-triptych.mp4` is the silent OpenCode → Neovim → VS Code action demo
+(paste AI-slop comment → finding → fix). It is not under `docs/assets/`; the landing page
+and README Demo section point at this copy. Replacing it is a direct overwrite of that path.
+
 One copy, one direction: re-syncing is `cp docs/assets/{jev-steering.svg,jev-neovim.webp,jev-cursor.webp} site/assets/`.
 
 ## Where the page's content comes from
