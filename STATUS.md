@@ -64,6 +64,18 @@ which a headless harness cannot drive.
 2. **Whether `triggers.diagnostics` should stay `save`.** `save` is predictable and cheap;
    `idle` is more ambient but fires while typing. Default is `save`; measured cost on a real
    model will decide it.
+3. **`no-client-namespace-in-a-server-id` fires on `crates/jev-lsp/src/server.rs:1523`
+   (`jev.plugin.pick`) and `:1526` (`jev.plugin.explain`), the two lens command ids the server
+   emits into the plugin's namespace, and it is open rather than fixed** (2026-09-20). The
+   gate's decide tier put it at **0.71–0.76 across four runs**, against the rule's floor of
+   0.55, so the verdict moves between runs; that spread is the argument for **narrowing the
+   rule** rather than raising the floor. What it costs today: a client that is not the plugin
+   must bridge both ids itself (`editors/cursor/extension.js` registers them, and
+   `docs/CURSOR.md` §6 records the trap), and without that bridge the click does nothing, which
+   is the whole of the reported symptom. Two honest exits, one line each: **change the ids** so
+   the server emits its own served command names, or **narrow the rule** to what it means, a
+   server id naming a client that is not the one attached. Raising the floor is not an exit.
+   Awaiting the user's call.
 
 ## Decisions taken (reversible, recorded so they are not relitigated)
 
@@ -89,6 +101,13 @@ which a headless harness cannot drive.
   undo snapshots.
 - No treesitter dependency yet. Scope is structural with a whole-file fallback, and
   `scope_source` reports which was used.
+- **The rules gate is a per-change instrument, not a suite row** (2026-09-20). It runs at commit
+  time and in CI over the changed files (`verify/rules-gate.sh`, the same pass the editor runs);
+  the suite has no whole-tree gate row, because a row permanently red on `main` for a known
+  finding that is decided and waiting is how red stops meaning anything, and a row that exits 0
+  while printing the same findings cannot be told from passing, which is what
+  `no-success-without-a-measurement` exists to prevent. A finding it raises goes to the open
+  questions above until it is decided.
 
 ## Verification backing the implementation
 
