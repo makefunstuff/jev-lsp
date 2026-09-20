@@ -283,15 +283,39 @@ PY
   fi
 fi
 
+# The summary is the artefact, so it goes into the file *and* to stdout: the file is what a
+# machine reads afterwards (`sed -n '/^=== summary ===$/,$p' "$OUT"`), and stdout is what a person
+# watching the run sees. Appending only the header — which is what this did — left the file with no
+# verdicts in it at all, so the gate that reads it could never fire.
+#
+# The exit code is the aggregate of the `EXIT=` values `run()` recorded, not a text grep over them:
+# a row that failed is a red run however it failed, and the text grep is the second net rather than
+# the first. The CI step already says the runner's exit code is its last step, the summary; this is
+# what makes that sentence true.
 echo "=== summary ===" >> "$OUT"
-python3 - "$OUT" <<'PY'
+summary_code=0
+python3 - "$OUT" <<'PY' || summary_code=$?
 import re, sys
-txt = open(sys.argv[1]).read()
+
+path = sys.argv[1]
+txt = open(path).read()
 blocks = re.split(r"^### ", txt, flags=re.M)[1:]
+rows, failed = [], False
 for b in blocks:
     label = b.splitlines()[0]
     exits = re.findall(r"^EXIT=(\d+)", b, flags=re.M)
     code = int(exits[-1]) if exits else None
     verdict = "ok" if code == 0 else ("FAIL" if code is not None else "?")
-    print(f"{verdict:4} {label}")
+    # A row with no `EXIT=` is `?`: it could not run, and it says why in its own block (the
+    # quality row with no key). Not a pass, and not a failure either.
+    if code not in (0, None):
+        failed = True
+    rows.append(f"{verdict:4} {label}")
+summary = "\n".join(rows) + "\n"
+with open(path, "a") as fh:
+    fh.write(summary)
+sys.stdout.write(summary)
+sys.exit(1 if failed else 0)
 PY
+
+exit "$summary_code"
