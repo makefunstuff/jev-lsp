@@ -252,9 +252,11 @@ end
 
 --- Dispatch `:Jev inspect [args]` and return the artifact text it opens (nil if none).
 ---
---- `:Jev inspect` reads the *current* buffer's path, and it opens its artifact buffer with
---- `sbuffer` — so the fixture has to be current before, and made current again after, or the
---- next check acts on the artifact (`require('jev').dismiss()` was the one that noticed).
+--- `:Jev inspect` reads the *current* buffer's path, and it shows the report in that same
+--- window (`docs/UX.md` §2, `surfaces.layout`) — so the fixture has to be current before, and
+--- made current again after, or the next check acts on the report
+--- (`require('jev').dismiss()` was the one that noticed). Switching back also wipes the report
+--- (`bufhidden = 'wipe'`), which is what `close_artifacts` is for when nothing switched.
 local function inspect_command(args)
   close_artifacts('inspect')
   pcall(vim.api.nvim_set_current_buf, buf)

@@ -27,7 +27,17 @@ M.name = attach.NAME
 --- @class jev.Opts : jev.AttachOpts
 --- @field keymaps? boolean  `false` leaves every default keymap unset
 --- @field prefix? string    Keymap prefix, default `'<leader>j'` (`docs/UX.md` §2)
+--- @field surfaces? { layout?: 'current'|'float'|'split' }  Where a generated surface goes,
+---   default `'current'`: the report takes the buffer in the window you are in, and no window
+---   is created. `'float'` opens a floating window over the code; `'split'` opens the split
+---   this plugin used to open. `docs/UX.md` §2.
 --- @field settings? table   PROTOCOL §10, under `settings.jev`
+
+--- The plugin's own options, as `setup` last read them — the same register as
+--- `require('jev.attach').opts`, and read when a surface *opens* rather than when it is
+--- configured, so `surfaces.layout` is a live setting and not only a setup-time one.
+--- @type { surfaces: { layout: string } }
+M.opts = { surfaces = { layout = 'current' } }
 
 --- Requests this plugin sent, by request id, so `:Jev cancel` can cancel them. Each carries
 --- the `workDoneToken` whose progress the server reports under it (PROTOCOL §3.5).
@@ -120,6 +130,128 @@ end
 --- The buffer a streamed answer is being written into, by the token carrying it.
 local streams = {} -- token -> bufnr
 
+-- Where a generated surface goes ---------------------------------------------------------------
+--
+-- Asking about a file must not rearrange the windows around it. `:Jev inspect` opened its
+-- report with `sbuffer`, which is a *split*: the window the user was reading was halved, and a
+-- second window that said nothing when closed stayed on screen for as long as the report did.
+-- Every surface that shows a buffer did the same thing through the same call, so the placement
+-- is one decision, made here, for all of them (`docs/UX.md` §2, `surfaces.layout`):
+--
+--   `current` — the default. The report takes the buffer in the window the user is already in.
+--     Nothing moves: same windows, same sizes, and the file that was there is still loaded and
+--     is the alternate buffer, so `q` and `<C-^>` both come straight back to it. This is the
+--     honest shape for a report *about* the file, and for a streamed answer, which is the same
+--     surface doing the same thing.
+--   `float` — a floating window over the code: nothing moves and the code stays visible. It
+--     costs the one thing `current` does not: while it is open there *is* an extra window, so
+--     "`#vim.api.nvim_list_wins()` never changed" is a claim about `current` specifically.
+--   `split` — what the plugin used to do. Kept as an option because wanting the code and the
+--     answer side by side is a legitimate thing to want; not the default, because it is not
+--     what asking a question should do to the layout.
+--
+-- What is *not* decided here is whether a result deserves a buffer at all: `docs/UX.md` §6 says
+-- `q` on a generated buffer leaves buffers, windows and files exactly as they were, and a
+-- one-line answer is a `vim.notify` (that is what `:Jev status` and `:Jev review` do, and this
+-- is why neither of them is in the list above).
+
+--- How each generated buffer was put on screen, so dismissing it can undo exactly that.
+--- @type table<integer, { layout: string, win?: integer, prev?: integer }>
+local placed = {} -- bufnr -> { layout, win?, prev? }
+
+--- The layout generated buffers go in, as configured.
+--- @return string
+local function surface_layout()
+  return (M.opts.surfaces or {}).layout or 'current'
+end
+
+--- Give the window back the way this layout took it.
+---
+--- The artifact wipes itself on the way out (`bufhidden`), which is what "dismissed" means for
+--- a generated buffer: the window is left showing exactly what it was showing before.
+--- @param bufnr integer
+local function dismiss_surface(bufnr)
+  local p = placed[bufnr]
+  placed[bufnr] = nil
+  if p == nil then
+    return
+  end
+  if p.layout == 'float' then
+    if p.win ~= nil and vim.api.nvim_win_is_valid(p.win) then
+      vim.api.nvim_win_close(p.win, true)
+    end
+  elseif p.layout == 'current' then
+    -- Guarded: the buffer behind it may be gone (a second report opened over this one), and a
+    -- dismiss that cannot find its way back must do nothing rather than raise.
+    if p.prev ~= nil and vim.api.nvim_buf_is_valid(p.prev) then
+      vim.api.nvim_win_set_buf(0, p.prev)
+    end
+  else
+    vim.cmd('close')
+  end
+end
+
+--- Put a generated buffer on screen, and give it the one key a generated buffer has.
+--- @param bufnr integer
+local function place_surface(bufnr)
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+  local prev = vim.api.nvim_get_current_buf()
+  -- `nil` when there is nothing to move: the answer streamed into the buffer it is already in,
+  -- so the finished artifact must not be placed a second time. (Spelled as two statements, not
+  -- `x and nil or y` — that returns `y` either way.)
+  local layout = surface_layout()
+  if prev == bufnr then
+    layout = nil
+  end
+  local float = nil
+  if layout == 'float' then
+    local width = math.max(20, math.min(vim.o.columns - 4, 100))
+    local height = math.max(4, math.min(vim.o.lines - 4, 30))
+    float = vim.api.nvim_open_win(bufnr, true, {
+      relative = 'editor',
+      width = width,
+      height = height,
+      row = math.max(0, math.floor((vim.o.lines - height) / 2) - 1),
+      col = math.max(0, math.floor((vim.o.columns - width) / 2)),
+      border = 'rounded',
+      style = 'minimal',
+    })
+    placed[bufnr] = { layout = layout, win = float }
+  elseif layout == 'split' then
+    vim.cmd('sbuffer ' .. bufnr)
+    placed[bufnr] = { layout = layout }
+  elseif layout == 'current' then
+    -- A report opened over another report gives *its* window back first. The one underneath
+    -- was an artifact too, and an artifact is not a place: without this the buffer behind the
+    -- new report is the dead one, and the alternate buffer with it, so neither `q` nor `<C-^>`
+    -- reaches the code. Two swaps in one action, and the user sees only the result.
+    local under = placed[prev]
+    if under ~= nil and under.layout == 'current' and under.prev ~= nil
+      and vim.api.nvim_buf_is_valid(under.prev)
+    then
+      vim.api.nvim_win_set_buf(0, under.prev)
+      placed[prev] = nil
+      prev = under.prev
+    end
+    -- `:hide buffer`, not `nvim_win_set_buf`: with `'hidden'` off and a modified buffer the
+    -- swap has to be *asked* for, and `:hide` is Vim's own way of asking — one window, and the
+    -- buffer left behind still loaded and now the alternate one. `nvim_win_set_buf` raises
+    -- `E37` there instead of showing the report at all (verified on 0.12.1).
+    vim.cmd('hide buffer ' .. bufnr)
+    placed[bufnr] = { layout = layout, prev = prev }
+  end
+  local function dismiss()
+    dismiss_surface(bufnr)
+  end
+  vim.keymap.set('n', 'q', dismiss, { buffer = bufnr, desc = 'jev: dismiss and give the layout back' })
+  if float ~= nil then
+    -- A float is the one surface that hides the code, so it is the one with a second way out.
+    vim.keymap.set('n', '<Esc>', dismiss, { buffer = bufnr, desc = 'jev: dismiss and give the layout back' })
+  end
+end
+
 --- Open the buffer an answer is written into *while* it is being written.
 ---
 --- It is the artifact buffer from the start, not a placeholder that is replaced: the finished
@@ -131,8 +263,7 @@ local function stream_open()
   -- Deliberately unnamed. Renaming an already-named buffer leaves a stub buffer holding the
   -- old name — verified: create a buffer, name it, rename it, and a second empty buffer
   -- appears under the first name. This one is named once, when it becomes the artifact.
-  vim.keymap.set('n', 'q', '<Cmd>close<CR>', { buffer = bufnr, desc = 'jev: close artifact' })
-  vim.cmd('sbuffer ' .. bufnr)
+  place_surface(bufnr)
   return bufnr
 end
 
@@ -676,8 +807,8 @@ function M.open_plan(plan)
       plan_mark(bufnr, n, 'reverted')
     end)
   end, { buffer = bufnr, desc = 'jev: take back this step' })
-
-  vim.keymap.set('n', 'q', '<Cmd>close<CR>', { buffer = bufnr, desc = 'jev: close the plan' })
+  -- `q` is not set here: the dismiss key belongs to the placement (`place_surface`), and it
+  -- means something different in each layout — closing a window here would close the only one.
 end
 
 --- `:Jev where <question>` — where is this handled?
@@ -866,6 +997,8 @@ end
 ---
 --- `docs/UX.md` §6: `q` on a generated buffer leaves buffers, windows, and files exactly as
 --- they were — so the buffer is `nofile`, unlisted, wiped on close, and nothing is written.
+--- Where it is *shown* is `place_surface` (`surfaces.layout`), which is also what makes the `q`
+--- in that sentence true in every layout.
 --- @param artifact table  `{ schema, kind, summary, markdown, … }` (PROTOCOL §7)
 --- @param bufnr? integer  an existing buffer to finish in (the one a stream filled)
 function M.open_artifact(artifact, bufnr)
@@ -880,10 +1013,7 @@ function M.open_artifact(artifact, bufnr)
   vim.bo[bufnr].bufhidden = 'wipe'
   pcall(vim.api.nvim_buf_set_name, bufnr,
     ('jev://%s/%s'):format(artifact.kind or 'artifact', artifact.id or 'scratch'))
-  vim.keymap.set('n', 'q', '<Cmd>close<CR>', { buffer = bufnr, desc = 'jev: close artifact' })
-  if vim.api.nvim_get_current_buf() ~= bufnr then
-    vim.cmd('sbuffer ' .. bufnr)
-  end
+  place_surface(bufnr)
   return bufnr
 end
 
@@ -1072,8 +1202,12 @@ function M.start()
 end
 
 --- `:Jev log` — the client log, where the server's stderr and the LSP traffic land.
+---
+--- A real file, so it is `:edit` — the layout is not a generated surface's to move — but
+--- `:hide edit`, because the log is worth reading *while* the buffer you are in is unsaved and
+--- plain `:edit` refuses that swap with `E37`.
 function M.log()
-  vim.cmd('edit ' .. vim.fn.fnameescape(vim.lsp.log.get_filename()))
+  vim.cmd('hide edit ' .. vim.fn.fnameescape(vim.lsp.log.get_filename()))
 end
 
 -- Dismissals ---------------------------------------------------------------------------------
@@ -1677,13 +1811,31 @@ function M.create_command()
   })
 end
 
+--- The layouts a generated surface may be put in (`place_surface`).
+local SURFACE_LAYOUTS = { current = true, float = true, split = true }
+
 --- Register the client, enable both attachment ladders, install the surface.
 --- @param opts? jev.Opts
 function M.setup(opts)
   local install = vim.tbl_extend('force', {}, opts or {})
   local prefix = install.prefix or '<leader>j'
   local keymaps = install.keymaps
-  install.prefix, install.keymaps = nil, nil
+  local surfaces = install.surfaces
+  install.prefix, install.keymaps, install.surfaces = nil, nil, nil
+  -- A layout name that is not a layout would otherwise be silently the default, which is the
+  -- one failure mode a "where does the report go" setting cannot have: the user would believe
+  -- they had asked for a split. Named and refused instead.
+  if type(surfaces) == 'table' and surfaces.layout ~= nil and not SURFACE_LAYOUTS[surfaces.layout] then
+    vim.notify(
+      ('jev: surfaces.layout = %s is not a layout (current|float|split); keeping %s')
+        :format(vim.inspect(surfaces.layout), surface_layout()),
+      vim.log.levels.ERROR
+    )
+    surfaces = nil
+  end
+  if type(surfaces) == 'table' then
+    M.opts.surfaces = vim.tbl_extend('force', M.opts.surfaces, surfaces)
+  end
   install.handlers = vim.tbl_deep_extend(
     'force',
     { ['textDocument/diagnostic'] = filter_findings },
