@@ -1,13 +1,12 @@
 # Cursor
 
-Cursor is a VS Code fork, so the honest question is not "which setting" but "is there a setting
-at all". **There is not.** Cursor's documentation has no page about language servers — the
-sitemap at `https://cursor.com/llms.txt` lists plugins, rules, skills, MCP, hooks, subagents and
-cloud agents, and nothing else — and the only extension APIs Cursor adds are
-`vscode.cursor.mcp.registerServer` and `vscode.cursor.plugins.registerPath`
+Cursor has no settings-only route to a language server. Its documentation has no page about
+language servers — the sitemap at `https://cursor.com/llms.txt` lists plugins, rules, skills,
+MCP, hooks, subagents and cloud agents, and nothing else — and the only extension APIs Cursor
+adds are `vscode.cursor.mcp.registerServer` and `vscode.cursor.plugins.registerPath`
 (`https://cursor.com/docs/extension-api`). Neither starts a language server.
 
-So the route is the one VS Code and every fork have: **an extension that starts the server**.
+The route is the one VS Code and every fork have: **an extension that starts the server**.
 `editors/cursor/` is that extension, in this repository, with no build step. It is the whole
 client — `child_process` and JSON-RPC over the same `Content-Length` framing the server already
 speaks — and it is what the rest of this document is about.
@@ -89,7 +88,7 @@ makefunstuff.jev
 
 The server reads its endpoints from **its own environment** (PROTOCOL §10), and this is where a
 GUI editor bites. A macOS application launched from the Dock does **not** inherit the login
-shell's environment, so `export TYPESAFE_API_KEY=…` in `~/.bash_profile` is simply absent in
+shell's environment, so `export TYPESAFE_API_KEY=…` in `~/.bash_profile` is absent in
 Cursor — the decide tier answers `model_error`, the rules pass publishes nothing, and the file
 looks clean. Nothing in the editor says why.
 

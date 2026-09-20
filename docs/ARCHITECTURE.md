@@ -123,7 +123,7 @@ is what makes a rule edit take effect at all; `op_key` is what keeps a second mo
 scope or a second project context from being answered with the first one's conclusion.
 
 **Both passes write the same `findings_key` slot**, which is the mechanism behind the one
-surprise worth knowing here: editing a rule invalidates the *rules* conclusion but not the
+detail that matters here: editing a rule invalidates the *rules* conclusion but not the
 display slot the sign column, the lens and the hint read, so findings already on screen stay as
 they were until the next pass for that document — the next save, or the idle trigger
 (`docs/UX.md` §1.1). `:Jev recompute` clears the whole cache and re-runs every open document;

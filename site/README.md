@@ -61,7 +61,7 @@ One copy, one direction: re-syncing is `cp docs/assets/{jev-steering.svg,jev-neo
 Every section quotes one of these documents. When one changes, the quoting is what to check.
 
 **One place the page does not follow a document.** `README.md` still says there is no release
-page yet, and my copy of that sentence was wrong, so the install section now names the
+page yet. The install section names the
 [v0.1.0 release](https://github.com/makefunstuff/jev-lsp/releases/tag/v0.1.0) and its assets
 instead. The release exists, is not a draft and is not a prerelease, and its assets are
 `jev-0.1.0.vsix`, three `jev-lsp-v0.1.0-<target>.tar.gz` archives and `SHA256SUMS`; that list came

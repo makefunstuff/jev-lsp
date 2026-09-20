@@ -304,13 +304,13 @@ pattern named.
 
 **The instruction document, as arithmetic** (arithmetic, not a measurement): a 2,000-token
 instruction file re-sent across 50 turns is ~100,000 instruction tokens in one session — $0.010 at
-the measured chat rate above, and on a *local* model the cost is not dollars but context, KV memory
+the measured chat rate above; on a *local* model the cost is context, KV memory
 and speed. The same conventions as rules cost one decision per candidate-bearing document and
 nothing at all on a save where no pattern matches.
 
 **What these numbers do not include.** The generation itself — the code your harness writes — is
 untouched; what changes is what steering and review cost. The chat tiers (actions, plans,
-explanations) stay the expensive path and are on-demand by design. And the local routes below are
+explanations) stay the expensive path and are on-demand. And the local routes below are
 cost characteristics, not verified configurations: no local decide tier has been run end to end by
 this project, and no local harness generation run has been measured here.
 

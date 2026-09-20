@@ -56,7 +56,7 @@ installed `nvim`).
 **A red run says why.** Every harness prints the server's own `window/logMessage` lines when
 it fails (`verify/harness_log.lua` for the Lua ones; the Python ones carry the same in their
 FAIL detail). This matters more than it sounds: at the other end of an LSP connection a dead
-model endpoint is indistinguishable from a product defect — the client simply gets no
+model endpoint is indistinguishable from a product defect — the client gets no
 findings and no edit — and a stale stub process left bound to the port has twice been
 mistaken for a regression. That is why the runner owns the stub's whole lifecycle: it kills any
 leftover, waits until the port is *actually* free, starts exactly one stub for the run, and
@@ -509,7 +509,7 @@ identity.
 ### Two defects the suite found in itself
 
 Both of these were red harness rows that had nothing to do with the product, and they are
-different failures with different fixes. They are recorded together because the lesson is the
+different failures with different fixes. They are recorded together because the shared cause is the
 same one: "the harness is red" is not the same claim as "the product is broken", and a suite that
 cannot tell the two apart will send you hunting in the wrong repository.
 
