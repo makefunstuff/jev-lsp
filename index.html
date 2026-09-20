@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jev-lsp · rules on the line</title>
+<meta name="description" content="jev-lsp is an LSP that runs your repo’s Jev rules as per-line diagnostics. Jev is a classifier, not a chat model: so local and cheap models can steer code without token maxxing.">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-head">
+  <div class="shell">
+    <div class="brand">
+      <a class="wordmark" href="./">jev-lsp</a>
+      <span class="wip">WIP</span>
+    </div>
+    <nav class="toc" aria-label="Primary">
+      <a href="#loop">How it works</a>
+      <a href="#demo">Demo</a>
+      <a href="#clients">Clients</a>
+      <a href="#start">Start</a>
+      <a class="toc-gh" href="https://github.com/makefunstuff/jev-lsp">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<!-- ========== HERO: dark cinematic fold ========== -->
+<section class="hero" id="hero">
+  <div class="hero-atmosphere" aria-hidden="true"></div>
+  <div class="hero-grid-bg" aria-hidden="true"></div>
+  <div class="shell hero-layout">
+    <div class="hero-copy">
+      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Language server · classifier</p>
+      <h1>Steer code with rules, not with token maxxing.</h1>
+      <p class="lead"><strong>Jev is a classifier, not a chat model:</strong> one typed question about one line → a value and a probability, never prose. <strong>jev-lsp</strong> runs repo rules as ordinary LSP diagnostics, code actions, and code lens.</p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="https://github.com/makefunstuff/jev-lsp">GitHub</a>
+        <a class="btn btn-ghost" href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/TUTORIAL.md">Tutorial</a>
+      </div>
+      <ul class="fact-strip" aria-label="Product facts">
+        <li><strong>1 line</strong> → 1 value + p</li>
+        <li><strong>LSP</strong> diagnostics</li>
+        <li><strong>local / cheap</strong> models</li>
+      </ul>
+    </div>
+
+    <div class="hero-stage" aria-label="Product demo">
+      <!-- Back card: rule JSON, peeking -->
+      <div class="float-card float-rule" aria-hidden="true">
+        <div class="win-chrome">
+          <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="win-title">.jev/rules/no-unwrap.json</span>
+        </div>
+        <pre class="win-body mono-sm">{
+  <span class="k">"id"</span>: <span class="s">"no-unwrap"</span>,
+  <span class="k">"floor"</span>: <span class="n">0.8</span>
+}</pre>
+      </div>
+
+      <!-- Dominant diagnostic window -->
+      <div class="float-card float-diag hero-panel" role="img" aria-label="Example diagnostic on save">
+        <div class="win-chrome">
+          <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+          <div class="win-tabs">
+            <span class="win-tab on">server.rs</span>
+            <span class="win-tab">mod.rs</span>
+          </div>
+          <span class="win-meta">diagnostic · save</span>
+        </div>
+        <div class="win-body editor-pane">
+          <div class="ed-gutter" aria-hidden="true">
+            <span>410</span><span>411</span><span class="g-warn">412</span><span>413</span><span>414</span>
+          </div>
+          <div class="ed-lines">
+            <div class="ed-row"><span class="tok">fn</span> <span class="fn">handle_request</span>(msg: Request) {</div>
+            <div class="ed-row">    <span class="tok">let</span> body = msg.payload();</div>
+            <div class="ed-row find">
+              <span class="find-bar" aria-hidden="true"></span>
+              <span>    <span class="tok">let</span> data = body.<span class="fn">unwrap</span>();</span>
+              <span class="virt">■ jev · fail · p=0.91</span>
+            </div>
+            <div class="ed-row">    process(data);</div>
+            <div class="ed-row">}</div>
+          </div>
+        </div>
+        <div class="win-status">
+          <span class="st-mode">NORMAL</span>
+          <span class="st-file">server.rs:412</span>
+          <span class="st-right">utf-8 · rust · jev</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ========== DEMO: silent slop-detection triptych ========== -->
+<section id="demo" class="sec">
+  <div class="shell">
+    <header class="sec-head">
+      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Demo</p>
+      <h2>Finding and fixing AI-slop commentary</h2>
+      <p class="sec-lead">Silent action loop across OpenCode, Neovim, and VS Code: paste an AI-slop comment, get a finding, apply the fix.</p>
+    </header>
+
+    <figure class="demo-frame">
+      <video controls playsinline preload="metadata" width="100%"
+             aria-label="Silent demo: OpenCode, Neovim, and VS Code detect and fix an AI-slop comment">
+        <source src="./assets/demo-slop-triptych.mp4" type="video/mp4">
+      </video>
+      <figcaption>OpenCode → Neovim → VS Code · ~32s · no voiceover</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ========== SEE: full-bleed machine demo ========== -->
+<section id="see" class="sec sec-machine">
+  <div class="shell">
+    <header class="sec-head">
+      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Surfaces</p>
+      <h2>Findings on the line: same surfaces your client already has</h2>
+      <p class="sec-lead">On save, matching lines become diagnostics a harness or editor already understands. No custom <code>jev/…</code> methods.</p>
+    </header>
+
+    <figure class="demo-frame">
+      <div class="win win-lg mock-harness" aria-label="Harness write loop mockup">
+        <div class="win-chrome">
+          <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="win-title">harness · write loop</span>
+          <span class="win-meta">OMP · ordinary diagnostic</span>
+        </div>
+        <div class="term">
+          <div class="term-line"><span class="prompt">$</span> agent write crates/jev-lsp/src/server.rs</div>
+          <div class="term-line dim">… generating handler …</div>
+          <div class="term-line"><span class="ok">✓</span> wrote 24 lines</div>
+          <div class="term-sep"></div>
+          <div class="editor-pane embedded">
+            <div class="ed-gutter" aria-hidden="true">
+              <span>410</span><span>411</span><span class="g-warn">412</span><span>413</span><span>414</span>
+            </div>
+            <div class="ed-lines">
+              <div class="ed-row"><span class="tok">fn</span> <span class="fn">handle_request</span>(msg: Request) {</div>
+              <div class="ed-row">    <span class="tok">let</span> body = msg.payload();</div>
+              <div class="ed-row find">
+                <span class="find-bar" aria-hidden="true"></span>
+                <span>    <span class="tok">let</span> data = body.<span class="fn">unwrap</span>();</span>
+                <span class="virt">// jev · fail · p=0.91</span>
+              </div>
+              <div class="ed-row">    process(data);</div>
+              <div class="ed-row">}</div>
+            </div>
+          </div>
+          <div class="term-line"><span class="amb">← finding on generated line</span> · harness reads it like any diagnostic</div>
+          <div class="term-line"><span class="prompt">$</span> agent fix --from-diagnostics</div>
+        </div>
+      </div>
+      <figcaption>Harness write → jev finding on the generated line → fix. Ordinary diagnostic.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ========== NOT CHAT: asymmetric compare ========== -->
+<section id="not-chat" class="sec">
+  <div class="shell split">
+    <div class="split-copy">
+      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Model shape</p>
+      <h2>Classifier, not chat</h2>
+      <ul class="plain">
+        <li><strong>One question → one answer</strong>: pass/fail or typed value + probability floor.</li>
+        <li><strong>Rules in the repo</strong>: <code>.jev/rules/*.json</code>, versioned like code.</li>
+        <li><strong>Semi-deterministic</strong>: pattern exact; judgement must clear the floor before publish.</li>
+      </ul>
+    </div>
+    <div class="compare-stack">
+      <div class="chat-reject">
+        <p class="compare-label">prose · whole file · every turn</p>
+        <p class="chat-blob">Here are several thoughts about this file… consider error handling on line 412, also naming, also whether the module boundary is right, also…</p>
+      </div>
+      <div class="win win-answer">
+        <div class="win-chrome">
+          <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="win-title">Jev rule answer</span>
+          <span class="win-meta">typed · one line</span>
+        </div>
+        <pre class="win-body">{
+  <span class="k">"value"</span>: <span class="amb">"fail"</span>,
+  <span class="k">"p"</span>: <span class="n">0.91</span>
+}</pre>
+        <div class="win-foot">typed value · one line · clears rule floor</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== LOOP: steps + floating rule ========== -->
+<section id="loop" class="sec sec-loop">
+  <div class="shell loop-layout">
+    <div>
+      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Workflow</p>
+      <h2>The loop</h2>
+      <ol class="loop-steps">
+        <li><span class="step-n">01</span><div><strong>Spec</strong>: what the code must do.</div></li>
+        <li><span class="step-n">02</span><div><strong>Rules</strong>: <code>.jev/rules/*.json</code> (words + pattern for candidate lines).</div></li>
+        <li><span class="step-n">03</span><div><strong>Steer</strong>: jev-lsp on save, human or harness.</div></li>
+        <li><span class="step-n">04</span><div><strong>Stay on track</strong>: ordinary diagnostics.</div></li>
+      </ol>
+      <p class="muted-line">Full schema → <a href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/GUIDE.md">docs/GUIDE.md</a>.</p>
+    </div>
+    <div class="win win-rule">
+      <div class="win-chrome">
+        <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="win-title">.jev/rules/no-unwrap.json</span>
+        <span class="win-meta">minimal</span>
+      </div>
+      <pre class="win-body">{
+  <span class="k">"id"</span>: <span class="s">"no-unwrap"</span>,
+  <span class="k">"question"</span>: <span class="s">"Does this line unwrap a Result/Option unsafely?"</span>,
+  <span class="k">"pattern"</span>: <span class="s">"\\.unwrap\\(\\)"</span>,
+  <span class="k">"floor"</span>: <span class="n">0.8</span>
+}</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ========== COST: dark machine card ========== -->
+<section id="cost" class="sec">
+  <div class="shell">
+    <header class="sec-head">
+      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Economics</p>
+      <h2>Why local / cheap models work here</h2>
+      <p class="sec-lead">Rules carry conventions; the model answers about one candidate line. No matching pattern → <strong>no model call</strong>.</p>
+    </header>
+
+    <div class="cost-card">
+      <div class="win-chrome">
+        <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="win-title">cost · measured</span>
+        <span class="win-meta">2026-09-20 · this repo</span>
+      </div>
+      <div class="cost-table-wrap">
+        <table class="cost">
+          <thead>
+            <tr>
+              <th scope="col"></th>
+              <th scope="col">rules pass</th>
+              <th scope="col">chat review (same file)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="mark">
+              <th scope="row"><code>server.rs</code> ~2.6k lines</th>
+              <td>~5.3k in / 345 out · 2 findings · <strong>~$0.00022</strong></td>
+              <td>~30.5k in / 9 out · 0 findings · <strong>~$0.00306</strong></td>
+            </tr>
+            <tr>
+              <th scope="row">30 Rust docs</th>
+              <td><strong>~$0.0034</strong> · 20 calls</td>
+              <td>—</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="cost-cap">decide <code>jev-1.13</code> vs chat review <code>gemini-2.5-flash-lite</code>. PoC: accuracy from steering, not token maxxing.</p>
+    </div>
+    <p class="pull">Accuracy from steering, not from burning tokens.</p>
+  </div>
+</section>
+
+<!-- ========== CLIENTS: one-at-a-time showcase (CSS radio tabs) ========== -->
+<section id="clients" class="sec sec-clients">
+  <div class="shell">
+    <header class="sec-head">
+      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Clients</p>
+      <h2>Same findings in a harness, Neovim, or VS Code</h2>
+      <p class="sec-lead">No custom methods. Neovim is primary (<code>nvim/</code>). Anything that starts a language server works, harnesses included. VS Code / Cursor via <code>editors/cursor/</code>.</p>
+      <p class="chips" aria-label="LSP surfaces">
+        <span class="chip">diagnostics</span>
+        <span class="chip">code actions</span>
+        <span class="chip">code lens</span>
+      </p>
+    </header>
+
+    <div class="client-showcase">
+      <input class="client-radio" type="radio" name="client-view" id="client-harness" checked>
+      <input class="client-radio" type="radio" name="client-view" id="client-nvim">
+      <input class="client-radio" type="radio" name="client-view" id="client-vsc">
+
+      <div class="client-seg" role="tablist" aria-label="Client">
+        <label class="client-seg-btn" for="client-harness" role="tab">Harness</label>
+        <label class="client-seg-btn" for="client-nvim" role="tab">Neovim</label>
+        <label class="client-seg-btn" for="client-vsc" role="tab">VS Code</label>
+      </div>
+
+      <div class="client-stage">
+        <!-- Harness -->
+        <figure class="client-panel panel-harness">
+          <div class="win mock-harness" aria-label="Harness client mockup">
+            <div class="win-chrome">
+              <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span class="win-title">Harness</span>
+              <span class="win-meta">agent · diagnostics</span>
+            </div>
+            <div class="term">
+              <div class="term-line dim">lsp publishDiagnostics · server.rs</div>
+              <div class="editor-pane embedded">
+                <div class="ed-gutter" aria-hidden="true">
+                  <span>411</span><span class="g-warn">412</span><span>413</span>
+                </div>
+                <div class="ed-lines">
+                  <div class="ed-row">    <span class="tok">let</span> body = msg.payload();</div>
+                  <div class="ed-row find">
+                    <span class="find-bar" aria-hidden="true"></span>
+                    <span>    <span class="tok">let</span> data = body.<span class="fn">unwrap</span>();</span>
+                  </div>
+                  <div class="ed-row">    process(data);</div>
+                </div>
+              </div>
+              <div class="diag-pill">jev · fail · p=0.91 · no-unwrap</div>
+              <div class="term-line dim">harness reads Diagnostic[] → steers next write</div>
+            </div>
+          </div>
+          <figcaption>Terminal / agent loop: finding on the generated line, ordinary diagnostic payload.</figcaption>
+        </figure>
+
+        <!-- Neovim -->
+        <figure class="client-panel panel-nvim">
+          <div class="win mock-nvim" aria-label="Neovim client mockup">
+            <div class="win-chrome">
+              <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span class="win-title">Neovim</span>
+              <span class="win-meta">primary client</span>
+            </div>
+            <div class="nvim-status">
+              <span class="nvim-mode">NORMAL</span>
+              <span class="dim">server.rs</span>
+              <span class="nvim-right">utf-8 · rust</span>
+            </div>
+            <div class="editor-pane nvim-pane">
+              <div class="ed-gutter" aria-hidden="true">
+                <span>410</span><span>411</span><span class="g-warn">412</span><span>413</span><span>414</span>
+              </div>
+              <div class="ed-lines">
+                <div class="ed-row"><span class="tok">fn</span> <span class="fn">handle_request</span>(msg: Request) {</div>
+                <div class="ed-row">    <span class="tok">let</span> body = msg.payload();</div>
+                <div class="ed-row find">
+                  <span class="find-bar" aria-hidden="true"></span>
+                  <span>    <span class="tok">let</span> data = body.<span class="fn">unwrap</span>();</span>
+                  <span class="virt">■ jev: fail p=0.91</span>
+                </div>
+                <div class="ed-row">    process(data);</div>
+                <div class="ed-row">}</div>
+              </div>
+            </div>
+          </div>
+          <figcaption>Gutter sign + virtual text beside the line, next to clangd or your other LS.</figcaption>
+        </figure>
+
+        <!-- VS Code -->
+        <figure class="client-panel panel-vsc">
+          <div class="win mock-vsc" aria-label="VS Code client mockup">
+            <div class="win-chrome">
+              <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span class="win-title">VS Code</span>
+              <span class="win-meta">editors/cursor/</span>
+            </div>
+            <div class="vsc-tabs">
+              <span class="vsc-tab on">server.rs</span>
+              <span class="vsc-tab">mod.rs</span>
+            </div>
+            <div class="vsc-body">
+              <div class="vsc-rail" aria-hidden="true"></div>
+              <div class="editor-pane vsc-pane">
+                <div class="ed-gutter" aria-hidden="true">
+                  <span>410</span><span>411</span><span class="g-warn">412</span><span>413</span><span>414</span>
+                </div>
+                <div class="ed-lines">
+                  <div class="ed-row"><span class="tok">fn</span> <span class="fn">handle_request</span>(msg: Request) {</div>
+                  <div class="ed-row">    <span class="tok">let</span> body = msg.payload();</div>
+                  <div class="ed-row find">
+                    <span class="find-bar" aria-hidden="true"></span>
+                    <span class="squiggle">    <span class="tok">let</span> data = body.<span class="fn">unwrap</span>();</span>
+                    <span class="bulb" title="code action">💡</span>
+                  </div>
+                  <div class="ed-row">    process(data);</div>
+                  <div class="ed-row">}</div>
+                </div>
+                <div class="vsc-hover">
+                  <div class="hover-title">jev · no-unwrap</div>
+                  <div class="hover-body"><span class="amb">fail</span> · p=0.91</div>
+                  <div class="hover-lens">jev: explain</div>
+                </div>
+              </div>
+            </div>
+            <div class="vsc-problems">
+              <span class="prob-label">Problems</span>
+              <span class="prob-item"><span class="amb">●</span> unwrap may fail · server.rs:412</span>
+            </div>
+          </div>
+          <figcaption>Squiggle + hover + lightbulb; explain as code lens. Problems panel lists the finding.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== START: sticky-feeling install ========== -->
+<section id="start" class="sec sec-start">
+  <div class="shell start-layout">
+    <div class="start-copy">
+      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Install</p>
+      <h2>Start</h2>
+      <p class="muted-line">Rust ≥1.75; decision-tier endpoint + key (hosted Jev default).</p>
+      <ol class="next-steps">
+        <li>Plugin: <code>ln -s /path/to/jev-lsp/nvim ~/.local/share/nvim/site/pack/jev/start/jev</code> then <code>require('jev').setup({})</code></li>
+        <li>Export <code>TYPESAFE_API_KEY</code> (or local decide: <a href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/MODEL.md">MODEL.md</a>).</li>
+        <li>Add <code>.jev/rules/*.json</code>, open a file, save → finding or <code>no_rules</code>.</li>
+      </ol>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="https://github.com/makefunstuff/jev-lsp">GitHub</a>
+        <a class="btn btn-ghost" href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/TUTORIAL.md">Tutorial</a>
+        <a class="btn btn-ghost" href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/GUIDE.md">Guide</a>
+      </div>
+    </div>
+    <div class="start-wins">
+      <div class="win win-install">
+        <div class="win-chrome">
+          <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="win-title">install</span>
+          <span class="win-meta">cargo · locked</span>
+        </div>
+        <pre class="win-body">cargo install --git https://github.com/makefunstuff/jev-lsp --locked jev-lsp jev</pre>
+      </div>
+      <div class="win win-config">
+        <div class="win-chrome">
+          <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="win-title">init.lua</span>
+          <span class="win-meta">after symlink</span>
+        </div>
+        <pre class="win-body">require(<span class="s">'jev'</span>).setup({})</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="site-foot">
+  <div class="shell">
+    <p>jev-lsp · MIT · early PoC (APIs may change). <a href="https://github.com/makefunstuff/jev-lsp">Source on GitHub</a>.</p>
+  </div>
+</footer>
+
+</body>
+</html>
