@@ -29,6 +29,7 @@ not for the code they touch.
 | `verify/outcome_test.py` | built | 18/18 — `jev.outcome` recorded, `jev.usage` counted, the unknown event kept verbatim. Proven to fail on the pre-change binary |
 | `verify/repo_bench.py` | built | real endpoint, a measurement rather than a threshold: 40 files of this repository: 62 findings, **3.21 per 1000 lines** (three runs, 3.21/3.48/3.71; measured 2026-09-18) |
 | `verify/nvim_live.lua` | built | 0 failures, 0 skips — real plugin, real server, real buffer |
+| `verify/result_surface.lua` | built | 0 failures, 0 skips on Neovim 0.12.5 **and** 0.12.1 — showing a result does not move the windows: `JEV_LSP_BIN=… nvim --headless -u NONE -l verify/result_surface.lua`. The count and the sizes are unchanged *across* the command, the buffer left behind is still loaded and is the alternate (so `q` and `<C-^>` reach it), and an unsaved buffer still holds its edit. `surfaces.layout = 'float'` costs a window while it is open, by design (`docs/UX.md` §2.1) |
 | `verify/goldens/` | **not built** | planned with U6; the anchor-ambiguity rules are covered by `jev-core` unit tests instead |
 | `verify/bench.sh` | **not built** | latency budgets are asserted where they can be (`codeAction` p99 in `lsp_client.py` step 3); a standalone bench waits for U9 |
 

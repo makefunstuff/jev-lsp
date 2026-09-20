@@ -110,11 +110,34 @@ array and `env` carries the endpoint variables:
                     "env":{"JEV_DECIDE_BASE_URL":"http://127.0.0.1:8009/v1","JEV_DECIDE_MODEL":"kev-latest"}}}}
 ```
 
-Other harnesses keep the same three things in their own file: a command, the extensions it
-applies to, and a root marker.
+Cursor has no settings-only route for a language server — `.cursor/mcp.json` configures MCP tools,
+a different protocol — so it needs the extension in `editors/cursor/`:
+
+```sh
+ln -s "$PWD/editors/cursor" ~/.cursor/extensions/makefunstuff.jev-0.1.0   # from a clone; reload the window
+bash editors/cursor/pack.sh /tmp/jev-0.1.0.vsix                           # or as a .vsix (verified here)
+/Applications/Cursor.app/Contents/Resources/app/bin/cursor --install-extension /tmp/jev-0.1.0.vsix
+```
+
+The minimum for a finding is the decide endpoint and the key — the key's *value* comes from a file,
+never a setting — and the whole recipe, including what Cursor's API does not do, is `docs/CURSOR.md`:
+
+```jsonc
+{
+  "jev.server.path": "/path/to/jev-lsp/target/release/jev-lsp",
+  "jev.decide.baseUrl": "https://api.typesafe.ai/v1",
+  "jev.decide.model": "jev-latest",
+  "jev.decide.wire": "system_one",            // system_one | open_router
+  "jev.decide.apiKeyEnv": "TYPESAFE_API_KEY", // the NAME of the variable, never the key
+  "jev.decide.apiKeyFile": "~/.bash_profile"  // where the key's VALUE is read from
+}
+```
 
 ![Cursor: jev's finding in the hover over the squiggled line, with jev: explain as an inlay hint](docs/assets/jev-cursor.webp)
 <sub><b>Cursor / VS Code</b>, a client that is neither Neovim nor the harness: jev's finding in the hover, the squiggle on the line, and <code>jev: explain</code> as an inlay hint.</sub>
+
+Other harnesses keep the same three things in their own file: a command, the extensions it
+applies to, and a root marker.
 
 ## This repository uses it
 

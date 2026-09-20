@@ -158,6 +158,31 @@ can walk, not only read.
 `stop` is the kill switch from PROTOCOL §5 and must be reachable without opening anything —
 it is one `:Jev stop` away, and the status line it silences says so.
 
+### 2.1 Where a report goes — `surfaces.layout`
+
+Asking a question must not rearrange the windows around it, so the placement of every generated
+buffer is one setting, a `setup` option like the prefix:
+
+```lua
+require('jev').setup({ surfaces = { layout = 'current' } })   -- the default
+```
+
+| value | what it does |
+|---|---|
+| `current` | **the default.** The report takes the buffer in the window you are already in: the window count, the sizes and every buffer are untouched, and the file you left stays loaded as the alternate buffer, so `q` and `<C-^>` both come straight back to it. This is what `:Jev inspect`, `:Jev explain`, `:Jev ask`, `:Jev followup`, `:Jev usage`, `:Jev plan` and `:Jev session` do |
+| `float` | a rounded floating window over the code; the code stays visible. The one layout that *does* add a window while it is open (dismissed with `q` or `<Esc>`) |
+| `split` | the old `sbuffer` behaviour, for code and report side by side |
+
+It is read when a surface opens, not at `setup`, so it is live. A value that is not one of the
+three notifies at ERROR and keeps the previous layout —
+`jev: surfaces.layout = "window" is not a layout (current|float|split); keeping current` — rather
+than falling back silently, so nobody believes they asked for a split and got something else.
+
+What did **not** change: `status`, `review`, `recompute`, `dismiss`, `undo`, `hints`, `cancel`,
+`start` and `stop` were already messages rather than buffers. `:Jev log` is `hide edit` now (the
+same window as before, and it no longer raises `E37` on an unsaved buffer). The `<C-v>` diff
+preview is still a real split, deliberately: a side-by-side diff is something the user asked for.
+
 ## 3. Scenarios
 
 ### 3.1 Ambient finding, fixed in three keystrokes
@@ -251,7 +276,10 @@ is already where the code is, and the output lands where the code is.
 - No keymap may change meaning based on model state. If nothing is available, the menu
   says so; the key still opens the menu.
 - No blocking prompt on a code path the user did not invoke.
-- `q` on any generated buffer leaves buffers, windows, and files exactly as they were.
+- `q` on any generated buffer leaves buffers, windows, and files exactly as they were. That is
+  literal under the default `surfaces.layout = 'current'` (§2.1), which never adds a window; the
+  `float` layout adds one for as long as the report is open, and the `<C-v>` diff preview is a
+  split because the user asked for one.
 - Every applied edit is reversible by one command.
 - The statusline is the only place work is advertised; no spinner text is inserted into a
   buffer the user types in.
