@@ -314,10 +314,15 @@ impl Engine {
         // answer a repository gets from a convention it keeps perfectly — which is the failure
         // mode `rules::lint` exists for and the reason it is called from here rather than from
         // nowhere.
-        let lint = jev_core::rules::lint(&rule_set);
-        for message in &lint {
-            skipped.push(("lint".to_string(), message.clone()));
-        }
+        //
+        // It is a fact about the *rule set*, not about this document, which is why the unchanged
+        // shortcut below reports it too: a user who has just edited a rule, saved, and watched an
+        // untouched file change nothing is exactly who needs to be told why.
+        let lint: Vec<(String, String)> = jev_core::rules::lint(&rule_set)
+            .into_iter()
+            .map(|message| ("lint".to_string(), message))
+            .collect();
+        skipped.extend(lint.iter().cloned());
 
         // Steps 2-4: the rules that claim this path, and the candidates their inspections found.
         // All of it is local work that decides nothing.
@@ -356,10 +361,13 @@ impl Engine {
         if !force {
             match self.state.changed_paths(Some(&root)) {
                 Ok(changed) if !changed.contains(&doc.path) => {
+                    // `("unchanged", path)`: a pass-level skip names its reason and the path it is
+                    // about, exactly as a file-level skip does. The rules' own problems come
+                    // first, because they are true whatever this document is.
+                    let mut listed = lint.clone();
+                    listed.push(("unchanged".to_string(), doc.path.clone()));
                     return Ok(InspectOutcome {
-                        // `("unchanged", path)`: a pass-level skip names its reason and the path
-                        // it is about, exactly as a file-level skip does.
-                        skipped: vec![("unchanged".to_string(), doc.path.clone())],
+                        skipped: listed,
                         ..Default::default()
                     });
                 }

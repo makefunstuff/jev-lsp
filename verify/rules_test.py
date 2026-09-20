@@ -536,6 +536,59 @@ def main():
             "a number where it had a silent rule",
         )
 
+        print("[rules] 12. a rule's own problem survives the unchanged shortcut")
+        # The sequence a user actually hits: fix the broken pattern, save, and watch an untouched
+        # file change nothing. `lint` is a fact about the *rule set*, not about the document, so it
+        # is reported on the shortcut too — where "unchanged" alone would be the last word.
+        #
+        # The file is one that did not exist when the changed set was last asked for: the server
+        # reuses that answer for two seconds (`state::CHANGED_TTL`), and a file that was created
+        # after it was taken cannot be in it. That makes the shortcut reachable here by
+        # construction rather than by a sleep.
+        if not git_ok:
+            check(False, "check 12 needs git, and `git init` failed")
+        else:
+            # The uncompilable pattern fixed, the duplicate id left: exactly one problem, so a
+            # count that agrees is a count of something.
+            sound = {"kind": "regex", "pattern": r"open\("}
+            write_rules(12, dict(broken_rule, inspection=sound),
+                        dict(broken_rule, title="The same id twice", inspection=sound))
+            untouched = os.path.join(workdir, "untouched.rs")
+            with open(untouched, "w") as fh:
+                fh.write("fn b() {}\n")
+            open_doc("file://" + untouched, "rust", "fn b() {}\n")
+            git(workdir, "add", "-A")
+            commit = git(workdir, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "rules")
+            check(commit.returncode == 0,
+                  f"the untouched fixture and the fixed rules are committed ({commit.stderr.strip()})")
+            before = len(decisions())
+            shortcut = inspect(untouched, force=False)
+            skipped = shortcut.get("skipped", [])
+            check(
+                any(s.get("code") == "unchanged" for s in skipped),
+                f"the untouched file is still reported unchanged ({skipped})",
+            )
+            check(
+                any(s.get("code") == "lint" and "duplicate rule id" in (s.get("detail") or "")
+                    for s in skipped),
+                f"and the rule set's own problem is reported with it ({skipped})",
+            )
+            check(
+                len(decisions()) == before,
+                f"with no model call for it ({before} -> {len(decisions())})",
+            )
+            # `jev.status` reports what the last *pass* did, and a shortcut is not a pass — so the
+            # count is read after a real one over the same rule set, and must agree with the
+            # message the shortcut just sent.
+            inspect(untouched, force=True)
+            status = server.request(
+                "workspace/executeCommand", {"command": "jev.status", "arguments": []}
+            ).get("result", {})
+            check(
+                ((status.get("rules") or {}).get("lint")) == 1,
+                f"and jev.status counts exactly that one problem ({status.get('rules')})",
+            )
+
         server.request("shutdown", None)
         server.notify("exit", None)
         return 0 if all(ok for ok, _ in RESULTS) else 1

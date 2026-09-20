@@ -498,9 +498,14 @@ fn inspect(
     // The same lint the language server reports, from the same function, in the same list: a rule
     // whose pattern does not compile is inert, and the pass it was written for is where that has
     // to be visible. `lint` is reported and never enforced — the rule still runs.
-    for message in jev_core::rules::lint(&set) {
-        skipped.push(("lint".to_string(), message));
-    }
+    //
+    // It is a fact about the *rule set* rather than about this document, so the unchanged shortcut
+    // below reports it too (see there).
+    let lint: Vec<(String, String)> = jev_core::rules::lint(&set)
+        .into_iter()
+        .map(|message| ("lint".to_string(), message))
+        .collect();
+    skipped.extend(lint.iter().cloned());
     // The same skip the language server reports for the same tree, from the same function: a
     // repository with no rules that claim this file has nothing to run, and says so.
     if let Some(skip) = inspections::nothing_to_run(&set, considered, &doc.path, &root) {
@@ -520,20 +525,21 @@ fn inspect(
             if !force {
                 match changed::changed_paths(&root) {
                     Ok(changed) if !changed.contains(&doc.path) => {
+                        // `("unchanged", path)`: the code names the skip and the detail names what
+                        // it is about, exactly as the language server sends it (`engine::inspect`)
+                        // and as PROTOCOL §6 defines the pair. This had them the other way round,
+                        // so a client keying on `code` read a filesystem path where the server
+                        // reads `unchanged`.
+                        //
+                        // The rules' own problems come first and for the same reason the server
+                        // sends them here: they are true of the rule set whatever this file is,
+                        // and this is the path a user who just edited a rule is on.
+                        let mut listed = lint.clone();
+                        listed.push(("unchanged".to_string(), doc.path.clone()));
                         let mut body = envelope();
                         merge(
                             &mut body,
-                            jev_core::findings::inspect_fields(
-                                &[],
-                                0,
-                                0,
-                                // `("unchanged", path)`: the code names the skip and the detail
-                                // names what it is about, exactly as the language server sends it
-                                // (`engine::inspect`) and as PROTOCOL §6 defines the pair. This had
-                                // them the other way round, so a client keying on `code` read a
-                                // filesystem path where the server reads `unchanged`.
-                                &[("unchanged".to_string(), doc.path.clone())],
-                            ),
+                            jev_core::findings::inspect_fields(&[], 0, 0, &listed),
                         );
                         return Ok(body);
                     }

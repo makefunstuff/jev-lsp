@@ -379,8 +379,10 @@ def main():
         finally:
             lsp_server.stop()
 
-        cli_skip = (cli_unchanged.get("skipped") or [{}])[0]
-        lsp_skip = (lsp_unchanged.get("skipped") or [{}])[0]
+        cli_skip = next((s for s in (cli_unchanged.get("skipped") or [])
+                         if s.get("code") == "unchanged"), {})
+        lsp_skip = next((s for s in (lsp_unchanged.get("skipped") or [])
+                         if s.get("code") == "unchanged"), {})
         check(cli_skip.get("code") == lsp_skip.get("code") == "unchanged",
               f"both front ends put the skip's name in `code` "
               f"(cli={cli_skip.get('code')!r}, lsp={lsp_skip.get('code')!r})")
