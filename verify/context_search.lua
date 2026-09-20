@@ -2,6 +2,11 @@
 --
 --   nvim --headless -u NONE -l verify/context_search.lua
 --
+-- `JEV_ROOT` names the fixture workspace; without it the harness makes one with
+-- `vim.fn.tempname()` and **removes it again on the way out** (green, red, or skipped),
+-- so `/tmp` does not fill up with repository markers. Name one when a failure needs
+-- reading afterwards — a root the caller named is left exactly where it is.
+--
 -- No server, no model, no network: `context.matches_for` is the client grepping the project for
 -- the words of a `:Jev where` question, and the two things this pins are both silent failures.
 --

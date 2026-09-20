@@ -41,6 +41,11 @@ if BIN == nil or BIN == '' then
       .. '  usage: JEV_LSP_BIN=/path/to/jev-lsp nvim --headless -u NONE -l verify/result_surface.lua\n'
   )
   io.stderr:flush()
+--
+-- `JEV_ROOT` names the fixture workspace; without it the harness makes one with
+-- `vim.fn.tempname()` and **removes it again on the way out** (green, red, or skipped),
+-- so `/tmp` does not fill up with repository markers. Name one when a failure needs
+-- reading afterwards — a root the caller named is left exactly where it is.
   os.exit(2)
 end
 
