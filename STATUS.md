@@ -128,6 +128,8 @@ which a headless harness cannot drive.
   while printing the same findings cannot be told from passing, which is what
   `no-success-without-a-measurement` exists to prevent. A finding it raises goes to the open
   questions above until it is decided.
+- **MIT** (2026-09-20). The user's choice of licence; the text is in `LICENSE` at the repository
+  root.
 
 ## Verification backing the implementation
 

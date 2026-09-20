@@ -249,3 +249,7 @@ The contract, the evidence, and the record:
 - `docs/STYLE.md` — the register these documents are written in
 
 The verification table is one command: `bash verify/run-suite.sh /tmp/suite.log`.
+
+## Licence
+
+MIT; the full text is in `LICENSE` at the repository root.
