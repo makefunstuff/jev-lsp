@@ -6,6 +6,9 @@ members = ["crates/jev-core", "crates/jev-lsp", "crates/jev"]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
+# Read by `cargo binstall` (it looks the releases up under the repository linked here) and by
+# anyone deciding where a downloaded crate came from. The released crates inherit it.
+repository = "https://github.com/makefunstuff/jev-lsp"
 
 [workspace.dependencies]
 anyhow = "1"

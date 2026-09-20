@@ -1,0 +1,220 @@
+name: ci
+
+# What this covers, and what it cannot. A workflow that silently omits a row is worse than one
+# that names the omission, so the omissions are here rather than in a comment somewhere else.
+#
+# Covered:
+#   * `cargo build --release` and `cargo test`, warning-free. A warning is a failure, including
+#     the ones `#[cfg(test)]` code raises — that is this repository's own bar, and RUSTFLAGS
+#     below is how it is enforced rather than hoped for.
+#   * the verification table, `verify/run-suite.sh`, under both Neovim versions it names
+#     (0.12.5 and 0.12.1, the pair its own header uses). The suite starts and supervises its own
+#     model stub, so it needs no service.
+#
+# Not covered, by name:
+#   * the `omp_lsp` row needs the `omp` harness on a runner's PATH. The suite SKIPs that row
+#     rather than failing it, and the log says which row it was.
+#   * anything with a GUI. The Cursor/VS Code extension in `editors/cursor/` is exercised at the
+#     protocol layer by the suite's own client; whether an editor paints a squiggle is not
+#     something any headless job here can see (docs/CURSOR.md weighs what is and is not verified).
+#   * the `quality_eval` row measures a review against a real model. There is no API key in CI,
+#     so the row reports `?` with its reason: never a pass, never a failure.
+#   * the rules gate over the shipped `jev inspect --force` needs a decide endpoint and a key;
+#     it is a step of its own below, and it says in the log which of the two it lacks.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # A warning is a failure in this repository, in tests as well as in the binary.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  build-and-test:
+    name: build and test, warning-free
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # History, so the rules gate below can name a base to diff against. One fetch of the
+          # branch's own history is cheaper than the gate looking at the wrong files.
+          fetch-depth: 0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      # No toolchain action: the runner image ships a stable Rust with rustup, and `rust-version`
+      # in the manifests (1.75) is enforced by cargo itself when it resolves. One less third-party
+      # action to pin and to keep current.
+      - name: toolchain
+        run: rustc --version && cargo --version
+      - name: build
+        run: cargo build --release --locked
+      - name: test
+        run: cargo test --locked
+      # The repository's own rules, over the files this branch changes, through the shipped
+      # `jev inspect --force` — the same pass the editor runs, so a gate finding and a sign-column
+      # finding cannot disagree.
+      #
+      # The endpoint and the model are plain values, not secrets. The key is not, and it is read
+      # from the `TYPESAFE_API_KEY` repository secret by the gate, whose default key file
+      # (`~/.omp/agent/opencode.key`) does not exist on a runner. Without the secret this step is
+      # a no-op with a reason: the gate exits 2, and 2 is reported here as NOT CHECKED rather
+      # than as a failure or as a pass. GitHub cannot mark a step "skipped" once it has run, so
+      # the reason goes to the run's summary and to a warning annotation, and the log says so.
+      - name: the rules gate
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          # The gate's own defaults, written out: the route this repository uses for the decide
+          # tier (docs/MODEL.md §8). Plain values on purpose — an endpoint is not a credential.
+          JEV_DECIDE_WIRE: system_one
+          JEV_DECIDE_BASE_URL: https://opencode.ai/zen/v1
+          JEV_DECIDE_MODEL: jev-1.13
+          JEV_DECIDE_TIMEOUT_MS: '15000'
+        run: |
+          set -eu
+          # `verify/rules-gate.sh` is another session's file and is not committed yet. Until it is
+          # in the tree this step says so — NOT CHECKED, with the reason, never a pass. Once the
+          # file is committed this whole clause is dead code and the gate runs.
+          if [ ! -f verify/rules-gate.sh ]; then
+            echo "::warning::the rules gate is NOT CHECKED: verify/rules-gate.sh is not in this checkout"
+            {
+              echo "### the rules gate: NOT CHECKED"
+              echo
+              echo "\`verify/rules-gate.sh\` is not in this checkout, so nothing ran. The decisions it"
+              echo "would have asked for are unverified in this run."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # The paths the branch changes. A diff against the base when there is one — the PR's
+          # base, else the previous commit on a push — and the whole `crates/` tree only when
+          # there is no history to diff against, so this never checks nothing by accident.
+          # `--diff-filter=d` drops deletions: the gate inspects files that exist.
+          if [ -n "${GITHUB_BASE_REF:-}" ]; then
+            base="origin/$GITHUB_BASE_REF"
+          elif git rev-parse -q --verify HEAD^ >/dev/null 2>&1; then
+            base="HEAD^"
+          else
+            base=""
+          fi
+          if [ -n "$base" ]; then
+            paths="$(git diff --diff-filter=d --name-only "$base" HEAD || true)"
+            echo "changed since $base:"
+          else
+            paths="$(git ls-files -- crates)"
+            echo "no base to diff against: the whole crates/ tree"
+          fi
+          if [ -n "$paths" ]; then printf '  %s\n' $paths; else echo "  (nothing)"; fi
+          set +e
+          # shellcheck disable=SC2086  # the list is one path per word, and these paths have none
+          report="$(bash verify/rules-gate.sh $paths 2>&1)"
+          rc=$?
+          set -e
+          printf '%s\n' "$report"
+          case "$rc" in
+            0) echo "the rules gate ran: no finding cleared its floor" ;;
+            1)
+              echo "::error::the rules gate found something (exit 1) — see the findings above"
+              exit 1
+              ;;
+            2)
+              reason="$(printf '%s\n' "$report" | sed -n 's/^rules-gate: //p' | tail -1)"
+              echo "::warning::the rules gate did NOT run (exit 2): ${reason:-no reason given}"
+              {
+                echo "### the rules gate: NOT CHECKED"
+                echo
+                echo "\`verify/rules-gate.sh\` exited 2, which is its code for *could not run* — not for"
+                echo "\"clean\" and not for \"found something\". Reason:"
+                echo
+                echo '```'
+                printf '%s\n' "$report"
+                echo '```'
+                echo
+                echo "The decisions this gate would have asked for are unverified in this run."
+              } >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *) echo "::error::the rules gate exited $rc, which is not one of its three codes"; exit 1 ;;
+          esac
+
+  verify:
+    name: verification (${{ matrix.row }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The narrow run first: it is the plugin's own rows, and a failure there is readable
+          # on its own. The full run owns the whole table, and re-runs these rows inside it.
+          - row: nvim-only
+            nvim_only: '1'
+          - row: full-table
+            nvim_only: '0'
+    env:
+      NVIM_ONLY: ${{ matrix.nvim_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      # The two versions the suite's own default names, from the release tarballs rather than a
+      # distro package: `apt`'s Neovim is older than the 0.12 the plugin requires.
+      - name: neovim 0.12.5 and 0.12.1
+        run: |
+          set -eu
+          curl -fsSL -o /tmp/nvim-0.12.5.tar.gz https://github.com/neovim/neovim/releases/download/v0.12.5/nvim-linux-x86_64.tar.gz
+          curl -fsSL -o /tmp/nvim-0.12.1.tar.gz https://github.com/neovim/neovim/releases/download/v0.12.1/nvim-linux-x86_64.tar.gz
+          sudo mkdir -p /opt/nvim-0.12.5 /opt/nvim-0.12.1
+          sudo tar -xzf /tmp/nvim-0.12.5.tar.gz -C /opt/nvim-0.12.5 --strip-components=1
+          sudo tar -xzf /tmp/nvim-0.12.1.tar.gz -C /opt/nvim-0.12.1 --strip-components=1
+          /opt/nvim-0.12.5/bin/nvim --version | head -1
+          /opt/nvim-0.12.1/bin/nvim --version | head -1
+      - name: the verification table
+        run: |
+          set -eu
+          set +e
+          NVIM_BINS="/opt/nvim-0.12.5/bin/nvim /opt/nvim-0.12.1/bin/nvim" \
+            bash verify/run-suite.sh /tmp/suite.log
+          echo "run-suite.sh exited $? (its exit code is its last step, the summary, whatever the rows said)"
+          set -e
+          sed -n '/^=== summary ===$/,$p' /tmp/suite.log
+          # The verdict is the summary's first column. `FAIL` is a failure of this job; `?` is a
+          # row that could not run, and it carries its own reason in the log — a skipped row is
+          # reported as one rather than passing quietly.
+          if sed -n '/^=== summary ===$/,$p' /tmp/suite.log | grep -q '^FAIL '; then
+            echo "::error::the verification table has FAIL rows; the whole log is attached to this run"
+            exit 1
+          fi
+          if sed -n '/^=== summary ===$/,$p' /tmp/suite.log | grep -q '^? '; then
+            echo "::notice::rows that could not run in CI (each names its reason in the log):"
+            sed -n '/^=== summary ===$/,$p' /tmp/suite.log | grep '^? ' || true
+          fi
+      - name: the summary, in the run
+        if: always()
+        run: sed -n '/^=== summary ===$/,$p' /tmp/suite.log >> "$GITHUB_STEP_SUMMARY"
+      - name: the whole log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: suite-log-${{ matrix.row }}
+          path: /tmp/suite.log
+          if-no-files-found: error
