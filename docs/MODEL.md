@@ -263,6 +263,56 @@ are untouched. `jev.status.budget` reports `decisions_last_minute` with
 `limit_decisions_per_minute` beside the chat counters, so the number a reader sees is the one that
 applies.
 
+### What a pass costs, measured
+
+Every number here was measured on 2026-09-20 against the hosted decide tier
+(`https://opencode.ai/zen/v1`, wire `system_one`, model `jev-1.13`) and a real chat tier
+(`google/gemini-2.5-flash-lite` via OpenRouter), with `jev inspect --force` and `jev review`
+respectively. Every response carries `usage` (`input_tokens`, `output_tokens`); on the Zen route it
+carries no price field, so the per-token rate used here is the **OpenRouter decisions route's own
+`usage.cost`** — measured at `$0.000013776` for 349 tokens, i.e. **$0.0395 per million** (an earlier
+project measurement, `$0.00002121` for 532 tokens, agrees at $0.0399). The chat tier's own
+`cost_details` gave **$0.10 per million in, $0.40 per million out**.
+
+**The rules pass over this repository** — `crates/**/*.rs`, one `jev inspect --force` per file:
+
+| | |
+|---|---|
+| documents | 30 |
+| documents that made a decision call | **20** — the other 10 had no candidate, and a save with no match costs nothing |
+| candidates / rules considered / findings | 140 / 362 / 2 |
+| tokens | **82,478 in, 3,831 out** |
+| wall time | 24.8 s (0.83 s per calling document) |
+| cost | **$0.0034** — $0.00011 per document, $0.00017 per document that called |
+
+Per calling document that is 4,124 tokens in and 192 out, and it scales with *candidates*, not with
+file size: the smallest calling document (2 candidates) cost 3,151 in / 58 out, the largest
+(21 candidates) 6,859 in / 571 out, and a 6-line fixture with one candidate costs **482 in / 29
+out** — the shape §7's "~500 tokens in and ~29 out" was written from, now reproduced.
+
+**The same file both ways**, rules pass against chat review of identical content:
+
+| document | rules pass (decide) | chat review | ratio |
+|---|---|---|---|
+| `crates/jev-lsp/src/server.rs` (2.6k lines) | 5,341 in / 345 out, 13 candidates, **2 findings**, 852 ms → $0.00022 | 30,562 in / 9 out, 0 findings, 3,637 ms → $0.00306 | **5.7× tokens, 13.6× dollars** |
+| `crates/jev-core/src/config.rs` (840 lines) | 3,151 in / 58 out, 2 candidates, 0 findings → $0.00013 | 10,617 in / 9 out, 0 findings, 927 ms → $0.00107 | **3.4× tokens, 8.4× dollars** |
+
+The review's prompt grows with the file; the decision's grows with the candidates. That is the
+whole cost argument in one line: a review re-reads the file, a decision answers about the lines a
+pattern named.
+
+**The instruction document, as arithmetic** (arithmetic, not a measurement): a 2,000-token
+instruction file re-sent across 50 turns is ~100,000 instruction tokens in one session — $0.010 at
+the measured chat rate above, and on a *local* model the cost is not dollars but context, KV memory
+and speed. The same conventions as rules cost one decision per candidate-bearing document and
+nothing at all on a save where no pattern matches.
+
+**What these numbers do not include.** The generation itself — the code your harness writes — is
+untouched; what changes is what steering and review cost. The chat tiers (actions, plans,
+explanations) stay the expensive path and are on-demand by design. And the local routes below are
+cost characteristics, not verified configurations: no local decide tier has been run end to end by
+this project, and no local harness generation run has been measured here.
+
 ## 8. Local-first
 
 Default configuration assumes a local OpenAI-compatible server **for the chat tiers**. Remote
@@ -330,3 +380,31 @@ succeeded, and the same run answered `ok` at 15000.
 An unrecognised `JEV_DECIDE_WIRE` is ignored rather than coerced, so a typo leaves the previous
 wire in force; `jev.status` (`models.decide.wire`) and the server's `settings applied` log line
 are where you see which one is actually in force.
+
+### The decide tier on your own machine
+
+A System One server on `127.0.0.1:8009` is one config change (the recipe above), and a decision
+then costs **nothing per call** — measured on this box over 18 decisions: **p50 583 ms,
+$0.000000 per decision**, against **$0.000015** per decision for `typesafe/jev-1.13` through
+OpenRouter at p50 591 ms. The latency is comparable; the price is not.
+
+The accuracy is not comparable, and that is the trade: the same 18 decisions answered **12/18 =
+67%** on the local arm against **17/18 = 94%** for `typesafe/jev-1.13`. The box's own classifier
+research, on a smaller model, reports ~83 ms and 89%. So a local decide tier is not a smaller
+version of the hosted one — it has less margin, which is exactly why the two things this document
+keeps repeating matter more locally, not less: put `min_probability` outside the answer's measured
+spread, and phrase the question as the violation (`docs/GUIDE.md` §4). A local tier also widens the
+spread, so measure it before choosing the floor.
+
+**Local is cheap per token, not fast.** Measured here: `llama.cpp` with a 4B-active MoE
+(`gemma-4-E4B-it-Q4_K_M`) generates **33 tok/s** on this M1 Pro (96 tokens in 2.9 s). The serving
+logs on this machine for the larger code models sit at **~1.5–2 tok/s per request**, and this
+project's own local soak measured a 35B at **5.7–12.4 s** per ambient review and **7.3–15.5 s** per
+resolve (`docs/VERIFICATION.md` §7). A model that slow is only viable when the tokens it must
+produce drop — which is what a rule set does: the conventions are enforced by the rule, on the line,
+so the generation side no longer has to hold them in context or re-read the file to check them.
+
+**Not verified here.** No local decide tier has been run end to end by this project — the recipe,
+the price and the latency are measured, the wiring is not — and no local harness generation run has
+been measured on this machine. These are the intended deployments with stated cost
+characteristics, not configurations this repository has proven.

@@ -45,6 +45,32 @@ repository states in `.jev/rules/*.json`; each line a rule points at is sent to 
 decision model that returns one answer per question with a probability, not prose. Standard LSP
 surfaces only. Neovim is the primary client; `nvim/` is the plugin.
 
+### What it costs
+
+**Well-defined rules are what let you use a local model.** The conventions live in the rule set
+instead of in a long instruction document re-sent every turn, so the model no longer has to hold
+your project in its head — and what it must produce per change drops from a review of the file to an
+answer about one line, roughly 500 tokens in and 30 out. Measured here on 2026-09-20 (rules pass:
+`jev inspect --force`, decide tier `jev-1.13`; review: `jev review`, `gemini-2.5-flash-lite`):
+
+| | rules pass | chat review, same file |
+|---|---|---|
+| `crates/jev-lsp/src/server.rs`, 2.6k lines | 5,341 in / 345 out — 13 candidates, 2 findings, $0.00022 | 30,562 in / 9 out — 0 findings, $0.00306 |
+| all 30 `crates/**/*.rs` documents | 82,478 in / 3,831 out — 140 candidates, 20 calls, **$0.0034** | — |
+
+Ten of those 30 documents had no candidate and cost nothing: a save where no rule's pattern matches
+makes no call at all. Prices are measured, not assumed — $0.0395 per million tokens from the
+decisions route's own `usage.cost`, $0.10 in / $0.40 out per million from the chat tier's
+`cost_details`.
+
+Two things this is not. It does not pay for the generation itself — the code your harness writes is
+untouched, and the chat tiers (actions, plans, explanations) stay the expensive path, on demand by
+design. And local is cheap per token, not fast: this machine generates at 33 tok/s on a small MoE
+but its serving logs sit at ~1.5–2 tok/s for the larger code models, which is why a local model
+becomes *viable* when the tokens it must produce drop — not because it got quicker. **No local
+decide tier has been run end to end here**; `docs/MODEL.md` §7 has the method and the full table,
+§8 the local routes.
+
 ## Use it
 
 Neovim is the primary client. There is no release page yet, so the binary comes from `cargo
@@ -210,7 +236,7 @@ Per client and per subject:
 
 - `docs/CURSOR.md` — Cursor: the extension, the settings, and what its API does not do
 - `docs/UX.md` — the surfaces, and the decisions behind them (noise policy, approval, the plan buffer)
-- `docs/MODEL.md` — the tiers, routing, the decision wire, the provider routes, and what leaves your machine
+- `docs/MODEL.md` — the tiers, routing, the decision wire, the provider routes, what a pass costs, and what leaves your machine
 - `docs/LANGUAGE.md` — unconditional support: the attachment ladder, language resolution, scope, gates
 - `docs/ARCHITECTURE.md` — components, process topology, the document store, the scheduler
 

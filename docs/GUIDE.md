@@ -296,6 +296,10 @@ A rules pass takes one permit per document, so `max_decisions_per_min` is a cap 
 minute, not on candidates: one decision is ~500 tokens in and ~29 out, about $0.00002 and 0.3–0.6 s
 on a hosted tier. `0` means "no calls" for both caps; the session token cap applies to both tiers.
 
+What a pass actually costs over a repository — the sweep, the same file both ways, the measured
+prices, and the local routes — is `docs/MODEL.md` §7 (measured) and §8 (local), with the short
+version on the front page of `README.md`.
+
 ## 6. The CLI
 
 ```sh

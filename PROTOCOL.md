@@ -48,11 +48,18 @@ Server capabilities returned from `initialize`:
     ]
   },
   "diagnosticProvider": { "identifier": "jev", "interFileDependencies": false, "workspaceDiagnostics": false },
+  "hoverProvider": true,
   "codeLensProvider": { "resolveProvider": false },
   "inlayHintProvider": { "resolveProvider": false },
   "executeCommandProvider": { "commands": [ /* §6 */ ], "workDoneProgress": true }
 }
 ```
+
+`hoverProvider` is `true` because `textDocument/hover` is served (§3.2) — it answers from the
+artifact store and never from a model. It had been missing from this block while §3.2 listed the
+method, which is exactly what the completeness claim below is for: the block was read field by
+field against a live `initialize` response on 2026-09-20 and it is eight fields, no more and no
+fewer.
 
 `workspaceDiagnostics` is `false` and must stay false until `workspace/diagnostic` is
 implemented here. Neovim's `on_refresh` checks that capability *first* and takes the
@@ -296,10 +303,14 @@ A token is obtained in exactly one of two ways:
    ```
 
 2. **Server-initiated.** For work with no client request to attach to (a background
-   re-analysis), the server sends `window/workDoneProgress/create` and **waits for the
-   response** before any `$/progress` for that token. Permitted only when the client
-   advertises `window.workDoneProgress` (Neovim does `[R11]`). If the create request fails
-   or errors, the server MUST NOT send progress with that token `[R12]`.
+   re-analysis), the design is that the server sends `window/workDoneProgress/create` and
+   **waits for the response** before any `$/progress` for that token, permitted only when the
+   client advertises `window.workDoneProgress` (Neovim does `[R11]`), and that a create request
+   which fails or errors means the server MUST NOT send progress with that token `[R12]`.
+   **No code path does this today**: nothing in `crates/` calls
+   `window/workDoneProgress/create`, so every token in this contract is the client's own
+   (§3.4's table says the same). The rules below hold for a token of either origin, which is why
+   they are written now and not when the second origin exists.
 
 Rules that follow, and are enforced by the streaming module:
 
@@ -579,10 +590,23 @@ verbatim, so it is named here and asserted by the harness. Every command answers
 | `contract_error` | The model's answer did not satisfy its contract after repair (`docs/MODEL.md` §5) |
 | `rejected_edit` | The answer could not be applied to this document — an anchor that does not locate, or a replacement that repeats lines it did not consume |
 
-Server-initiated progress is cancelled by the client with `window/workDoneProgress/cancel`
-(client→server notification, `WorkDoneProgressCancelParams {token}`), which the server must
-handle by aborting the corresponding job — a job that keeps running after its progress is
-cancelled is a defect. The progress need not have been marked `cancellable` `[R12]`.
+**`window/workDoneProgress/cancel` is not dispatched by the pinned tower-lsp, so the server
+cannot honour it, and this document does not ask it to.** The specification cancels
+server-initiated progress with that client→server notification
+(`WorkDoneProgressCancelParams {token}`), and the plugin does send it
+(`nvim/lua/jev/init.lua:1232`) — but tower-lsp 0.20.0, pinned here by `Cargo.lock`, has no
+dispatch arm for it: its own source carries `TODO: Add `work_done_progress_cancel()` here (since
+3.15.0) when supported by `tower-lsp`.` (`tower-lsp-0.20.0/src/lib.rs:1329`), and
+`impl LanguageServer for JevServer` has no handler either. Measured: the notification produces no
+reply, no log and no effect. Nothing is broken by that, and the reason is structural rather than
+lucky — the server never creates a progress token (§3.5 path 2, §3.4), so there is no
+server-initiated progress for a client to cancel. **Cancelling work is the other path, and it is
+the one this contract relies on**: `$/cancelRequest` against the request id, which aborts a
+running command — the body runs in its own task, the request answers `-32800 Canceled`, the token
+is closed exactly once and the answer is discarded. Step 10 of `verify/lsp_client.py` pins that
+path. A tower-lsp that dispatches the notification would make the first path available; until
+then, a client that sends it is sending a notification into a library that has not implemented
+it, and no behaviour depends on it.
 
 **Why `explain` is a command and not a code action.** A resolved code action's `command`
 field is executed by the client by sending it *back to the server* as
@@ -879,3 +903,4 @@ Recorded so the refusals are not relitigated:
 | 2026-09-20 | **§3.5's "exactly one `end` … including panic" is measured, and its boundary is named.** The clause had nothing behind the panic case once the `bridge.rs` drop guard it was written for was deleted with inline completion: tower-lsp 0.20 contains no `catch_unwind` and awaits handlers in the transport task (`src/service.rs`), so an unwind in a handler takes the process with it and no destructor can close the token. The command body now runs in its own task, with the token guard armed *before* `begin`, so a panic in it arrives as a `JoinError`: the token is closed, the request is answered `{"code": "panic", …}`, a `window/logMessage` says so, and the server keeps serving. Measured over the wire: a command that panicked after `begin` gave `begin, end`, the `panic` result, no transport close, and a later request answered normally; the same probe gave `begin, end` for a model error (`model_error`), a budget refusal (`over_budget`) and a cancelled request (`-32800 Canceled`). The clause now states the guarantee for the paths the server survives and says what a client sees when a panic lands outside the command body — the transport closing, with no response and no `end`. Pinned now by `verify/lsp_client.py` **step 10**, which asserts over the wire — for model error, budget refusal and cancellation — that exactly one `begin` and one `end` arrive in that order under the supplied token, that the answer is the `Result` envelope (`model_error` / `over_budget` / `-32800 Canceled`), that the `end` arrives **before** the response, and that the server still answers a following command; the cancellation case also asserts promptness — an `end` within 2 s of the cancel while the model stalls for 4 s — which is the assertion that goes red on the pre-fix behaviour. **Panic stays unpinned by a harness**, because triggering it needs a command the product must not ship: it is pinned by the committed Rust unit tests (`progress_tests::{a_panic_between_begin_and_end_still_sends_its_end, a_token_closed_normally_is_not_closed_twice, a_dropped_request_aborts_the_command_and_closes_its_token}`), and its wire behaviour is probe-only. Measuring the cancellation path found two real defects in the containment as it first stood: `$/cancelRequest` is handled by tower-lsp aborting the *handler* task, and the body was spawned with a bare `tokio::spawn` whose `JoinHandle` was merely dropped — a dropped handle detaches, so the cancel did not cancel (measured: `begin` at 4595 ms, `-32800 Canceled` at 4648 ms, then **eight more `report`s and an `end` at 9372 ms**, 4.7 s after the response that had already invalidated the token); and the progress forwarder was guarded only after the blocking model call, leaving the guard unarmed for exactly the window that matters. Both are fixed by holding the command task and the forwarder in one `AbortOnDrop` armed at the spawn: after the fix the response and the `end` arrive at 4612 ms, 52 ms after the cancel, with nothing after it. Three pre-existing observations the same measurement recorded. `cancellable: Some(false)` in the `begin` was demonstrably wrong as a hint — cancellation *is* honoured, and the value was corrected below. A cancelled command's model call keeps running to the tier timeout and holds its budget permit until then, because it is a `spawn_blocking` synchronous client in `jev-core` (the harness's post-cancel `jev.status` shows `in_flight: 1`): "cancelled" means the command stops, not that the call is interrupted, and §3.5 says so now. And a command that panics writes **no** session-record line, because the record is written after `run_command` returns — §3.6 now names that boundary. |
 | 2026-09-20 | **§8's post-apply verification is scoped to the edits the server applies.** The clause read as though every applied edit were checked; `remember_prediction` and `record_applied` are called from one place — the `jev.apply` step path (`crates/jev-lsp/src/server.rs:2581, 2592`) — so a resolved code action, which the client applies, records no prediction and `verify_prediction` returns early: the divergence diagnostic and `:Jev revert` do not cover it. Both paths still get the structural validation (`edit::build_proposal`: every anchor locates once, nothing re-emits lines it did not consume, scope and version stamps), and nothing parses the result on either path — `docs/VERIFICATION.md` §11 weighs the alternatives and names the client-diagnostics correlation as the upgrade, since `CodeActionContext.diagnostics` already arrives and is dropped. Found by a design study of the parsing question. |
 | 2026-09-20 | **A command's `begin` says it can be cancelled, because it can; and the decide tier's key variable is nameable from the shell.** §3.5's `begin` carried `cancellable: Some(false)`, which was wrong as a hint: cancellation is honoured. It is now `true` unconditionally (`7d31a80`, `crates/jev-lsp/src/server.rs`), and it can be unconditional because `begin` is only ever sent from inside the spawned command body — by the time a client can see the flag and act on it, there is a task to abort. The boundary that stays true is unchanged and now written down: a cancel stops the *command* (the request answers `-32800 Canceled`, the token is closed exactly once, the answer is discarded), not the model call, which is a synchronous client on a blocking worker that runs on to the tier timeout and holds its budget permit until it returns (`jev.status` shows `in_flight: 1`). §10 gains `JEV_DECIDE_API_KEY_ENV` (`4566305`): its value is the *name* of the variable holding the decide tier's key — never the key — assigned to `models.decide.api_key_env`; trimmed, and an empty or whitespace-only value keeps the name in force rather than clearing it (with nothing in force the `TYPESAFE_API_KEY` default survives). The chat tiers are untouched, and `JEV_API_KEY_ENV` still does not repoint the decide tier: the two variables name different tiers' keys, because the tiers can sit behind different providers. This removes the documented workaround of exporting a key as `TYPESAFE_API_KEY` because the name could not be changed. Verified: `cargo test` 289 (49 `jev` + 191 `jev-core` + 49 `jev-lsp`), 0 failed, no warnings; `verify/lsp_client.py` 44 ok / 0 FAIL / 0 skip, with step 10's twelve assertions over the three reachable §3.5 paths. Step 10 does **not** assert `cancellable` — the contract did not state the value until this row, which is why the value is a document change rather than a harness change. |
+| 2026-09-20 | **§2's advertised set was one field short, and §3.5 promised a cancellation path the pinned library cannot deliver.** A live `initialize` answers `"hoverProvider": true` while §2's block — the one that calls itself "the *complete* advertised set" — did not list it, and `hoverProvider` appeared nowhere in this file, `README.md`, `STATUS.md` or `docs/`, even though §3.2 lists `textDocument/hover` as served. The block was then read field by field against a live `initialize` response rather than against §3, and it is eight fields: `positionEncoding`, `textDocumentSync`, `codeActionProvider`, `diagnosticProvider`, `hoverProvider`, `codeLensProvider`, `inlayHintProvider`, `executeCommandProvider`. Second, §3.5 required the server to handle `window/workDoneProgress/cancel` and abort the corresponding job; no handler exists in `impl LanguageServer for JevServer`, and tower-lsp 0.20.0 does not dispatch the method at all — its own source carries `TODO: Add `work_done_progress_cancel()` here (since 3.15.0) when supported by `tower-lsp`.` (`tower-lsp-0.20.0/src/lib.rs:1329`) — so the notification produces no reply, no log and no effect. The clause now says what is true: the plugin does send it (`nvim/lua/jev/init.lua:1232`), the pinned library drops it, cancellation of a *running command* is the `$/cancelRequest` path (§3.5 path 1, pinned by step 10 of `verify/lsp_client.py`), and a tower-lsp that dispatches the notification would make the other path available. §3.5 path 2's server-initiated progress is marked specified-but-unimplemented in the same pass — nothing in `crates/` calls `window/workDoneProgress/create`, which is also why no token exists for a client to cancel. |
