@@ -343,15 +343,20 @@ impl InitReport {
 /// that editing one is editing a rule file and the repository's own copy then shadows the
 /// shipped rule it came from (`merge`).
 ///
+/// **Each file is written under its group and its name** (`default_rules/prose/lists-end-in-etc.json`
+/// → `prose-lists-end-in-etc.json`). The loader reads one flat directory (`DIR`), so the group
+/// cannot survive as a directory; carrying it in the file name is what keeps two groups from
+/// colliding. The groups are authored in parallel by people who cannot see each other's file
+/// names, and a naming constraint they would have to agree on is a constraint that will be
+/// broken — the group is information the shipped tree already has, so it is the thing that
+/// disambiguates. It also puts the provenance on disk, which is the same fact `rule_source`
+/// reports about a finding (PROTOCOL §9).
+///
 /// **Idempotent and non-clobbering.** A file that already exists is read, and left alone unless
 /// `--force`: identical means nothing to do, different means the user's file wins and the report
 /// names it. A second run over a directory this function filled writes nothing and changes no
 /// bytes. Nothing outside `dir` is written, and nothing is ever deleted — including on a
 /// refusal, which is reported rather than forced.
-///
-/// `files` is the shipped set (a fixture in a test); the grouping in the source tree
-/// (`default_rules/code/…`, `default_rules/prose/…`) is a filing convention, not a directory the
-/// loader reads, so each file is written under its base name — the flat shape `DIR` is.
 pub fn materialise(
     files: &[(&str, &str)],
     dir: &Path,
@@ -387,22 +392,47 @@ pub fn materialise(
     Ok(report)
 }
 
+/// The name a shipped file is written under: its group, then its own name.
+///
+/// `code/no-unwrap.json` → `code-no-unwrap.json`; a file sitting directly in `default_rules/`
+/// has no group and keeps its name. The group is the first component, so every file under one
+/// group shares a prefix — which is what makes the collision check below a check *within* a
+/// group, the only kind of duplicate that can still happen.
+fn written_name(name: &str) -> Result<String, String> {
+    let path = Path::new(name);
+    let Some(base) = path.file_name().and_then(|n| n.to_str()) else {
+        return Err(format!("the shipped file {name:?} has no file name to write"));
+    };
+    let mut parts = path.components();
+    let group = match (parts.next(), parts.next()) {
+        (Some(std::path::Component::Normal(group)), Some(_)) => group.to_str(),
+        _ => None,
+    };
+    Ok(match group {
+        Some(group) => format!("{group}-{base}"),
+        None => base.to_string(),
+    })
+}
+
 /// The shipped set as `(name written, contents)`, sorted by name and checked for collisions.
 ///
 /// Checked *before* anything is created, because a set that cannot be written whole must not be
 /// written at all: half the shipped rules in a directory, with no sign of which half, is worse
 /// than a refusal that says so.
+///
+/// The check is **within a group**, because a name already carries its group: two files under
+/// `code/` that share a basename are one mistake worth failing on (`code-a.json` twice), and
+/// `code/a.json` against `prose/a.json` is not a collision at all — it is two groups, and the
+/// refusal that used to fire on it would have been a naming constraint between sessions that
+/// cannot see each other's files.
 fn plan<'a>(files: &'a [(&'a str, &'a str)]) -> Result<Vec<(String, &'a str)>, String> {
     let mut plan: Vec<(String, &str)> = Vec::new();
     for (name, text) in files {
-        let Some(base) = Path::new(name).file_name().and_then(|n| n.to_str()) else {
-            return Err(format!("the shipped file {name:?} has no file name to write"));
-        };
-        plan.push((base.to_string(), text));
+        plan.push((written_name(name)?, text));
     }
     plan.sort_by(|a, b| a.0.cmp(&b.0));
-    // Two shipped files flattening to one name would silently become one file, with one rule
-    // set quietly missing from the directory it was materialised into.
+    // Two files of one name would silently become one file, with one rule set quietly missing
+    // from the directory it was materialised into.
     if let Some(pair) = plan.windows(2).find(|w| w[0].0 == w[1].0) {
         return Err(format!(
             "two shipped rule files are named {:?}; one would be written over the other",
@@ -662,9 +692,13 @@ mod tests {
             vec![("code/a.json", a.as_str()), ("prose/z.json", b.as_str())];
 
         let first = materialise(&files, &target, false).unwrap();
-        assert_eq!(first.written, vec!["a.json".to_string(), "z.json".to_string()]);
+        assert_eq!(
+            first.written,
+            vec!["code-a.json".to_string(), "prose-z.json".to_string()],
+            "each file is named for its group, so two groups cannot collide"
+        );
         assert!(!first.is_refusal());
-        assert_eq!(std::fs::read(target.join("a.json")).unwrap(), a.as_bytes());
+        assert_eq!(std::fs::read(target.join("code-a.json")).unwrap(), a.as_bytes());
         // Nothing outside the target: the shipped tree's group directories are not recreated.
         let beside: Vec<String> = std::fs::read_dir(&root)
             .unwrap()
@@ -674,14 +708,14 @@ mod tests {
         assert_eq!(beside, vec![".jev".to_string()]);
 
         // A user edits one of them, the way the command exists for.
-        std::fs::write(target.join("a.json"), "{ the user's own rule }").unwrap();
+        std::fs::write(target.join("code-a.json"), "{ the user's own rule }").unwrap();
         let second = materialise(&files, &target, false).unwrap();
         assert!(second.written.is_empty());
-        assert_eq!(second.unchanged, vec!["z.json".to_string()]);
-        assert_eq!(second.refused, vec!["a.json".to_string()]);
+        assert_eq!(second.unchanged, vec!["prose-z.json".to_string()]);
+        assert_eq!(second.refused, vec!["code-a.json".to_string()]);
         assert!(second.is_refusal());
         assert_eq!(
-            std::fs::read(target.join("a.json")).unwrap(),
+            std::fs::read(target.join("code-a.json")).unwrap(),
             b"{ the user's own rule }",
             "a refusal is a refusal: the user's bytes are untouched"
         );
@@ -689,12 +723,18 @@ mod tests {
         // `--force` is the only thing that replaces them, and a run after it changes nothing
         // again.
         let forced = materialise(&files, &target, true).unwrap();
-        assert_eq!(forced.written, vec!["a.json".to_string(), "z.json".to_string()]);
+        assert_eq!(
+            forced.written,
+            vec!["code-a.json".to_string(), "prose-z.json".to_string()]
+        );
         assert!(!forced.is_refusal());
-        assert_eq!(std::fs::read(target.join("a.json")).unwrap(), a.as_bytes());
+        assert_eq!(std::fs::read(target.join("code-a.json")).unwrap(), a.as_bytes());
         let again = materialise(&files, &target, false).unwrap();
         assert!(again.written.is_empty() && again.refused.is_empty());
-        assert_eq!(again.unchanged, vec!["a.json".to_string(), "z.json".to_string()]);
+        assert_eq!(
+            again.unchanged,
+            vec!["code-a.json".to_string(), "prose-z.json".to_string()]
+        );
 
         // And what was written is what the loader reads back.
         let set = load(&root, false, &[]);
@@ -707,10 +747,18 @@ mod tests {
         let root = std::env::temp_dir().join(format!("jev-rules-collide-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let target = root.join(DIR);
-        let files = [("code/a.json", "{}"), ("prose/a.json", "{}")];
-        let err = materialise(&files, &target, false).unwrap_err();
-        assert!(err.contains("a.json"), "{err}");
+        // One group, one name: the mistake that is left, and it is still refused.
+        let collide = [("code/a.json", "{}"), ("code/b/a.json", "{}")];
+        let err = materialise(&collide, &target, false).unwrap_err();
+        assert!(err.contains("code-a.json"), "{err}");
         assert!(!target.exists(), "a refusal writes nothing: {err}");
+
+        // Two groups, one basename: **not** a collision. The groups are authored in parallel by
+        // people who cannot see each other's file names, and the written name carries the group
+        // precisely so this needs no coordination.
+        let both = [("code/a.json", "{\"code\":true}"), ("prose/a.json", "{\"prose\":true}")];
+        let report = materialise(&both, &target, false).unwrap();
+        assert_eq!(report.written, vec!["code-a.json", "prose-a.json"]);
         std::fs::remove_dir_all(&root).ok();
     }
 

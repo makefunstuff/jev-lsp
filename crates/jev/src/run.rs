@@ -2215,53 +2215,53 @@ mod tests {
         let body = line(&out);
         assert_eq!(body["ok"], true);
         assert_eq!(body["dir"], target_arg.as_str());
-        assert_eq!(body["written"], serde_json::json!(["shipped.json"]));
+        assert_eq!(body["written"], serde_json::json!(["code-shipped.json"]));
         assert_eq!(body["unchanged"], serde_json::json!([]));
         assert_eq!(body["refused"], serde_json::json!([]));
-        let written = std::fs::read(target.join("shipped.json")).unwrap();
+        let written = std::fs::read(target.join("code-shipped.json")).unwrap();
         assert_eq!(written, SHIPPED[0].1.as_bytes(), "the file is the shipped rule");
         let before = written.clone();
 
         // A user edits it — the reason the command exists — and the next run leaves it alone and
         // says so, with the bytes untouched.
-        std::fs::write(target.join("shipped.json"), b"{\"schema\":\"jev.rules/1\",\"rules\":[]}").unwrap();
-        let edited = std::fs::read(target.join("shipped.json")).unwrap();
+        std::fs::write(target.join("code-shipped.json"), b"{\"schema\":\"jev.rules/1\",\"rules\":[]}").unwrap();
+        let edited = std::fs::read(target.join("code-shipped.json")).unwrap();
         let out = harness.run(&["rules", "init", "--dir", &target_arg]);
         assert_eq!(out.code, EXIT_USAGE, "a refusal is not a success: {:?}", out.stderr);
         let body = line(&out);
         assert_eq!(body["ok"], false, "{body}");
         assert_eq!(body["written"], serde_json::json!([]));
         assert_eq!(
-            body["refused"], serde_json::json!(["shipped.json"]),
+            body["refused"], serde_json::json!(["code-shipped.json"]),
             "and it names what it refused to touch: {body}"
         );
         assert!(body["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("shipped.json"));
+            .contains("code-shipped.json"));
         assert!(out.stderr.iter().any(|l| l.contains("--force")), "{:?}", out.stderr);
-        assert_eq!(std::fs::read(target.join("shipped.json")).unwrap(), edited);
+        assert_eq!(std::fs::read(target.join("code-shipped.json")).unwrap(), edited);
 
         // `--force` is the only thing that replaces it, and a run after that is a no-op with a
         // success code.
         let out = harness.run(&["rules", "init", "--dir", &target_arg, "--force"]);
         assert_eq!(out.code, EXIT_OK, "{:?}", out.stderr);
-        assert_eq!(line(&out)["written"], serde_json::json!(["shipped.json"]));
-        assert_eq!(std::fs::read(target.join("shipped.json")).unwrap(), before);
+        assert_eq!(line(&out)["written"], serde_json::json!(["code-shipped.json"]));
+        assert_eq!(std::fs::read(target.join("code-shipped.json")).unwrap(), before);
         let out = harness.run(&["rules", "init", "--dir", &target_arg]);
         assert_eq!(out.code, EXIT_OK, "{:?}", out.stderr);
         let body = line(&out);
         assert_eq!(body["written"], serde_json::json!([]));
         assert_eq!(body["refused"], serde_json::json!([]));
-        assert_eq!(body["unchanged"], serde_json::json!(["shipped.json"]));
-        assert_eq!(std::fs::read(target.join("shipped.json")).unwrap(), before);
+        assert_eq!(body["unchanged"], serde_json::json!(["code-shipped.json"]));
+        assert_eq!(std::fs::read(target.join("code-shipped.json")).unwrap(), before);
 
         // `--dir` names somewhere else on its own, and nothing outside it is written.
         let elsewhere = dir.join("copy");
         let out = harness.run(&["rules", "init", "--dir", elsewhere.to_str().unwrap()]);
         assert_eq!(out.code, EXIT_OK, "{:?}", out.stderr);
-        assert_eq!(line(&out)["written"], serde_json::json!(["shipped.json"]));
-        assert!(elsewhere.join("shipped.json").is_file());
+        assert_eq!(line(&out)["written"], serde_json::json!(["code-shipped.json"]));
+        assert!(elsewhere.join("code-shipped.json").is_file());
         let mut beside: Vec<String> = std::fs::read_dir(&dir)
             .unwrap()
             .flatten()
@@ -2270,6 +2270,129 @@ mod tests {
         beside.sort();
         assert_eq!(beside, vec![".jev".to_string(), "copy".to_string()]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The prose a repository with no rules of its own is inspected against, in the shipped set
+    /// this binary carries: a sentence that trips the shipped document rules. The expectations
+    /// below are *derived* from `builtin_files()` rather than written down, so a rule landing in
+    /// either group does not make this test wrong — nothing is pinned to a count the shipped set
+    /// owns.
+    const PROSE: &str = "# Notes\n\nIt is worth noting that this is obvious, etc.\n";
+
+    fn shipped_rules_claiming(path: &str) -> Vec<(String, String)> {
+        let loaded = jev_core::rules::load(
+            std::path::Path::new("/nonexistent-root"),
+            true,
+            jev_core::rules::builtin_files(),
+        );
+        assert!(
+            loaded.skipped.is_empty(),
+            "the shipped set must load: {:?}",
+            loaded.skipped
+        );
+        loaded
+            .rules
+            .iter()
+            .filter(|r| r.applies_to.iter().any(|p| gates::glob_match(p, path)))
+            .map(|r| (r.id.clone(), r.title.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn a_repository_with_no_rules_is_inspected_by_the_shipped_set_this_binary_carries() {
+        // The acceptance case, over the *real* embedded set: no `.jev/rules/` anywhere, a
+        // document the shipped rules are about, and the findings saying where they came from.
+        let root = bare_dir("real-shipped");
+        let path = format!("{}/notes.md", root.display());
+        std::fs::write(&path, PROSE).unwrap();
+        let shipped = shipped_rules_claiming("notes.md");
+        assert!(
+            !shipped.is_empty(),
+            "this build ships no rule about a document, so there is nothing to accept"
+        );
+
+        let harness = Harness::new(Box::new(Scripted::new(&[])), Box::new(Fs))
+            .decision(ScriptedDecision::new(0.9))
+            .builtin(jev_core::rules::builtin_files());
+        let out = harness.run(&["inspect", "--force", &path]);
+        assert_eq!(out.code, EXIT_OK, "{:?}", out.stderr);
+        let body = line(&out);
+        assert_eq!(
+            body["considered"], shipped.len(),
+            "every shipped rule that claims the file was loaded: {body}"
+        );
+        let findings = body["findings"].as_array().unwrap();
+        assert!(!findings.is_empty(), "and the prose found something to ask about: {body}");
+        for f in findings {
+            assert_eq!(f["rule_source"], "builtin", "named as the shipped set's: {body}");
+            let label = f["label"].as_str().unwrap_or("");
+            assert!(
+                shipped.iter().any(|(_, title)| title == label),
+                "the label is the title of a shipped rule that claims the file ({label}): {body}"
+            );
+        }
+        assert!(
+            body["skipped"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s["code"] == "default_rules"),
+            "and the pass says it is running on the shipped set: {body}"
+        );
+
+        // A repository rule with one shipped rule's id shadows exactly that one: one fewer rule
+        // considered, and the finding it produces is the repository's own.
+        let shadowed = shipped[0].0.clone();
+        let rules = root.join(".jev/rules");
+        std::fs::create_dir_all(&rules).unwrap();
+        std::fs::write(
+            rules.join("mine.json"),
+            format!(
+                r#"{{"schema":"jev.rules/1","rules":[{{"id":"{shadowed}",
+                    "title":"Ours: a note claim","text":"Our own convention.",
+                    "severity":"warning","applies_to":["**/*.md"],
+                    "inspection":{{"kind":"regex","pattern":"It is worth noting"}},
+                    "judgement":{{"question":"Is it a violation?","min_probability":0.75}},
+                    "verb_hint":"docs"}}]}}"#
+            ),
+        )
+        .unwrap();
+        let out = harness
+            .decision(ScriptedDecision::new(0.9))
+            .run(&["inspect", "--force", &path]);
+        assert_eq!(out.code, EXIT_OK, "{:?}", out.stderr);
+        let body = line(&out);
+        // The repository's rule replaces the shipped one rather than joining it, so the number
+        // of rules claiming the file is unchanged — a merge that kept both would count 5 — and
+        // the shipped rule's title appears nowhere, which is what "the shadowed one is not also
+        // reported" looks like from outside.
+        assert_eq!(
+            body["considered"],
+            shipped.len(),
+            "one shipped rule was replaced, not added to: {body}"
+        );
+        let findings = body["findings"].as_array().unwrap();
+        assert!(
+            findings
+                .iter()
+                .any(|f| f["label"] == "Ours: a note claim" && f["rule_source"] == "repository"),
+            "and the repository's rule is what ran for that id: {body}"
+        );
+        assert!(
+            !findings
+                .iter()
+                .any(|f| Some(f["label"].as_str().unwrap_or("")) == Some(shipped[0].1.as_str())),
+            "and the shipped rule it shadowed reported nothing: {body}"
+        );
+        assert!(
+            !body["skipped"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s["code"] == "default_rules"),
+            "a repository with rules of its own is not told about the shipped set: {body}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
