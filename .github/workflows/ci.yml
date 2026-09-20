@@ -37,8 +37,12 @@ permissions:
   contents: read
 
 concurrency:
+  # A pull request's run is superseded by the next push to that PR, so cancelling is right there.
+  # A push to `main` is a commit that deserves a verdict: this repository has several sessions
+  # committing to `main`, and cancelling every run but the newest meant most commits never got
+  # one — five runs in a row were cancelled before this line changed.
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -106,10 +110,16 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          # The paths the branch changes. A diff against the base when there is one — the PR's
-          # base, else the previous commit on a push — and the whole `crates/` tree only when
-          # there is no history to diff against, so this never checks nothing by accident.
-          # `--diff-filter=d` drops deletions: the gate inspects files that exist.
+          # The gate is a per-change instrument, so this step checks the files the change touches
+          # and never the whole tree: a whole-tree run on this repository is either permanently
+          # red on a finding that has been decided and is pending, or green while printing
+          # findings — and neither can be told from a pass. `--diff-filter=d` drops deletions,
+          # because the gate inspects files that exist.
+          #
+          # The base is the PR's, else the previous commit. When there is no history to diff
+          # against — a shallow checkout, a fresh branch with one commit — this step does not fall
+          # back to a whole-tree run: it says NOT CHECKED with the reason, below, and the reason
+          # names the missing base.
           if [ -n "${GITHUB_BASE_REF:-}" ]; then
             base="origin/$GITHUB_BASE_REF"
           elif git rev-parse -q --verify HEAD^ >/dev/null 2>&1; then
@@ -117,15 +127,22 @@ jobs:
           else
             base=""
           fi
-          if [ -n "$base" ]; then
-            # No `|| true`: a base that will not diff is a real problem, and a step that carries on
-            # anyway would check the wrong files and call it a pass.
-            paths="$(git diff --diff-filter=d --name-only "$base" HEAD)"
-            echo "changed since $base:"
-          else
-            paths="$(git ls-files -- crates)"
-            echo "no base to diff against: the whole crates/ tree"
+          if [ -z "$base" ]; then
+            echo "::warning::the rules gate is NOT CHECKED: no base to diff against in this checkout"
+            {
+              echo "### the rules gate: NOT CHECKED"
+              echo
+              echo "There is no base commit to diff against in this checkout (\`HEAD^\` does not"
+              echo "resolve and this is not a pull request), and the gate is a per-change"
+              echo "instrument — it is not run over the whole tree. The decisions it would have"
+              echo "asked for are unverified in this run."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
+          # No `|| true`: a base that will not diff is a real problem, and a step that carries on
+          # anyway would check the wrong files and call it a pass.
+          paths="$(git diff --diff-filter=d --name-only "$base" HEAD)"
+          echo "changed since $base:"
           if [ -n "$paths" ]; then printf '  %s\n' $paths; else echo "  (nothing)"; fi
           set +e
           # shellcheck disable=SC2086  # the list is one path per word, and these paths have none

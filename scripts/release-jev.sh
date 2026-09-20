@@ -26,7 +26,10 @@
 #       The version, or the tag name, from the one file that owns it.
 #
 # DIR is the asset set: every file in it is uploaded, except `RELEASE-NOTES.md`, which is the
-# release's note text and never an asset.
+# release's note text and never an asset. The default output directory is `target/dist/<tag>`,
+# under the path `.gitignore` already ignores, so a release leaves nothing untracked in the
+# repository root; `--out` may name anywhere, and CI names `target/dist` for the same reason.
+# The artifacts are never committed: a release asset belongs on the release.
 #
 # The version. `[workspace.package] version` in `Cargo.toml` owns it: that is the string the
 # binaries print (`jev-lsp --version`) and the string the asset names carry.
