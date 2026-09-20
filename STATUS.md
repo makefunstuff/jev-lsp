@@ -169,8 +169,9 @@ which a headless harness cannot drive.
 | `python3 verify/repo_bench.py --repo . --limit 40` | **not a suite row**: nothing in `verify/run-suite.sh` invokes it. Run by hand: 40 files, 33 analysed, 62 findings, **3.21 per 1000 lines** (three runs: 3.21 / 3.48 / 3.71; 7 files per run outran the 60 s per-file bound and are reported as such). Measured 2026-09-18, before the inline-completion removal, which touches no findings path |
 
 The table mirrors `verify/run-suite.sh`'s row list in the runner's order. The numbers are the
-suite's verdict at `bce3d8e` (run `35509988121`, `verification (full-table)`): 33 rows, every one
+suite's verdict at `f9a3290` (run `35510412935`, `verification (full-table)`): 33 rows, every one
 `ok` except `quality_eval` (`?`, no key) and `omp_lsp` (1 SKIP, `omp` not on the runner's `PATH`).
+Every count and summary line is identical to the previous green run, `bce3d8e` at `35509988121`.
 `stub health` is the runner's own first row rather than a harness of its own, and `repo_bench` is
 the one row in this table that no runner invokes: it is a measurement taken by hand.
 
