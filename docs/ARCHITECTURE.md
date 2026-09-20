@@ -161,8 +161,11 @@ Properties:
 
 - **Coalescing.** A newer request for the same document cancels the queued older one
   before it starts.
-- **Cancellation.** `$/cancelRequest` maps to a cancellation token threaded through
-  `jev-core`, so an aborted HTTP call is dropped rather than awaited.
+- **Cancellation.** `$/cancelRequest` aborts the command's task — the body runs in its own task —
+  so the request answers `-32800 Canceled`, the token is closed exactly once, and the answer is
+  discarded. The model call itself is *not* interrupted: the client in `jev-core` is synchronous on
+  a blocking worker, so it runs on to the tier timeout and holds its budget permit until it returns
+  (`jev.status` shows `in_flight: 1` in that window; PROTOCOL §3.5).
 - **Refresh, not push.** The worker never publishes conclusions directly; it invalidates
   and asks the client to re-pull. Keeps the client's state authoritative and avoids
   double-rendering.
