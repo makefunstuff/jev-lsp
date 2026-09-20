@@ -1,0 +1,156 @@
+{
+  "name": "jev",
+  "displayName": "Jev",
+  "description": "Starts jev-lsp --stdio and wires its diagnostics, code actions, code lenses, hover and commands into Cursor.",
+  "version": "0.1.0",
+  "publisher": "makefunstuff",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Programming Languages"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "jev.status",
+        "title": "Jev: status — queue, budgets, endpoints in force"
+      },
+      {
+        "command": "jev.recompute",
+        "title": "Jev: recompute every open file"
+      },
+      {
+        "command": "jev.inspect",
+        "title": "Jev: inspect this file — run the rules pass now"
+      },
+      {
+        "command": "jev.review",
+        "title": "Jev: review this file — the chat tier, now"
+      },
+      {
+        "command": "jev.explain",
+        "title": "Jev: explain the scope at the cursor"
+      },
+      {
+        "command": "jev.ask",
+        "title": "Jev: ask a question about this file"
+      },
+      {
+        "command": "jev.followup",
+        "title": "Jev: ask a follow-up about the scope at the cursor"
+      },
+      {
+        "command": "jev.plan",
+        "title": "Jev: plan a goal at the cursor"
+      },
+      {
+        "command": "jev.session",
+        "title": "Jev: session log"
+      },
+      {
+        "command": "jev.usage",
+        "title": "Jev: usage — what was offered and what was done with it"
+      },
+      {
+        "command": "jev.revert",
+        "title": "Jev: revert an applied edit by id"
+      }
+    ],
+    "configuration": {
+      "title": "Jev",
+      "properties": {
+        "jev.server.path": {
+          "type": "string",
+          "default": "jev-lsp",
+          "markdownDescription": "The server binary. An absolute path is safer than a name: a macOS GUI application does not inherit the login shell's `PATH`."
+        },
+        "jev.server.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "--stdio"
+          ],
+          "markdownDescription": "Arguments for the server. `--stdio` is what this extension speaks."
+        },
+        "jev.decide.baseUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "The decide tier's base URL; sets `JEV_DECIDE_BASE_URL`. Empty leaves the environment's value alone."
+        },
+        "jev.decide.model": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "The decide tier's model; sets `JEV_DECIDE_MODEL`."
+        },
+        "jev.decide.wire": {
+          "type": "string",
+          "enum": [
+            "",
+            "system_one",
+            "open_router"
+          ],
+          "default": "",
+          "markdownDescription": "The decide wire; sets `JEV_DECIDE_WIRE`. `system_one` posts to `/systemone`, `open_router` to `/alpha/decisions` (PROTOCOL §10)."
+        },
+        "jev.decide.apiKeyEnv": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "The **name** of the variable holding the decide key; sets `JEV_DECIDE_API_KEY_ENV`. Never the key itself. Empty keeps the server's default, `TYPESAFE_API_KEY`."
+        },
+        "jev.decide.apiKeyFile": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "A file to read the decide key's value from, so it need not be pasted into a setting. Either the file is the key, or it is a shell file and the key is the value of the last `NAME=value` for the name in `jev.decide.apiKeyEnv`. `~/.bash_profile` and `~/.zshrc` work. The value is passed to the server's environment and never logged."
+        },
+        "jev.decide.timeoutMs": {
+          "type": "number",
+          "default": 0,
+          "markdownDescription": "The decide tier's timeout in milliseconds; sets `JEV_DECIDE_TIMEOUT_MS`. `0` leaves the server's default."
+        },
+        "jev.chat.baseUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "The chat tiers' base URL, for actions, plans and explanations; sets `JEV_BASE_URL`. Unset means those commands answer `model_error`, and diagnostics still work."
+        },
+        "jev.chat.model": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "The chat tiers' model; sets `JEV_MODEL`."
+        },
+        "jev.chat.apiKeyEnv": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "The **name** of the variable holding the chat key; sets `JEV_API_KEY_ENV`. Never the key itself."
+        },
+        "jev.chat.apiKeyFile": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "A file to read the chat tiers' key's value from, in the same two forms as `jev.decide.apiKeyFile`."
+        },
+        "jev.settings": {
+          "type": "object",
+          "default": {},
+          "markdownDescription": "The server's own `jev` configuration section (PROTOCOL §10), passed through verbatim — `budget`, `triggers`, `rules`, `noise`, `languages`, `models`. The server reads it over `workspace/configuration`."
+        },
+        "jev.codeLens.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show the per-declaration lenses the server serves (`jev: explain`, `jev: N finding(s) · fix`)."
+        },
+        "jev.inlayHints.enabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Ask for the `jev: N finding(s)` badge. Off by default, as on every other jev client: the badge is only worth the space when it has something to say."
+        }
+      }
+    }
+  }
+}

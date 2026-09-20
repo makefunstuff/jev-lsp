@@ -1,0 +1,9 @@
+<!-- The gutter mark a jev finding gets.
+     One mark, not one per severity: PROTOCOL.md §9 permits only `warning` and `information`
+     (an `error` is reserved for a divergence the server can prove it caused), so there is no
+     severity to distinguish, and a second shape would be decoration pretending to be
+     information. A mid-tone violet, because the gutter sits on both light and dark themes and
+     a colour tuned for one of them vanishes on the other. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12">
+  <circle cx="6" cy="6" r="4.2" fill="#c678dd" stroke="#7d3fa3" stroke-width="1.1"/>
+</svg>
