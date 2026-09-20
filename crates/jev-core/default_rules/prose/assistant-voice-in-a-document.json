@@ -1,0 +1,27 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "assistant-voice-in-a-document",
+      "title": "An assistant's voice left in a document",
+      "text": "`As an AI`, `I hope this helps`, `I'd be happy to`, `Let me know if you need`: the frame of a chat answer, pasted into a document that is not a chat. It addresses one reader who asked, in a file read by whoever arrives next. Delete the frame and keep the answer. Counts the document's own voice only: a guide that quotes the phrasing in order to forbid it, or a transcript shown as sample output, is not a hit.",
+      "severity": "warning",
+      "applies_to": [
+        "**/*.md"
+      ],
+      "inspection": {
+        "kind": "regex",
+        "pattern": "(?mi)^[ \\t>*-]{0,4}(?:as an ai\\b|as a language model\\b|i hope (?:this|that) helps|hope (?:this|that) helps|i(?:'|\\u2019)d be happy to|great question|let me know if you (?:need|have|want)|certainly[!,. ]|sure[!,. ])"
+      },
+      "judgement": {
+        "question": "Does this line open with a chat answer's frame, in a document that is not a chat?",
+        "criteria": {
+          "true": "the line opens as a model answering one question (`as an AI`, `I hope this helps`, `I'd be happy to`, `let me know if you need`, `Certainly!`) inside a document",
+          "false": "the line quotes the phrasing in order to forbid it, shows it as sample model output or a transcript, is ordinary human support prose, or is a code span or an identifier"
+        },
+        "min_probability": 0.9
+      },
+      "verb_hint": "docs"
+    }
+  ]
+}
