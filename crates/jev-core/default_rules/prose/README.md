@@ -42,7 +42,7 @@ returns `usage` and no cost field, so this is derived from tokens rather than re
 | file | floor | clears the non-violation band by | clears the violation band by | runs |
 |---|---|---|---|---|
 | `promotional-vocabulary.json` | `0.87` | 0.01 | 0.02 | 60 |
-| `lists-end-in-etc.json` | `0.25` | 0.21 | 0.20 | 66 |
+| `lists-end-in-etc.json` | `0.25` | 0.21 | 0.20 | 63 |
 | `appeals-to-the-obvious.json` | `0.75` | 0.16 | 0.17 | 12 |
 | `assistant-voice-in-a-document.json` | `0.50` | 0.41 | 0.42 | 6 |
 
@@ -67,11 +67,13 @@ candidate counts are the finders' output over the 91 documents.
 | non-parallel lists | 26 over 13 documents for the closest expressible shape | A property of a whole list, not of a line, so the classifier cannot decide it from a line and a file head. |
 
 Four words left the vocabulary in `promotional-vocabulary.json` for cause, each with a measured
-candidate set: `robust` (28 candidates, 24 of them a named method, `Robust z-score`, `robust
-baselines`, or a comparison against a named alternative), `unlock` (26, of which 24 are a
-token-vesting event and 2 a password-manager session), `leverage` (9, 7 of them `no leverage, no
-margin` in a trading document), and the bare word `simply` (28, of which 26 do factual work:
-`simply the minimum of`, `simply prefixed at the start`). The `simply <verb>` branch stays,
+candidate set. `robust`: 31 candidates over 16 documents, of which 21 name a method (`Robust
+z-score`, `robust baselines`) or compare against a named alternative (`More robust than relying on
+PM2's internal variables`), 7 are another project's text, and 3 are the author's own support for a
+claim with nothing behind it. `unlock`: 26, of which 24 are a token-vesting event and 2 a
+password-manager session. `leverage`: 14, 12 of them `no leverage, no margin` in trading documents
+or another project's guide. The bare word `simply`: 31, of which the ones read by hand do factual
+work (`simply the minimum of`, `simply prefixed at the start`). The `simply <verb>` branch stays,
 because its two measured candidates are both violations.
 
 ## Soft spots
