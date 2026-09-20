@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>jev-lsp — rules on the line</title>
-<meta name="description" content="jev-lsp is an LSP that runs your repo’s Jev rules as per-line diagnostics. Jev is a classifier, not a chat model — so local and cheap models can steer code without token maxxing.">
+<title>jev-lsp — line checks from repo rules</title>
+<meta name="description" content="jev-lsp marks bad lines in your editor from small rules in your repo. On save you get normal diagnostics — pass/fail plus confidence — not a chat essay.">
 <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -33,17 +33,17 @@
   <div class="hero-grid-bg" aria-hidden="true"></div>
   <div class="shell hero-layout">
     <div class="hero-copy">
-      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Language server · classifier</p>
-      <h1>Steer code with rules, not with token maxxing.</h1>
-      <p class="lead"><strong>Jev is a classifier, not a chat model:</strong> one typed question about one line → a value and a probability, never prose. <strong>jev-lsp</strong> runs repo rules as ordinary LSP diagnostics, code actions, and code lens.</p>
+      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Editor checks · from your rules</p>
+      <h1>Flag bad lines with rules — not with chat essays.</h1>
+      <p class="lead"><strong>What it does:</strong> you keep small rules in the repo. On save, <strong>jev-lsp</strong> marks matching lines in your editor like a normal error — with a clear answer (e.g. fail) and a confidence score. It is <strong>not</strong> a chatbot reviewing the whole file.</p>
       <div class="hero-actions">
         <a class="btn btn-primary" href="https://github.com/makefunstuff/jev-lsp">GitHub</a>
         <a class="btn btn-ghost" href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/TUTORIAL.md">Tutorial</a>
       </div>
       <ul class="fact-strip" aria-label="Product facts">
-        <li><strong>1 line</strong> → 1 value + p</li>
-        <li><strong>LSP</strong> diagnostics</li>
-        <li><strong>local / cheap</strong> models</li>
+        <li><strong>One line</strong> at a time</li>
+        <li><strong>Normal</strong> editor warnings</li>
+        <li><strong>Cheap</strong> / local models</li>
       </ul>
     </div>
 
@@ -100,9 +100,9 @@
 <section id="see" class="sec sec-machine">
   <div class="shell">
     <header class="sec-head">
-      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Surfaces</p>
-      <h2>Findings on the line — same surfaces your client already has</h2>
-      <p class="sec-lead">On save, matching lines become diagnostics a harness or editor already understands. No custom <code>jev/…</code> methods.</p>
+      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>In your tools</p>
+      <h2>Warnings show up where you already look</h2>
+      <p class="sec-lead">On save, a matching line becomes a normal editor or agent diagnostic — the same kind you already fix. No special <code>jev/…</code> API to learn.</p>
     </header>
 
     <figure class="demo-frame">
@@ -137,7 +137,7 @@
           <div class="term-line"><span class="prompt">$</span> agent fix --from-diagnostics</div>
         </div>
       </div>
-      <figcaption>Harness write → jev finding on the generated line → fix. Ordinary diagnostic.</figcaption>
+      <figcaption>Agent writes code → jev flags the bad line → you (or the agent) fix it. Same diagnostic channel as everything else.</figcaption>
     </figure>
   </div>
 </section>
@@ -146,12 +146,12 @@
 <section id="not-chat" class="sec">
   <div class="shell split">
     <div class="split-copy">
-      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Model shape</p>
-      <h2>Classifier, not chat</h2>
+      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>How it thinks</p>
+      <h2>A yes/no on one line — not a chat dump</h2>
       <ul class="plain">
-        <li><strong>One question → one answer</strong> — pass/fail or typed value + probability floor.</li>
-        <li><strong>Rules in the repo</strong> — <code>.jev/rules/*.json</code>, versioned like code.</li>
-        <li><strong>Semi-deterministic</strong> — pattern exact; judgement must clear the floor before publish.</li>
+        <li><strong>One question → one answer</strong> — pass/fail (or a short typed value) plus how confident it is.</li>
+        <li><strong>Rules live in the repo</strong> — <code>.jev/rules/*.json</code>, reviewed and versioned like code.</li>
+        <li><strong>Only confident hits count</strong> — the line must match a pattern, and the score must clear your floor.</li>
       </ul>
     </div>
     <div class="compare-stack">
@@ -180,14 +180,14 @@
   <div class="shell loop-layout">
     <div>
       <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Workflow</p>
-      <h2>The loop</h2>
+      <h2>How you use it</h2>
       <ol class="loop-steps">
-        <li><span class="step-n">01</span><div><strong>Spec</strong> — what the code must do.</div></li>
-        <li><span class="step-n">02</span><div><strong>Rules</strong> — <code>.jev/rules/*.json</code> (words + pattern for candidate lines).</div></li>
-        <li><span class="step-n">03</span><div><strong>Steer</strong> — jev-lsp on save, human or harness.</div></li>
-        <li><span class="step-n">04</span><div><strong>Stay on track</strong> — ordinary diagnostics.</div></li>
+        <li><span class="step-n">01</span><div><strong>Say what good looks like</strong> — the behavior you care about.</div></li>
+        <li><span class="step-n">02</span><div><strong>Add a rule</strong> — <code>.jev/rules/*.json</code> (a question + which lines to check).</div></li>
+        <li><span class="step-n">03</span><div><strong>Save and steer</strong> — jev-lsp flags hits for you or your coding agent.</div></li>
+        <li><span class="step-n">04</span><div><strong>Fix as usual</strong> — treat findings like any other diagnostic.</div></li>
       </ol>
-      <p class="muted-line">Full schema → <a href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/GUIDE.md">docs/GUIDE.md</a>.</p>
+      <p class="muted-line">Full rule schema → <a href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/GUIDE.md">docs/GUIDE.md</a>.</p>
     </div>
     <div class="win win-rule">
       <div class="win-chrome">
@@ -209,9 +209,9 @@
 <section id="cost" class="sec">
   <div class="shell">
     <header class="sec-head">
-      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Economics</p>
-      <h2>Why local / cheap models work here</h2>
-      <p class="sec-lead">Rules carry conventions; the model answers about one candidate line. No matching pattern → <strong>no model call</strong>.</p>
+      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Cost</p>
+      <h2>Why this stays cheap</h2>
+      <p class="sec-lead">The rule already narrows the work. The model only judges <strong>one candidate line</strong>. If nothing matches the pattern → <strong>no model call</strong>.</p>
     </header>
 
     <div class="cost-card">
@@ -243,9 +243,9 @@
           </tbody>
         </table>
       </div>
-      <p class="cost-cap">decide <code>jev-1.13</code> vs chat review <code>gemini-2.5-flash-lite</code>. PoC: accuracy from steering, not token maxxing.</p>
+      <p class="cost-cap">Measured with decide <code>jev-1.13</code> vs a chat review on <code>gemini-2.5-flash-lite</code>. Point of the PoC: steer with rules, don’t burn tokens on whole-file chat.</p>
     </div>
-    <p class="pull">Accuracy from steering, not from burning tokens.</p>
+    <p class="pull">You get accuracy from tight rules — not from dumping the whole file into chat.</p>
   </div>
 </section>
 
@@ -253,9 +253,9 @@
 <section id="clients" class="sec sec-clients">
   <div class="shell">
     <header class="sec-head">
-      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Clients</p>
-      <h2>Same findings in a harness, Neovim, or VS Code</h2>
-      <p class="sec-lead">No custom methods. Neovim is primary (<code>nvim/</code>). Anything that starts a language server works — harnesses included. VS Code / Cursor via <code>editors/cursor/</code>.</p>
+      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Editors</p>
+      <h2>Same warnings in a harness, Neovim, or VS Code</h2>
+      <p class="sec-lead">Works through the normal language-server channel. Neovim is the main client (<code>nvim/</code>). Agents and harnesses work too. VS Code / Cursor: <code>editors/cursor/</code>.</p>
       <p class="chips" aria-label="LSP surfaces">
         <span class="chip">diagnostics</span>
         <span class="chip">code actions</span>
@@ -391,12 +391,12 @@
   <div class="shell start-layout">
     <div class="start-copy">
       <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Install</p>
-      <h2>Start</h2>
-      <p class="muted-line">Rust ≥1.75; decision-tier endpoint + key (hosted Jev default).</p>
+      <h2>Try it</h2>
+      <p class="muted-line">Needs Rust ≥1.75 and an API key for the hosted Jev endpoint (or a local model — see docs).</p>
       <ol class="next-steps">
-        <li>Plugin: <code>ln -s /path/to/jev-lsp/nvim ~/.local/share/nvim/site/pack/jev/start/jev</code> then <code>require('jev').setup({})</code></li>
-        <li>Export <code>TYPESAFE_API_KEY</code> (or local decide — <a href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/MODEL.md">MODEL.md</a>).</li>
-        <li>Add <code>.jev/rules/*.json</code>, open a file, save → finding or <code>no_rules</code>.</li>
+        <li>Install the Neovim plugin: <code>ln -s /path/to/jev-lsp/nvim ~/.local/share/nvim/site/pack/jev/start/jev</code> then <code>require('jev').setup({})</code></li>
+        <li>Set <code>TYPESAFE_API_KEY</code> (or run locally — <a href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/MODEL.md">MODEL.md</a>).</li>
+        <li>Add a rule under <code>.jev/rules/</code>, open a file, save — you should see a finding (or <code>no_rules</code>).</li>
       </ol>
       <div class="hero-actions">
         <a class="btn btn-primary" href="https://github.com/makefunstuff/jev-lsp">GitHub</a>
@@ -429,7 +429,7 @@
 
 <footer class="site-foot">
   <div class="shell">
-    <p>jev-lsp · MIT · early PoC (APIs may change). <a href="https://github.com/makefunstuff/jev-lsp">Source on GitHub</a>.</p>
+    <p>jev-lsp · MIT · early prototype (APIs may change). <a href="https://github.com/makefunstuff/jev-lsp">Source on GitHub</a>.</p>
   </div>
 </footer>
 
