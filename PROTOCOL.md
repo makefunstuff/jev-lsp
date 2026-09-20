@@ -489,7 +489,9 @@ Ordered, all mandatory, all evaluated before any model call:
 1. **Dedupe** — `sha256(model_tier, prompt_template_version, context_hash, verb)`; hit
    returns the cached conclusion.
 2. **Debounce** — diagnostics: `on_save` or `on_idle_ms` (default 1500), never per
-   keystroke.
+   keystroke. A **pull** is a client asking about a document and runs the pass for it, once
+   per document content, when nothing has been computed: a client that never saves has no
+   other trigger, and an empty answer would be indistinguishable from a clean file.
 3. **Budgets** — `max_calls_per_min`, `max_calls_per_hour`, `max_tokens_per_session`.
    Exhaustion is not an error: the server returns `state = "over_budget"` actions and a
    single `window/showMessage` on first exhaustion, then stays silent.
@@ -852,7 +854,7 @@ repository's rules document (§9), and no environment variables beyond the model
               "max_decisions_per_min": 60,
               "max_tokens_per_session": 500000, "timeout_ms": 30000 },
   "triggers": { "diagnostics": "save", "idle_ms": 1500, "severity_floor": "information",
-                "rules": { "on_save": true, "on_idle": true, "idle_ms": 1500 } },
+                "rules": { "on_save": true, "on_idle": true, "on_pull": true, "idle_ms": 1500 } },
   "ambient": { "code_lens": true, "inlay_hints": false, "diagnostics": true },
   "auto_apply": { "fix": false, "fixAll": false },
   "languages": {                    // docs/LANGUAGE.md §7 — may narrow, never disable

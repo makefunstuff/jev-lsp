@@ -95,7 +95,7 @@ settings = {
   budget = { max_calls_per_min = 6, max_calls_per_hour = 120,
              max_tokens_per_session = 500000 },
   triggers = { diagnostics = 'save',     -- 'save' | 'idle' | 'off'  (idle_ms = 1500)
-               rules = { on_save = true, on_idle = true, idle_ms = 1500 } },
+               rules = { on_save = true, on_idle = true, on_pull = true, idle_ms = 1500 } },
   ambient  = { diagnostics = true },
   rules    = { enabled = true, defaults = true, max_candidates_per_rule = 8, max_files_per_pass = 8 },
   noise    = { max_visible_findings = 5 },
@@ -372,7 +372,7 @@ It shares `jev-core` with the server and no state with it. Useful for scripts, a
 | `:Jev inspect` reports `unchanged` and no findings | git reports the file untouched since HEAD, so the pass skipped it | That is the point of the check; `--force` inspects it anyway |
 | The ambient pass fails with `model_error` / `contract_error` | The *decision* tier did not answer, or answered something unreadable | `:Jev log`, then check `models.decide` and `TYPESAFE_API_KEY` (`JEV_DECIDE_BASE_URL` does not come from `JEV_BASE_URL`) |
 | `:Jev review` returns `findings: []`, no sign | Either the file is genuinely clean, or it was skipped | `:Jev log`: a skip says *"the file looks binary"*, *"N bytes exceeds the M byte analysis limit"*, or *"path matches the ignore pattern …"* |
-| `:Jev inspect` finds it, but the sign column never shows it | The pass runs on save and on `jev.inspect`; a client that never sends `didSave` never runs one, and an empty diagnostics pull looks exactly like a clean file | Save the buffer (or send `didSave`); `docs/UX.md` §1.1 |
+| `:Jev inspect` finds it, but the sign column never shows it | A pull runs the pass itself now, so the two agree — unless the rule file changed since the pass, or the document is one git reports as unchanged and the pass skipped | `:Jev recompute` after a rule edit; `:Jev inspect --force` to re-run a document git calls unchanged |
 | `not_implemented` for a command | The server does not serve that name | `:Jev` completion lists the 18 subcommands; the server advertises its 15 commands in the `initialize` result (PROTOCOL §6) |
 | `:Jev status` shows an endpoint you did not configure, then the right one moments later | `config_ready` is false: the client's configuration pull has not been merged yet, and status reports the built-in defaults rather than waiting for it | Nothing to do; re-run `:Jev status` (model work does wait for the pull, so it never runs against the defaults) |
 | `jev: settings applied — reason … · review …` in the log shows an endpoint you did not configure | The environment is overriding your client settings | Unset `JEV_BASE_URL` / `JEV_MODEL` / `JEV_REVIEW_MODEL`, or set them to what you want |

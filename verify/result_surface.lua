@@ -400,10 +400,23 @@ do
         label .. ' refuses by name, at warn level',
         said == '' and 'said nothing' or said
       )
+      -- The client pulls diagnostics and asks for lenses on its own when a server invites it, and
+      -- a pass finishing in the background does exactly that — traffic this command did not cause.
+      -- The only way a command asks the server anything is `workspace/executeCommand`, which is
+      -- what the guard exists to stop, so that is what is counted.
+      local function asked(from)
+        local n = 0
+        for i = from + 1, #sent do
+          if sent[i].method == 'workspace/executeCommand' then
+            n = n + 1
+          end
+        end
+        return n
+      end
       check(
-        #sent == before,
+        asked(before) == 0,
         label .. ' sends nothing to the server',
-        ('%d request(s): %s'):format(#sent - before, vim.inspect(sent[#sent] and sent[#sent].method))
+        ('%d command(s): %s'):format(asked(before), vim.inspect(sent[#sent] and sent[#sent].method))
       )
       check(not prompted, label .. ' does not prompt for free text it cannot use')
       check(window_count() == wins, label .. ' leaves the window count alone', window_count())

@@ -611,6 +611,63 @@ def main():
                 f"and jev.status counts exactly that one problem ({status.get('rules')})",
             )
 
+        print("[rules] 13. a pull with no pass behind it runs one, instead of answering clean")
+        # A client that never saves has no pass behind it: an editor whose edits arrive as
+        # `didChange`, a harness that writes the file itself. An empty answer to that pull is
+        # indistinguishable from a clean file — the one thing a checker must not be — so the pull
+        # starts the rules pass. No `didSave` is sent here, which is the whole point.
+        script({})  # the stub's defaults: every question answered `true`, at 0.9
+        write_rules(2, unwrap_rule())
+        later = FIXTURE + "\n// one more line, so the content hash moves\n"
+        with open(fixture, "w") as fh:
+            fh.write(later)
+        server.notify(
+            "textDocument/didChange",
+            {
+                "textDocument": {"uri": uri, "version": 3},
+                "contentChanges": [{"text": later}],
+            },
+        )
+        before = len(decisions())
+        # The pull starts the pass and answers from what is cached. The findings arrive with the
+        # refresh that pass sends, the same way they do after a save — so the second pull below is
+        # the one that carries them.
+        server.request("textDocument/diagnostic", {"textDocument": {"uri": uri}}, timeout=30)
+        deadline = time.time() + 20
+        items = []
+        refreshes = 0
+        while time.time() < deadline:
+            seen = len(server.saw_request("workspace/diagnostic/refresh"))
+            if seen > refreshes:
+                refreshes = seen
+                report = server.request(
+                    "textDocument/diagnostic", {"textDocument": {"uri": uri}}, timeout=30
+                ).get("result", {})
+                items = report.get("items") or (
+                    report.get("fullDocumentDiagnosticReport", {}) or {}
+                ).get("items", [])
+                if items:
+                    break
+            time.sleep(0.05)
+        asked = len(decisions())
+        check(asked == before + 1, f"the pull ran exactly one pass ({before} -> {asked})")
+        check(len(items) == 1, f"and its finding reaches the pull (got {len(items)})")
+        if items:
+            check(
+                all(i.get("source") == "jev" for i in items),
+                "the diagnostic namespace stays jev (PROTOCOL §9)",
+            )
+            check(
+                all((i.get("data") or {}).get("source") == "rules" for i in items),
+                f"and data.source names the pass that wrote them "
+                f"({[(i.get('data') or {}).get('source') for i in items]})",
+            )
+        server.request("textDocument/diagnostic", {"textDocument": {"uri": uri}}, timeout=30)
+        check(
+            len(decisions()) == asked,
+            f"a second pull of the same content costs nothing ({asked} -> {len(decisions())})",
+        )
+
         server.request("shutdown", None)
         server.notify("exit", None)
         return 0 if all(ok for ok, _ in RESULTS) else 1

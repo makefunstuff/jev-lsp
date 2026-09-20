@@ -108,10 +108,13 @@ question can only be read by posting the request directly or with the floor at `
 call from a shell — while `:Jev inspect` is this plugin's convenience over it, like every other
 row of §1.
 
-**A pull with no pass behind it answers clean.** The pass runs on save and on `jev.inspect`; a
-client that never sends `didSave` sees nothing, and that empty answer looks exactly like a clean
-file. Measured in one fixture: `diagnostics` alone → `OK`, then `jev.inspect` and `diagnostics`
-→ the finding. Save the buffer (or run `:Jev inspect`) before concluding that a rule is broken.
+**A pull runs a pass when nothing has been computed for the document.** A client that never
+saves — an editor whose edits arrive as `didChange`, a harness that writes files itself — has no
+pass behind it, so the pull is where the pass runs. Measured 2026-09-20: `diagnostics` alone
+returned the finding that used to require `jev.inspect` first, and a second pull of the same
+content costs nothing because the cache answers it. Two things can still look empty: a document
+git reports as unchanged is skipped by the pass (`:Jev inspect --force` re-runs it regardless),
+and a rule edited since the pass needs `:Jev recompute`, because nothing watches `.jev/rules/`.
 
 **A rule edit does not repaint what is already on screen.** Diagnose the surprise in the order
 it happens: the findings every surface reads are one shared display slot, keyed by content

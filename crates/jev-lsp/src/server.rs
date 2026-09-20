@@ -396,6 +396,34 @@ impl JevServer {
         });
     }
 
+    /// Run the rules pass for a document a client asked about.
+    ///
+    /// The spawned triggers run a pass *after* something happened — a save, an idle change, an
+    /// explicit command. This runs one *because a client asked*, which is the only trigger a
+    /// client that never saves has: an editor whose edits arrive as `didChange` is a complete
+    /// session, and a harness that writes files itself sends nothing at all.
+    ///
+    /// **Spawned, never awaited.** A pass issues server→client requests of its own — the
+    /// configuration pull, the refresh that brings the client back — and a
+    /// `textDocument/diagnostic` request is one a client may cancel (nvim times it out). An
+    /// awaited pass would drop the receiver of any request still pending, and the answer
+    /// arriving afterwards panics the transport (`tower-lsp` `receiver already dropped`), taking
+    /// the whole server with it. Nothing in a handler awaits a pass, for that reason; this
+    /// trigger is no different. The pull answers from the cache, and the pass's own refresh is
+    /// what brings the client back for the findings.
+    fn spawn_rules_for_pull(&self, uri: &str, hash: &str) {
+        if !self.state.config().rules.enabled {
+            return;
+        }
+        // One pass per content, whatever it concludes. A pass that skips caches nothing — there
+        // is no conclusion to cache — so without the mark this trigger and the refresh it sends
+        // would keep answering each other.
+        if !self.state.mark_pull_pass(uri, hash) {
+            return;
+        }
+        self.spawn_pass(uri.to_string(), None, Pass::Rules);
+    }
+
     /// The declarations to hang a lens or a hint on.
     ///
     /// The client's, when it sent them for this exact version — it has the parser and this side
@@ -1063,6 +1091,17 @@ impl LanguageServer for JevServer {
             Some(d.language_id.as_str()),
         );
         self.state.put_doc(doc);
+
+        // A document that has just been opened has no pass behind it, and a client may ask about
+        // it — pull its diagnostics, decorate it — before anyone saves. The idle trigger is the
+        // "the editor has settled, look around" moment, and it already coalesces: ten files
+        // opened at once become one pass, bounded by `rules.max_files_per_pass`.
+        let cfg = self.state.config();
+        if cfg.triggers.rules.on_idle || cfg.triggers.diagnostics == "idle" {
+            let debounce =
+                std::time::Duration::from_millis(cfg.triggers.rules.idle_ms.min(cfg.triggers.idle_ms.max(1)));
+            self.spawn_idle_ambient(Some(debounce));
+        }
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -1362,6 +1401,14 @@ impl LanguageServer for JevServer {
         let Some(doc) = self.state.doc(&uri) else {
             return Ok(empty);
         };
+        // A pull is a question about the document as it is *now*. Answering it from a cache
+        // nothing has filled tells the client there is nothing to see, and an empty answer is
+        // indistinguishable from a clean file — the one thing a checker must not be. When no
+        // pass has answered for this content, one is started here; the client hears about its
+        // findings through the refresh that pass sends, exactly as it does after a save.
+        if self.engine.cached(&doc).is_none() {
+            self.spawn_rules_for_pull(&uri, &doc.hash);
+        }
         let (findings, _, source) = self.findings_for(&doc);
         let items = findings
             .iter()
@@ -2063,6 +2110,10 @@ impl JevServer {
                         "rules": {
                             "on_save": cfg.triggers.rules.on_save,
                             "on_idle": cfg.triggers.rules.on_idle,
+                            // Not a setting: a pull is a client asking about a document, and a
+                            // checker that answers "nothing to see" without having looked is the
+                            // failure mode this reports away.
+                            "on_pull": true,
                             "idle_ms": cfg.triggers.rules.idle_ms,
                         },
                     },
@@ -2070,6 +2121,7 @@ impl JevServer {
             }
             "jev.recompute" => {
                 self.state.cache.clear();
+                self.state.forget_pull_passes();
                 let uris: Vec<String> = self.state.all_docs().iter().map(|d| d.uri.clone()).collect();
                 for uri in uris {
                     self.state.bump_generation(&uri);

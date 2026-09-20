@@ -183,11 +183,11 @@ the code tab focused again and otherwise answers `Jev: open a file first.` The c
 no file never refuse for that reason, which is what keeps `status` and `session` usable as the way
 to check that anything is working at all: with an answer on screen, both still answer.
 
-**Save first.** This is the trap that costs the most time. A pull with no pass behind it answers
-*clean*: the rules pass runs on save and on `jev.inspect`, so a client that never sends
-`didSave` sees an empty answer that is indistinguishable from a clean file. If a rule looks
-broken, run **Jev: inspect this file** — it forces the pass regardless of what git reports, and
-says what it found and what it skipped. There is also no watcher on `.jev/rules/`: after editing
+**Nothing has to be saved first.** A pull runs the rules pass itself when nothing has been
+computed for the document, which is what a client whose edits arrive as `didChange` — or one that
+writes files itself — depends on: there is no `didSave` coming. If a rule looks broken, run
+**Jev: inspect this file** anyway — it forces the pass and says what it found and what it skipped.
+There is also no watcher on `.jev/rules/`: after editing
 a rule, run **Jev: recompute every open file**.
 
 ## 6. Traps, each one measured

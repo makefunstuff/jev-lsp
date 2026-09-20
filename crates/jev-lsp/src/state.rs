@@ -122,6 +122,14 @@ pub struct AppState {
     analysis: Mutex<HashMap<String, AnalysisSlot>>,
     /// The same, for the rules pass, which has its own concurrency and its own trigger.
     rules_slots: Mutex<HashMap<String, RulesSlot>>,
+    /// The content a pull has already started a rules pass for, by document.
+    ///
+    /// A pass that *skips* — an unchanged file, a path no rule claims — caches nothing, because
+    /// there is no conclusion to cache. Without this mark a pull would start another pass for the
+    /// same content, whose refresh brings the client back for another, and so on: measured at
+    /// 136,292 pulls in 30 seconds before it was added. Marked per content, so an edit (a new
+    /// hash) is asked about again.
+    pull_passes: Mutex<HashMap<String, String>>,
     /// Rule sets that have been read, by root. The hash is what makes the entry reusable: the
     /// files are re-read on every pass (an edit must be noticed) and the cached set answers when
     /// nothing changed.
@@ -191,6 +199,7 @@ impl AppState {
             generations: Mutex::new(HashMap::new()),
             analysis: Mutex::new(HashMap::new()),
             rules_slots: Mutex::new(HashMap::new()),
+            pull_passes: Mutex::new(HashMap::new()),
             rule_sets: Mutex::new(HashMap::new()),
             rules_stats: Mutex::new(RulesStats::default()),
             changed: Mutex::new(None),
@@ -454,6 +463,21 @@ impl AppState {
     /// prediction is checked once.
     pub fn take_prediction(&self, uri: &str) -> Option<String> {
         self.predictions.lock().remove(uri)
+    }
+
+    /// Record that a pull started a pass for this content. False when it already had.
+    pub fn mark_pull_pass(&self, uri: &str, hash: &str) -> bool {
+        let mut marks = self.pull_passes.lock();
+        if marks.get(uri).is_some_and(|seen| seen == hash) {
+            return false;
+        }
+        marks.insert(uri.to_string(), hash.to_string());
+        true
+    }
+
+    /// Forget them, for `jev.recompute`: the point of a recompute is to ask again.
+    pub fn forget_pull_passes(&self) {
+        self.pull_passes.lock().clear();
     }
 
     /// Release the slot. True means a request arrived while we ran and wants another pass.
