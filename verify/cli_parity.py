@@ -240,7 +240,12 @@ def main():
         # claims must be reported as *skipped* by both front ends, with the same words. Asserting
         # only that both are non-empty would have passed while the CLI reported nothing at all.
         print("[parity] inspect, nothing to run")
-        notes = os.path.join(workdir, "notes.md")
+        # `.zzz`, deliberately: this check is about a file *no* rule claims, and since the
+        # shipped defaults exist (`rules.defaults`, PROTOCOL §9) a `.md` fixture is claimed by
+        # the prose rules shipped with the binary — a harness that cannot know their content
+        # cannot use a real document type here. An extension nothing ships a rule for keeps the
+        # check's meaning: both front ends must report the same skip, word for word.
+        notes = os.path.join(workdir, "notes.zzz")
         with open(notes, "w") as fh:
             fh.write("# notes\n")
         notes_uri = "file://" + notes
