@@ -15,12 +15,17 @@
 --   2. a second report opened over the first gives the *code* buffer back, not the dead one
 --      underneath it, and `q` wipes the artifact it dismisses;
 --   3. `:Jev status` — a one-line answer is a message, and opens no buffer and no window;
---   4. `:Jev explain` — a streamed answer opens its surface in the same window *before* the
+--   4. a generated buffer is not a document: with the report in the window the user is in,
+--      `:Jev inspect [--force]`, `:Jev explain`, `:Jev review`, `:Jev plan`, `:Jev followup` and
+--      `:Jev where` refuse by name and send *nothing* to the server — while `:Jev ask` still
+--      asks, because a question about nothing is a question it answers, and carries no document
+--      rather than the report's name as one;
+--   5. `:Jev explain` — a streamed answer opens its surface in the same window *before* the
 --      answer exists, and the finished artifact lands in that same buffer;
---   5. `surfaces.layout = 'float'` — an opt-in floating window: the code stays visible behind
+--   6. `surfaces.layout = 'float'` — an opt-in floating window: the code stays visible behind
 --      it, and dismissing closes it;
---   6. `surfaces.layout = 'split'` — the old shape, still available on request;
---   7. the same as 1 with `'hidden'` off and the buffer modified: the reason the placement asks
+--   7. `surfaces.layout = 'split'` — the old shape, still available on request;
+--   8. the same as 1 with `'hidden'` off and the buffer modified: the reason the placement asks
 --      with `:hide buffer` instead of `nvim_win_set_buf` — and the unsaved buffer survives it.
 --
 -- Prints ok/FAIL/SKIP per check. Exit is nonzero only on FAIL; exit 2 when JEV_LSP_BIN is
@@ -308,7 +313,145 @@ do
   )
 end
 
--- 4. A streamed answer ------------------------------------------------------------------------
+-- 4. A generated buffer is not a document ------------------------------------------------------
+
+-- The report is in the window the user is sitting in, so running the same command again is one
+-- keystroke away — and the buffer's name is `jev://inspect/inspect`, not a path. Every command
+-- that sends a document has to refuse it by name, before it prompts for free text, and without
+-- reaching the server with a URI it would answer `bad_arguments` about.
+--
+-- `:Jev ask` is the documented exception — a question about nothing is a question it answers
+-- ("with none the question stands alone") — so what is asserted there is the difference: the
+-- request still goes out, and it carries no document rather than the report's name as one.
+do
+  local wins = window_count()
+  local reported = nil
+  dispatch_watching_windows(function()
+    pcall(vim.cmd, 'Jev inspect')
+  end, function()
+    reported = artifact('inspect')
+    return reported ~= nil
+  end, 15000)
+
+  if reported == nil then
+    skip('a generated buffer is not a document', 'no report was open to run the commands from')
+  else
+    local text = artifact_text(reported)
+    local client = vim.lsp.get_clients({ name = 'jev' })[1]
+
+    -- Every request the commands below initiate, observed at the client boundary rather than
+    -- assumed from the absence of a failure. `nvim_ui_test.lua` stubs the same method. The
+    -- `ask` request is recorded and not forwarded: this section is about what goes out, and a
+    -- model answer would open a buffer the next section would have to tidy up.
+    local sent = {}
+    local asked = nil
+    local real_request = client.request
+    client.request = function(self, method, params, ...)
+      sent[#sent + 1] = { method = method, params = params }
+      if type(params) == 'table' and params.command == 'jev.ask' then
+        asked = params
+        return 1
+      end
+      return real_request(self, method, params, ...)
+    end
+
+    --- Run one command with the report on screen and say what it did.
+    local function refusal(label, dispatch)
+      local messages, levels = {}, {}
+      local real_notify = vim.notify
+      vim.notify = function(msg, level, ...)
+        messages[#messages + 1] = tostring(msg)
+        levels[#levels + 1] = level
+        return real_notify(msg, level, ...)
+      end
+      local prompted = false
+      local real_input = vim.ui.input
+      vim.ui.input = function(_, cb)
+        -- If a command reaches its prompt, the guard is after it: answer, so the defect shows
+        -- itself as a request that goes out rather than as a harness that hangs.
+        prompted = true
+        if cb then
+          cb('harness')
+        end
+      end
+      local before = #sent
+      local dispatched, err = pcall(dispatch)
+      vim.wait(300, function()
+        return false
+      end, 50)
+      vim.ui.input = real_input
+      vim.notify = real_notify
+
+      local said = table.concat(messages, ' ')
+      check(dispatched, label .. ' dispatches without raising', err)
+      check(
+        said:find('needs a file buffer', 1, true) ~= nil
+          and said:find('generated buffer (jev://inspect/inspect)', 1, true) ~= nil
+          and levels[1] == vim.log.levels.WARN,
+        label .. ' refuses by name, at warn level',
+        said == '' and 'said nothing' or said
+      )
+      check(
+        #sent == before,
+        label .. ' sends nothing to the server',
+        ('%d request(s): %s'):format(#sent - before, vim.inspect(sent[#sent] and sent[#sent].method))
+      )
+      check(not prompted, label .. ' does not prompt for free text it cannot use')
+      check(window_count() == wins, label .. ' leaves the window count alone', window_count())
+      check(
+        artifact('inspect') == reported and artifact_text(reported) == text,
+        label .. ' leaves the report as it was'
+      )
+    end
+
+    refusal(':Jev inspect', function()
+      vim.cmd('Jev inspect')
+    end)
+    refusal(':Jev inspect --force', function()
+      vim.cmd('Jev inspect --force')
+    end)
+    refusal(':Jev explain', function()
+      vim.cmd('Jev explain')
+    end)
+    refusal(':Jev review', function()
+      vim.cmd('Jev review')
+    end)
+    refusal(':Jev plan', function()
+      vim.cmd('Jev plan')
+    end)
+    refusal(':Jev followup', function()
+      vim.cmd('Jev followup')
+    end)
+    refusal(':Jev where', function()
+      vim.cmd('Jev where')
+    end)
+
+    local before = #sent
+    pcall(vim.cmd, 'Jev ask what does the loader do')
+    local left = vim.wait(2000, function()
+      return asked ~= nil
+    end, 25)
+    check(
+      left and #sent > before and asked ~= nil,
+      ':Jev ask still asks: a question about nothing is a question it answers',
+      vim.inspect(sent[#sent] and sent[#sent].method)
+    )
+    check(
+      asked ~= nil and type(asked.arguments) == 'table' and asked.arguments[1].uri == nil,
+      'and it carries no document, rather than the report name as one',
+      asked == nil and 'nothing was sent' or vim.inspect(asked.arguments)
+    )
+    check(
+      artifact('inspect') == reported,
+      'and asking leaves the report where it was'
+    )
+
+    client.request = real_request
+    dismiss('a generated buffer is not a document', wins)
+  end
+end
+
+-- 5. A streamed answer ------------------------------------------------------------------------
 
 -- `jev.explain` asks for a stream: the surface exists before the answer does
 -- (`stream_open`), which is the other placement path. The finished artifact has to land in
@@ -376,7 +519,7 @@ do
   end
 end
 
--- 5. The opt-in layouts -----------------------------------------------------------------------
+-- 6. The opt-in layouts -----------------------------------------------------------------------
 
 -- `surfaces.layout` is read when a surface opens, so these flip it directly rather than
 -- calling `setup` again: a second `setup` would install a second `LspAttach` for the lenses and
@@ -443,7 +586,7 @@ do
   require('jev').opts.surfaces.layout = 'current'
 end
 
--- 6. An unsaved buffer ------------------------------------------------------------------------
+-- 7. An unsaved buffer ------------------------------------------------------------------------
 
 -- `'hidden'` off and a modified buffer is the one case where the swap has to be asked for:
 -- `nvim_win_set_buf` raises `E37` there and no report would appear at all, which is why the

@@ -557,6 +557,52 @@ function M.install_definitions()
   })
 end
 
+--- Why this buffer cannot be the document a command is about, or `nil` when it can.
+---
+--- A generated buffer has a name, and its name is not a path: `vim.uri_from_bufnr` turns
+--- `jev://inspect/inspect` into a URI the server has never heard of, and the answer comes back
+--- as `bad_arguments` about a file the user never opened. That used to take a deliberate `q` to
+--- reach; with the report in the window they were reading, running the same command again is
+--- one keystroke away — so every command that sends a document starts here. One predicate,
+--- applied where each command resolves its document, because the resolution is not in one
+--- place: `cursor_scope` for three of them, an inline `uri` for two, and the path alone for
+--- `inspect`.
+---
+--- `docs/LANGUAGE.md` §5 is the same rule from the other side: a non-file buffer is never
+--- attached, so `vim.lsp.get_clients({ bufnr })` already answers "is this a document" for the
+--- picker and the hints badge (`M.action`, `M.hints`), which refuse by name of their own.
+--- @param bufnr integer
+--- @return string?  a phrase naming what this buffer is, for the refusal
+local function not_a_document(bufnr)
+  local name = vim.api.nvim_buf_get_name(bufnr)
+  if vim.bo[bufnr].buftype ~= '' then
+    return name ~= '' and ('a generated buffer (%s)'):format(name) or 'a scratch buffer'
+  end
+  if name == '' then
+    return 'an unnamed buffer'
+  end
+  return nil
+end
+
+--- The file buffer a command is about, or `nil` after saying which buffer it refused.
+---
+--- A message rather than a request: the user asked about a file, and the honest answer is which
+--- buffer is in the way, not a protocol error about a URI they never typed.
+--- @param what string  the command, for the message
+--- @return integer? bufnr
+local function document_buffer(what)
+  local bufnr = vim.api.nvim_get_current_buf()
+  local why = not_a_document(bufnr)
+  if why ~= nil then
+    vim.notify(
+      ('jev: %s needs a file buffer, and this one is %s'):format(what, why),
+      vim.log.levels.WARN
+    )
+    return nil
+  end
+  return bufnr
+end
+
 --- The scope argument `jev.plan`, `jev.explain` and friends take (PROTOCOL §6): where the
 --- request is anchored.
 ---
@@ -642,7 +688,10 @@ function M.ask(question, opts)
   end
   local args = { question = question, web = opts.web == true }
   local bufnr = vim.api.nvim_get_current_buf()
-  if vim.api.nvim_buf_get_name(bufnr) ~= '' and vim.bo[bufnr].buftype == '' then
+  -- Silent when there is no document, and deliberately so: a question about nothing is a
+  -- question this command is documented to answer ("with none the question stands alone"), so
+  -- a generated buffer is not a refusal here — the scope is simply not there to send.
+  if not_a_document(bufnr) == nil then
     local scope = cursor_scope()
     args.uri = scope.uri
     args.line = scope.line
@@ -657,9 +706,13 @@ function M.ask(question, opts)
 end
 
 function M.explain(cb)
+  local bufnr = document_buffer('explain')
+  if bufnr == nil then
+    return
+  end
   local scope = cursor_scope()
   local provided = context.for_position(
-    vim.api.nvim_get_current_buf(),
+    bufnr,
     scope.line,
     vim.api.nvim_win_get_cursor(0)[2]
   )
@@ -822,8 +875,11 @@ end
 --- assembled the context differs — a grep here, the language servers there.
 --- @param question? string
 function M.where(question)
+  local bufnr = document_buffer('where')
+  if bufnr == nil then
+    return
+  end
   local function ask(text)
-    local bufnr = vim.api.nvim_get_current_buf()
     local line = vim.api.nvim_win_get_cursor(0)[1] - 1
     local arg = { uri = vim.uri_from_bufnr(bufnr), line = line, question = text }
     local range = treesitter_scope(bufnr, line)
@@ -959,7 +1015,10 @@ end
 ---
 --- @param question? string
 function M.followup(question)
-  local bufnr = vim.api.nvim_get_current_buf()
+  local bufnr = document_buffer('followup')
+  if bufnr == nil then
+    return
+  end
   local line = vim.api.nvim_win_get_cursor(0)[1] - 1
   local function ask(text)
     local arg = { uri = vim.uri_from_bufnr(bufnr), line = line, question = text }
@@ -1024,6 +1083,12 @@ end
 --- step-through plan buffer yet, so it arrives as a reported Result.
 --- @param goal? string
 function M.plan(goal)
+  -- Before the prompt, not after: a goal is free text the interface asks for once
+  -- (`docs/UX.md` §1), and asking for it when the command cannot run is a prompt that ends in
+  -- a refusal.
+  if document_buffer('plan') == nil then
+    return
+  end
   local function ask(text)
     -- `arguments` is an LSP array, not a map: the server reads `arguments.first()`, and a map
     -- is rejected in transport before the command runs.
@@ -1049,6 +1114,9 @@ end
 --- `:Jev review` — the cursor's file and line, the same argument shape as `jev.explain`.
 --- Findings come back in the Result and reach the buffer through pull diagnostics.
 function M.review()
+  if document_buffer('review') == nil then
+    return
+  end
   M.command('jev.review', { cursor_scope() })
 end
 
@@ -1113,11 +1181,11 @@ end
 --- not make a pass run.
 --- @param force? boolean
 function M.inspect(force)
-  local path = vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf())
-  if path == '' then
-    vim.notify('jev: inspect needs a file buffer to inspect', vim.log.levels.WARN)
+  local bufnr = document_buffer('inspect')
+  if bufnr == nil then
     return
   end
+  local path = vim.api.nvim_buf_get_name(bufnr)
   M.command('jev.inspect', { { path = path, force = force == true } }, function(err, result)
     if err ~= nil then
       vim.notify(
