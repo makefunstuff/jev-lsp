@@ -65,8 +65,10 @@ client:request('workspace/executeCommand', {
 end, buf)
 
 assert(vim.wait(10000, function() return got_response end, 50), 'no response to executeCommand')
--- The server writes progress before the response, so these have all arrived; wait anyway
--- rather than depend on autocmd dispatch timing.
+-- The `end` is not guaranteed to precede the response: `tower-lsp` writes notifications and
+-- responses through two arms of one round-robin `select` (`transport.rs`), so either order is
+-- reachable — the row in `lsp_client.py` measured both (PROTOCOL §3.5). Wait for the sequence
+-- rather than depend on either order, or on autocmd dispatch timing.
 vim.wait(1000, function() return #seen >= 3 end, 50)
 assert(not req_err, 'server returned an error: ' .. vim.inspect(req_err))
 
