@@ -255,9 +255,11 @@ jobs:
       # restored: one built from an earlier commit, and nothing at all on a cold cache. A verdict
       # about a stale binary is exactly the failure this repository's bar is against, so the binary
       # is built here, from this checkout, with the same command the build-and-test job runs.
-      # Measured on a runner with the cache restored: 46 s for this step — run 35505703708 logs a
-      # 46.42s `Finished` line for it, 10:40:24Z to 10:41:10Z. `RUSTFLAGS: -D warnings` above
-      # applies, and a build that fails is a red step, never a warning.
+      # Measured on a runner with the cache restored: 46 s and 54 s for this step, in the two runs
+      # that added it (35505703708, 35506102991), and 1m 05s / 58.45s for the full-table job's own
+      # `cargo build --release` row in those same runs — no `--locked` there, and the cache makes
+      # the dependencies free, not the workspace crates. `RUSTFLAGS: -D warnings` above applies,
+      # and a build that fails is a red step, never a warning.
       #
       # Guarded to the narrow row because that is the one place the two rows genuinely differ: the
       # full-table job builds the same binary as one of the suite's own rows — its table output
