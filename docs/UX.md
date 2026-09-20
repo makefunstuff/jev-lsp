@@ -262,19 +262,22 @@ An ambient agent fails by being ignored, so the policy is written down and enfor
 
 ## 5. Why it lives in the editor
 
-| | Asking in a chat window | jev-lsp in Neovim |
-|---|---|---|
-| Context | You select it, usually incompletely | Scope, neighbours, diagnostics, imports, repo state are gathered by the server |
-| Latency to first useful token | Full round trip after you finish typing the prompt | Picker already open; the answer is cached work |
-| Result format | Prose | `WorkspaceEdit` applied to the exact bytes, or a diagnostic on the exact line |
-| Failure mode | You apply something wrong | Version-stamped refusal, post-apply divergence detection |
-| Interruption cost | Context switch to another pane and back | None — the affordance is on the line you are on |
-| Repeat cost | Same tokens again | Cache hit |
-| Review | Read the whole answer | Per-step approval, apply or take back individually |
-| Undo | Manual, error-prone | One snapshot restore |
+Chat and jev-lsp differ in where context is gathered and where the result lands:
 
-The largest difference is not the quality of the model output. It is that the context
-is already where the code is, and the output lands where the code is.
+| | Chat window | jev-lsp in Neovim |
+|---|---|---|
+| Context | Selected by the user, usually incomplete | Scope, neighbours, diagnostics, imports, repo state, gathered by the server |
+| Time to a usable answer | Full round trip after the prompt is finished | Picker already open; the answer is cached work |
+| Result | Prose | `WorkspaceEdit` on the exact bytes, or a diagnostic on the exact line |
+| Failure | User applies a wrong edit | Version-stamped refusal; post-apply divergence detection |
+| Interruption | Switch to another pane and back | None — the affordance is on the current line |
+| Repeat | Same tokens again | Cache hit |
+| Review | Read the whole answer | Per-step approval; apply or revert each step |
+| Undo | Manual | One snapshot restore |
+
+The model output quality is not the main difference. The context is already where the code is,
+and the output lands where the code is.
+
 
 ## 6. Non-negotiable interactions
 

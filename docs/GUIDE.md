@@ -45,18 +45,6 @@ Where the surfaces come from:
 | `jev: explaining — waiting for the model (3s)` in the message line | progress heartbeat while it thinks | — |
 | `:Jev status` / `:Jev usage` / `:Jev session` / `:Jev inspect` | the server's own counters, log, and the rules pass | `inspect` asks the decision tier; the rest, no |
 
----
-
-Where each surface comes from:
-
-| On screen | Produced by | Costs a model call? |
-|---|---|---|
-| Sign in the margin, diagnostic text | `textDocument/diagnostic`, pulled after the server asks the client to re-pull | no |
-| `jev: explain` / `jev: N finding(s) · fix` at a declaration | code lens, one per declaration | no |
-| `jev: N finding(s)` badge | inlay hint, **off by default**: `:Jev hints on` | no |
-| An explanation in a buffer, streaming | `:Jev explain` | yes, one |
-| `jev: explaining — waiting for the model (3s)` in the message line | progress heartbeat while it thinks | — |
-| `:Jev status` / `:Jev usage` / `:Jev session` / `:Jev inspect` | the server's own counters, log, and the rules pass | `inspect` asks the decision tier; the rest, no |
 
 ## 2. Where a report goes
 
@@ -245,23 +233,22 @@ backwards question looks exactly like a rule that never fires.
 **Choosing `min_probability`.** Measure the answer's spread before you choose the floor, and put
 the floor outside it with room to spare — not on it. Measured against hosted Jev
 (`typesafe/jev-1.13`, the tier's `temperature: 0.0`): a sharply-posed question answered **0.96–0.97
-across 25 real runs** (median 0.97, sd 0.0048), while the same endpoint on a question sitting
-nearer the decision boundary varied **0.82–0.86 across 8 runs** — a floor at the answer's median
-therefore turns the endpoint's own noise into a coin flip, with identical input publishing on half
-the runs and not the other half, and nothing in the report saying which run was the odd one out.
-If the spread straddles the floor you want, **the question is the problem, not the floor**: no
-value of `min_probability` makes a boundary-straddling question stable, so sharpen it — name the
-property that decides it, add the criterion that separates the cases, split one question into two
-— and measure again. Note also that a `false` answer is **invisible through `:Jev inspect`**,
-which publishes only what clears the floor: read the negative side by posting the request
-directly, or with the floor set to `0.0` (which still hides a `false`). On this repository's own
-code: the rule `no-unwrap-outside-tests` over `crates/jev-lsp/src/server.rs` (two `.unwrap()` calls
-on literal URLs — an invariant, not a defect) answered in a **0.75–0.79** band, and at the 0.75
-floor it shipped with, **4 of 15 runs published one line and not the other**. It ships a floor of
-**0.85** now, where none of 15 runs published either line, while the fixture that must fire
-answered **0.97–0.98** and published on 15 of 15 at both floors — the false band's top is 0.79 and
-the true sample's bottom is 0.97, and 0.85 sits in that gap, deliberately below its midpoint (0.88)
-because a floor that is too high costs a missed defect.
+across 25 real runs** (median 0.97, sd 0.0048); the same endpoint on a question nearer the
+decision boundary varied **0.82–0.86 across 8 runs**. A floor at the answer's median turns that
+noise into a coin flip: identical input publishes on half the runs and not the other half, with
+nothing in the report naming the odd run. If the spread straddles the floor you want, sharpen the
+question (name the deciding property, add the separating criterion, or split it) and measure
+again — no value of `min_probability` stabilises a boundary-straddling question. A `false` answer
+is invisible through `:Jev inspect`, which publishes only what clears the floor; read the negative
+side by posting the request directly, or with the floor at `0.0` (which still hides a `false`).
+
+On this repository: `no-unwrap-outside-tests` over `crates/jev-lsp/src/server.rs` (two `.unwrap()`
+calls on literal URLs — an invariant, not a defect) answered in a **0.75–0.79** band; at the 0.75
+floor it shipped with, **4 of 15 runs published one line and not the other**. It ships **0.85**
+now, where none of 15 runs published either line, while the fixture that must fire answered
+**0.97–0.98** and published on 15 of 15 at both floors. The false band's top is 0.79 and the true
+sample's bottom is 0.97; 0.85 sits in that gap, deliberately below its midpoint (0.88), because a
+floor that is too high costs a missed defect.
 
 Three things that will otherwise cost you an hour:
 
@@ -322,7 +309,7 @@ jev status                             # budget, queue and cache
   endpoint — while `--max-tokens` applies to the chat tiers.
 - `jev inspect` prints the same body the LSP command `jev.inspect` returns: `findings`,
   `considered`, `candidates` and `skipped`. It is the same code the ambient pass runs, which is
-  the whole point — a CLI that disagreed with the server about a rule would be worse than none.
+  the CLI and the server share the rules code, so they cannot disagree about a rule.
 - **The decide tier's key variable is nameable from the shell**: `api_key_env` defaults to
   `TYPESAFE_API_KEY`, and `JEV_DECIDE_API_KEY_ENV` points it at another variable
   (`JEV_DECIDE_API_KEY_ENV=OPENCODE_API_KEY OPENCODE_API_KEY=… jev inspect …`). It takes a *name*,
@@ -347,7 +334,7 @@ It shares `jev-core` with the server and no state with it. Useful for scripts, a
 | `warn no jev client attached (open a file; …)` in `:checkhealth jev` | Same thing, from the health check | Open a file; the attach pass covers `BufReadPost`, `BufNewFile`, `BufWinEnter` |
 | No sign ever appears | Nothing was analysed | Did you `:w`? (`triggers.diagnostics = 'save'`.) Then `:Jev status` for `enabled` and `documents`, then `:Jev log` for the analysis line and the endpoint in force |
 | No sign ever appears, and `:Jev log` says the pass had nothing to run | The ambient pass is the repository's rules, and this repository has none that claim this file | `:Jev inspect` lists the skips (`no_rules`, `unchanged`, a rule file that failed to load); write one as in §4, or set `rules.enabled = false` and use `:Jev review` |
-| You edited a rule and the findings on screen did not change | The display slot is keyed by content, language and the cap, not by rules, and nothing watches `.jev/rules/` | `:Jev inspect --force` for this buffer, or `:Jev recompute` for every open document — or just save (§4, `docs/UX.md` §1.1) |
+| You edited a rule and the findings on screen did not change | The display slot is keyed by content, language and the cap, not by rules, and nothing watches `.jev/rules/` | `:Jev inspect --force` for this buffer, or `:Jev recompute` for every open document — or save (§4, `docs/UX.md` §1.1) |
 | `:Jev inspect` reports `unchanged` and no findings | git reports the file untouched since HEAD, so the pass skipped it | That is the point of the check; `--force` inspects it anyway |
 | The ambient pass fails with `model_error` / `contract_error` | The *decision* tier did not answer, or answered something unreadable | `:Jev log`, then check `models.decide` and `TYPESAFE_API_KEY` (`JEV_DECIDE_BASE_URL` does not come from `JEV_BASE_URL`) |
 | `:Jev review` returns `findings: []`, no sign | Either the file is genuinely clean, or it was skipped | `:Jev log`: a skip says *"the file looks binary"*, *"N bytes exceeds the M byte analysis limit"*, or *"path matches the ignore pattern …"* |
@@ -372,102 +359,36 @@ It shares `jev-core` with the server and no state with it. Useful for scripts, a
 
 ## 8. Starting from nothing
 
-The greenfield loop, for the case `docs/TUTORIAL.md` §0 describes: a new thing against APIs you do not
-know. Two tools, one handoff, and a clear line between them: **`clank` while the answer is a
-paragraph, this server once the answer is code.**
-
-`clank` is the same shape as a shell tool: prompt and context in on argv/stdin, data out on
-stdout, breadcrumbs on stderr, exit `0` when every prompt was answered and `1` when one was not
-(a truncated or empty answer counts as failure — an answer that hit the token ceiling is not an
-answer). Its docs are `~/Work/clank/README.md`, `CHEATSHEET.md`, `PROTOCOL.md` and
-`docs/use-cases.md`; it defaults to your local server (`CLANK_MODEL`, `CLANK_BASE_URL` override,
-as do `--model`/`--base-url`). If the default endpoint is not listening — the router unloads
-idle models, so `:40583` is often down — that is a `connection refused`, not a clank bug: point
-`CLANK_BASE_URL` at the router or whichever endpoint is up.
-
-**Step 1 — ask, in the shell, with the material piped in.** No file exists yet, so nothing in
-the editor can help; the context is whatever you pipe.
-
-```sh
-# what is this thing telling me?
-cat build-error.log | clank --thinking off -m "what is the cause, and what is the smallest fix?"
-
-# how is this API shaped? (nothing to pipe, nothing to anchor)
-clank --thinking off -m "show the minimal Python call that paginates the foo API, one snippet"
-
-# let it look at the project itself instead of pasting files: four read-only tools
-clank --tools -m "where is the transcript cap defined? cite file:line"
-
-# when the answer should be data rather than prose
-clank --json-schema @schema.json -m "extract the required config keys" | jq -er .
-```
-
-(`--json-schema` needs an endpoint that honours the field the way llama.cpp does. Against an
-OpenAI-style gateway that ignores it, the model answers prose and clank exits `1` with
-*"final output is not valid JSON"* instead of passing it off — verified on both kinds of
-endpoint.)
-
-Observable: exactly one answer on stdout, nothing else; with `--tools` you also get `> tool …` /
-`< tool ok (N B)` lines on **stderr**, and `--jsonl` gives you one event per step with a `run`
-line first (model, endpoint, argv, thinking) so a trace says what produced it months later.
-
-**Pass `--thinking off` explicitly here.** The two tools differ on the default: this server
-sends `enable_thinking: false` unless told otherwise, while clank sends nothing at all unless
-told — so a local template that thinks by default will think, and bill for it, without saying
-so. It is the same switch in both (`chat_template_kwargs` for off, `reasoning_effort` for a
-level), it is portable on the local servers and advisory on a gateway, and the measured reason
-to prefer off is in `docs/MODEL.md` §1: with a level, the reasoning tokens eat the answer.
-
-**Step 2 — turn the answer into a file.** Ten to thirty lines that call the API the way you
-understood it. It does not need to work; it needs to exist:
+When no file exists yet, the context is a pipe and the answer is prose — that is outside this
+server. Use a shell ask-tool for that step (for example `clank`: prompt on argv/stdin, data
+on stdout, exit `1` on a truncated or empty answer). Once a file exists, hand off here:
 
 ```sh
 mkdir -p ~/scratch/foo && cd ~/scratch/foo && git init
-vim probe.py     # the snippet, adapted to your guess
+# write a short probe file, then:
 ```
 
-(`git init` is not decoration: dismissals and the session log live in `<root>/.git/jev/`, so a
-spike directory without a repository root gets no `:Jev dismiss` and no `:Jev session`.)
-
-**Step 3 — cross the handoff.** `:w` in that file. From here `clank` has nothing to add,
-because the question is no longer about the world — it is about *your* text:
-
 ```vim
-:w                          " the analysis runs; a sign appears on any line worth talking about
+:w                          " save runs the rules pass
 :Jev ask is this the right way to paginate, and what happens on a 429?
-<leader>ja                  " have it propose the edit in place, or:
-:Jev explain               " have it explain what you wrote, in a streamed buffer
+<leader>ja                  " propose an edit in place
+:Jev explain               " explain what you wrote, streamed
 :Jev review                " findings for the file now, without saving
 ```
 
-The difference from step 1 is not the model: it is that the file *is* the context, automatically,
-and the answer comes back as an edit that lands on the exact bytes or a diagnostic on the exact
-line. Note what the editor hands it for free — imports, the buffers you have been in, the scope
-under the cursor — and that `:Jev ask` needs no paste.
-
-**Step 4 — iterate.** Each new unknown goes back to the shell, each new file comes back here:
-
-```sh
-clank -c /tmp/foo.jsonl --thinking off -m "now add retry with backoff to that snippet"   # continue a chain
-clank --jsonl --thinking off -m "explain the 429 branch" > /tmp/foo.jsonl                # keep it for later turns
-```
-
-Then, as the spike becomes the project: `:Jev plan` over files that exist (steps need anchors —
-a from-scratch plan is refused), findings on every save, `:Jev dismiss` for the ones you
-will not fix, `:Jev usage` to see whether any of it is paying off.
+`git init` matters: dismissals and the session log live under `<root>/.git/jev/`, so a spike
+directory without a repository root gets no `:Jev dismiss` and no `:Jev session`.
 
 | The question | Reach for | Because |
 |---|---|---|
-| What does this error mean, what does this tool take, how is this API shaped | `clank` | there is no document yet; the context is a pipe, and the answer is prose |
-| Where is X defined, in a project I have open | `clank --tools` **or** `:Jev where` | `:Jev where` greps locally first and asks with a bounded number of places, inside the editor — no shell hop |
-| Is this call right, what does this function do | `:Jev ask` / `:Jev explain` | the open file is the context, and the answer comes back anchored to it |
-| Change this, add a test, harden this | `<leader>ja` | needs a document and a unique anchor; that is the whole point of the trade |
+| What does this error mean, what does this tool take, how is this API shaped | a shell ask-tool | no document yet; context is a pipe; answer is prose |
+| Where is X defined, in a project I have open | `:Jev where` | greps locally first, asks with a bounded set of places, inside the editor |
+| Is this call right, what does this function do | `:Jev ask` / `:Jev explain` | the open file is the context; the answer is anchored to it |
+| Change this, add a test, harden this | `<leader>ja` | needs a document and a unique anchor |
 | Do this across three files | `:Jev plan` | one step per file, applied by the server with staleness refusal |
 
-Both keep stdout for data and stderr for diagnostics, both take the same thinking switch, and
-both refuse rather than guess: clank exits `1` on a truncated or empty answer rather than
-returning half of one, and this server refuses an edit it cannot anchor. That is why they compose
-instead of overlapping — the seam between them is *whether a file exists yet*, not quality.
+First-run walkthrough: `docs/TUTORIAL.md`. Surfaces and schema detail: §1–§4 above.
+
 
 ## 9. What lives on disk
 
