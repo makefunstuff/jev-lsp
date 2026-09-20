@@ -167,11 +167,9 @@ repository, has `.git/`, one rule, and one `.rs` file with a `.unwrap()` in it:
    **Jev: explain the scope at the cursor** for a Markdown explanation.
 
 **An answer never rearranges the editor.** `jev.artifacts.viewColumn` defaults to `active`, so a
-document opens in the group you are already in and the layout does not change; `beside` gives the
-old behaviour (a new group to the right — with one group open, a split) and `output` writes to
-*Output → Jev* and opens nothing. `ViewColumn.Beside` was the first default here, and with a
-single group open it split the window: an answer to a question rearranging the editor is what the
-default now exists to avoid.
+document opens in the group you are already in and the layout does not change. The setting's three
+values, and why `active` rather than the first version's `beside`, are in
+`editors/cursor/README.md`, *Where an answer appears*.
 
 **Four commands never open a document**, because their whole answer is a value rather than prose:
 `jev.inspect` (counts and skip codes — 280 bytes on this fixture), `jev.status` (a numbers
@@ -278,8 +276,7 @@ Verified on this machine, Cursor 3.21.16, `target/release/jev-lsp`:
   read out of `~/.bash_profile` by the extension; without the key it answers `401` and the pass
   produces nothing.
 - **The lens bridge works.** `jev.explain` at a finding's line returns `ok: true` in the server's
-  record when the command is run from Cursor's own palette, and the artifact opens beside the
-  code.
+  record when the command is run from Cursor's own palette, and the artifact opens.
 - **The protocol layer, without a GUI.** `extension.js` is loaded against a stand-in `vscode`
   and the real binary: the pull returns two findings, the quick-fix path returns the actions with
   `context.only` set, the gutter is painted, the exact lens `arguments` are fed to
