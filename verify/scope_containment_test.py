@@ -16,9 +16,11 @@ resolution is broken.
 
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 
@@ -52,6 +54,16 @@ def main():
     stub = subprocess.Popen([sys.executable, os.path.join(HERE, "stub_model.py")],
                             env=dict(os.environ, STUB_PORT=str(port)),
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # A private workspace, and the root the client declares is that same directory — the
+    # convention every other harness here follows (`verify/plan_test.py`, `verify/queue_test.py`).
+    # This row used to declare `file:///tmp` and put its fixture straight under `/tmp`, and that
+    # is not a private detail: the server keeps its session record at
+    # `<root>/.git/jev/session.jsonl`, so the row *created `/tmp/.git`* — a repository marker
+    # above every other harness's temp fixtures. `verify/nvim_ui_test.lua` resolves its workspace
+    # with `vim.fs.root(…, {'.git'})` and resolved it through that marker to `/tmp`, loaded no
+    # rules from `/tmp/.jev/rules`, and failed six checks in CI. The marker also outlives the
+    # run: it is why a developer's `/tmp` is a repository afterwards.
+    workdir = tempfile.mkdtemp(prefix="jev-scope-containment-")
     try:
         for _ in range(80):
             try:
@@ -70,8 +82,6 @@ def main():
             headers={"content-type": "application/json"}, method="POST")
         urllib.request.urlopen(req, timeout=5).read()
 
-        workdir = "/tmp/scope-containment"
-        os.makedirs(workdir, exist_ok=True)
         path = os.path.join(workdir, "scoped.py")
         text = ("def first():\n"
                 "    return 1\n"
@@ -94,7 +104,8 @@ def main():
             "models": {"reason": {"base_url": f"http://127.0.0.1:{port}/v1", "model": "stub-model"},
                        "review": {"base_url": f"http://127.0.0.1:{port}/v1", "model": "stub-model"}},
         }
-        server.request("initialize", {"processId": os.getpid(), "rootUri": "file:///tmp",
+        server.request("initialize", {"processId": os.getpid(),
+                                      "rootUri": "file://" + workdir,
                                       "capabilities": {"workspace": {"configuration": True}}})
         server.notify("initialized", {})
         server.notify("textDocument/didOpen", {"textDocument": {
@@ -133,6 +144,7 @@ def main():
         return 1
     finally:
         stub.terminate()
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 if __name__ == "__main__":

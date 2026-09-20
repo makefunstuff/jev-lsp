@@ -16,9 +16,11 @@ from wherever the defaults point, and cannot.
 
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -41,6 +43,16 @@ def main():
     stub = subprocess.Popen([sys.executable, os.path.join(HERE, "stub_model.py")],
                             env=stub_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     url = f"http://127.0.0.1:{port}/v1"
+    # A private workspace, and the root the client declares is that same directory — the
+    # convention every other harness here follows (`verify/plan_test.py`, `verify/queue_test.py`).
+    # This row used to declare `file:///tmp` and put its fixture straight under `/tmp`, and that
+    # is not a private detail: the server keeps its session record at
+    # `<root>/.git/jev/session.jsonl`, so the row *created `/tmp/.git`* — a repository marker
+    # above every other harness's temp fixtures. `verify/nvim_ui_test.lua` resolves its workspace
+    # with `vim.fs.root(…, {'.git'})` and resolved it through that marker to `/tmp`, loaded no
+    # rules from `/tmp/.jev/rules`, and failed six checks in CI. The marker also outlives the
+    # run: it is why a developer's `/tmp` is a repository afterwards.
+    workdir = tempfile.mkdtemp(prefix="jev-settings-race-")
     try:
         # Readiness is the socket, not a route: the stub serves chat completions and nothing
         # else, so probing /models says "not up" about a stub that is answering perfectly well.
@@ -54,8 +66,6 @@ def main():
             print("settings_race_test: the stub never came up", file=sys.stderr)
             return 2
 
-        workdir = "/tmp/settings-race"
-        os.makedirs(workdir, exist_ok=True)
         path = os.path.join(workdir, "racy.py")
         with open(path, "w") as fh:
             fh.write("def add(a, b):\n    return a + b\n")
@@ -72,7 +82,7 @@ def main():
         }
         server.request("initialize", {
             "processId": os.getpid(),
-            "rootUri": "file:///tmp",
+            "rootUri": "file://" + workdir,
             "capabilities": {"workspace": {"configuration": True}},
         })
         server.notify("initialized", {})
@@ -97,6 +107,7 @@ def main():
         return 1
     finally:
         stub.terminate()
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 if __name__ == "__main__":

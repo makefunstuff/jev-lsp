@@ -11,7 +11,8 @@
 -- proposal are hard: the stub is deterministic. Without one the server still lists actions,
 -- so those checks report SKIP rather than FAIL — nothing here pretends a missing endpoint is
 -- a passing test. The ambient pass is the rules pass, so the fixture root carries a
--- `.jev/rules/example.json` whose decision is answered by JEV_DECIDE_BASE_URL.
+-- `.jev/rules/example.json` whose decision is answered by JEV_DECIDE_BASE_URL — and a `.git/`,
+-- which is what makes that root *this* directory rather than some ancestor of the temp dir.
 --
 -- Checks, in order:
 --
@@ -142,6 +143,20 @@ if root == nil or root == '' then
   root = vim.fn.tempname() .. '-jev-ui'
 end
 vim.fn.mkdir(root, 'p')
+
+-- The fixture root is its own repository root, which every other Lua harness here already
+-- arranges (`rules_live.lua`, `dismiss_test.lua`, `result_surface.lua`, `context_search.lua` all
+-- create this same `.git/`). It is not decoration: the plugin's workspace root is
+-- `vim.fs.root(bufnr, {'.git'})`, so with no marker here the walk continues *above* the temp
+-- directory and adopts whatever it finds — and this row's whole design assumes the root is this
+-- directory, because that is where the rules below are written. On a CI runner it adopted
+-- `/tmp`: the suite's own `settings_race` and `scope_containment` rows declared `/tmp` as their
+-- root, so the server kept its session record in `/tmp/.git/jev/`, and this row then loaded no
+-- rules from `/tmp/.jev/rules` — six checks failed ("no quickfix.jev action after 30 s", the
+-- hints and ask fixtures never analysed, no plan, and `rg` searching all of `/tmp`). Those two
+-- rows now keep to a private directory; this marker is what makes the row independent of them,
+-- and of any other tool that has ever made a repository of the shared temp directory.
+vim.fn.mkdir(root .. '/.git', 'p')
 
 -- The ambient pass is the *rules* pass (`jev.rules/1`), so a repository with no rule gets no
 -- ambient finding — and several checks below are about a fixture that has one ("analysed, so a
