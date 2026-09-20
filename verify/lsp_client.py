@@ -109,9 +109,11 @@ Statuses, printed per assertion:
 Exit codes: 0 every assertion passed; 1 at least one FAIL; 2 harness error (no server,
 broken transport, bad usage).
 
-Standard library only, on purpose. The in-process stub at the bottom exists solely for
+Standard library only, on purpose, and **Python 3.10 or newer**: the fixtures are written with
+`pathlib.Path.write_text(newline=…)`, which on 3.9 raises `TypeError` before the first assertion
+runs — a red that names nothing. The in-process stub at the bottom exists solely for
 `--selftest`, which proves the client — framing, request/response correlation, the nine steps
-a stub can serve, and that eleven injected contract defects each turn the harness red — before
+a stub can serve, and that twelve injected contract defects each turn the harness red — before
 the Rust server exists. The stub's command set is §6's, read from the contract like the
 harness's, so step 11 covers it too. Step 10 needs servers configured three different ways, so it is not
 reachable from the in-process stub; it reports that rather than pretending to have run.
@@ -1633,6 +1635,20 @@ def run_steps(session, workspace, timeout, report, keep_fixtures=False, server=N
         # PROTOCOL §10: one section, named `jev`, and the server asks for it by name. The
         # first configuration request is the one that decides every default in force, so its
         # parameters are asserted exactly rather than by searching for the string.
+        #
+        # Bounded wait, not an immediate read. The ask is the `initialized` handler's first act
+        # and `initialized` is a *notification*: nothing orders its handler before this client's
+        # next messages, and the read below raced it — one run in 100 under load saw no request
+        # here at all, while that same run's step 9 lists `workspace/configuration` among the
+        # server->client requests it answered, so the server did ask, later. Waiting costs the
+        # assertion nothing it should have had: a server that never asks still fails here once
+        # the bound elapses (`--selftest`'s `no_configuration` defect is exactly that case), and
+        # so does a server that asks for another section or for an item with no section. What it
+        # no longer pins is *when* the ask arrives, within the bound — which §10 never promised:
+        # the server's own side of that is `await_config`, not the client's read.
+        session.wait_for(lambda: any(r.get("method") == "workspace/configuration"
+                                     for r in session.server_requests()),
+                         min(timeout, PROGRESS_WAIT_S), "the first workspace/configuration")
         asked = [r for r in session.server_requests()
                  if r.get("method") == "workspace/configuration"]
         first_sections = [
@@ -2269,7 +2285,12 @@ class StubServer(threading.Thread):
             # ask the client for the `jev` section *by name*. Step 2 asserts exactly that of the
             # first configuration request, and it was unsatisfiable here — this stub never asked,
             # so every baseline phase of this selftest reported that assertion red.
-            self._request("workspace/configuration", {"items": [{"section": "jev"}]}, "config")
+            #
+            # `no_configuration` is that server again, with the ask removed: step 2 must still
+            # fail on it, which is what says the bounded wait in step 2 bought tolerance for a
+            # late ask and not tolerance for a server that never asks at all.
+            if self.defect != "no_configuration":
+                self._request("workspace/configuration", {"items": [{"section": "jev"}]}, "config")
         if method == "textDocument/didOpen":
             document = params["textDocument"]
             self.docs[document["uri"]] = {"version": document.get("version", 1),
@@ -2576,6 +2597,7 @@ def run_selftest(timeout):
           "specifies it (docs/VERIFICATION.md §4)")
     defects = [
         ("edit_on_fast_path", "3", "an action carrying an `edit` on the fast path (N2)"),
+        ("no_configuration", "2", "a server that never asks for the `jev` section (§10)"),
         ("slow_code_action", "3", "a codeAction that misses the 50 ms budget"),
         ("bare_changes", "5", "`documentChanges` replaced by a bare `changes` map"),
         ("missing_version", "5", "a TextDocumentEdit without a `version` (§8 rule 2)"),
@@ -2647,7 +2669,7 @@ def build_parser():
                         help="prove this client without a server: run the framing, "
                              "correlation and server-request checks, all nine steps "
                              "against an in-process stub LSP server defined in this file, "
-                             "and eleven injected contract defects that must each turn the "
+                             "and twelve injected contract defects that must each turn the "
                              "harness red; exit 0 when the client itself is correct")
     return parser
 
