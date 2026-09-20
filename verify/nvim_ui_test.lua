@@ -1237,12 +1237,27 @@ do
     skip('the parser scope', 'no client on the scope fixture')
   else
     local captured = nil
+    -- Both requests below are streamed, and a streamed answer is a surface: `M.command` opens
+    -- one when the request is sent, and `place_surface` puts it in the window when the answer
+    -- completes (`hide buffer`), which moves the current buffer. An answer still in flight when
+    -- this section ends therefore lands inside a later one and takes the window from under it —
+    -- the inlay-hint toggle below reads whichever buffer it lands on. Counting the answers here
+    -- is what lets the section wait for its own requests instead of leaving them behind it.
+    local explains = { sent = 0, answered = 0 }
     local orig = client.request
-    client.request = function(_, method, params, ...)
+    client.request = function(_, method, params, handler, ...)
       if method == 'workspace/executeCommand' and params.command == 'jev.explain' then
         captured = params.arguments
+        explains.sent = explains.sent + 1
+        if handler ~= nil then
+          local inner = handler
+          handler = function(err, result, ctx)
+            explains.answered = explains.answered + 1
+            return inner(err, result, ctx)
+          end
+        end
       end
-      return orig(_, method, params, ...)
+      return orig(_, method, params, handler, ...)
     end
     vim.api.nvim_set_current_buf(lua_bufnr)
     vim.api.nvim_win_set_cursor(0, { 8, 2 }) -- inside `beta`
@@ -1272,11 +1287,19 @@ do
     else
       local seen = nil
       local orig2 = py_client.request
-      py_client.request = function(_, method, params, ...)
+      py_client.request = function(_, method, params, handler, ...)
         if method == 'workspace/executeCommand' and params.command == 'jev.explain' then
           seen = params.arguments
+          explains.sent = explains.sent + 1
+          if handler ~= nil then
+            local inner = handler
+            handler = function(err, result, ctx)
+              explains.answered = explains.answered + 1
+              return inner(err, result, ctx)
+            end
+          end
         end
-        return orig2(_, method, params, ...)
+        return orig2(_, method, params, handler, ...)
       end
       vim.api.nvim_set_current_buf(py_bufnr)
       vim.api.nvim_win_set_cursor(0, { 2, 4 })
@@ -1293,6 +1316,20 @@ do
         vim.inspect(py_arg.range)
       )
     end
+    -- Wait, bounded, for the answers this section asked for, before the cleanup takes their
+    -- surfaces away. Without it the section ends with a request still in flight, and the surface
+    -- it places when it completes is a window the *next* section did not ask for: the toggle
+    -- check below reads the buffer it moved to instead of the fixture it opened. A request the
+    -- server never answers is a real failure — the row is about a server that answers — so the
+    -- wait reports rather than silently leaving the surface behind.
+    local settled = vim.wait(30000, function()
+      return explains.answered >= explains.sent
+    end, 25)
+    check(
+      settled,
+      'every scope request this section sent has answered',
+      ('%d of %d answered'):format(explains.answered, explains.sent)
+    )
     for _, b in ipairs(vim.api.nvim_list_bufs()) do
       if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find('jev://', 1, true) then
         vim.api.nvim_buf_delete(b, { force = true })
@@ -1402,9 +1439,25 @@ do
       end
     end
 
+    -- `:Jev hints` is a decision about the buffer the user is in: `M.hints` reads the current
+    -- buffer and enables hints for that one. So the check puts the user in the fixture first —
+    -- that is the state it is about — rather than assuming the window is still where the
+    -- analysis loop left it. `hint_bufnr` is the buffer that loop opened, and the loop's
+    -- `vim.wait` runs the event loop: a generated surface that lands during it (a streamed
+    -- answer from an earlier section, placed with `hide buffer`) is what the window shows when
+    -- the loop breaks, and the toggle would then be enabled on the artifact.
+    pcall(vim.api.nvim_set_current_buf, hint_bufnr)
     local stock = vim.lsp.inlay_hint.is_enabled({ bufnr = hint_bufnr })
     require('jev').hints(true)
-    check(vim.lsp.inlay_hint.is_enabled({ bufnr = hint_bufnr }), 'the toggle turns them on')
+    check(
+      vim.lsp.inlay_hint.is_enabled({ bufnr = hint_bufnr }),
+      'the toggle turns them on',
+      ('current=%d (%s), fixture=%d'):format(
+        vim.api.nvim_get_current_buf(),
+        vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf()),
+        hint_bufnr
+      )
+    )
     require('jev').hints(false)
     check(not vim.lsp.inlay_hint.is_enabled({ bufnr = hint_bufnr }), 'and off again')
     if stock then
@@ -1867,12 +1920,41 @@ do
   else
     vim.wait(1000)
 
+    -- This request streams too, so the answer is a surface: it takes the window when it lands,
+    -- and the hover section below reads the explanation back out of the artifact store, which
+    -- only holds it once the request has answered. Waiting for the model call to *start* is
+    -- neither of those things, so the answer is counted here and waited for below.
+    local context_client = vim.lsp.get_clients({ bufnr = target, name = 'jev' })[1]
+    local context_orig = context_client.request
+    local explains = { sent = 0, answered = 0 }
+    context_client.request = function(_, method, params, handler, ...)
+      if method == 'workspace/executeCommand' and params.command == 'jev.explain'
+        and handler ~= nil
+      then
+        explains.sent = explains.sent + 1
+        local inner = handler
+        handler = function(err, result, ctx)
+          explains.answered = explains.answered + 1
+          return inner(err, result, ctx)
+        end
+      end
+      return context_orig(_, method, params, handler, ...)
+    end
     local before = calls()
     require('jev').explain()
+    context_client.request = context_orig
     vim.wait(20000, function()
       return calls() > before
     end, 100)
     check(calls() > before, 'the request is generated', ('calls %d -> %d'):format(before, calls()))
+    local settled = vim.wait(30000, function()
+      return explains.answered >= explains.sent
+    end, 25)
+    check(
+      settled,
+      'the explanation is stored before the hover section reads it back',
+      ('%d of %d answered'):format(explains.answered, explains.sent)
+    )
 
     local prompt = prompt_text()
     check(
