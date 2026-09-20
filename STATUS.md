@@ -107,6 +107,24 @@ which a headless harness cannot drive.
    `docs/LANGUAGE.md` §3 and §7, `docs/GUIDE.md` §3, `docs/MODEL.md` §2 and `docs/UX.md` §4 no
    longer present them as working. Two exits, one line each: **implement the setting**, or
    **delete the key with the paragraph documenting it**. Awaiting the user's call.
+5. **Per-candidate resolution, or one call per document** (2026-09-20). A decision call carries
+   every candidate of a document, and on the tier this machine wires a call carrying two or more
+   candidates of one rule is answered at one shared probability whatever the code says: `0.70`
+   for a handler that discards beside `0.69` for one that logs and re-raises in the same state,
+   and `0.80`, `0.80`, `0.80` for a bare suppression, a reasoned one and a bare one; a
+   **single**-candidate state is answered sharply (`0.92–0.97` against `0.05–0.06`), and two
+   control questions on the same wire separate cleanly (`0.99` / `0.02`), so it is the
+   multi-candidate call and not a flat endpoint. The shipped floors sit **above** that flat band,
+   which is why a document whose candidates the tier pulls together publishes nothing; on the
+   measurement's thirteen-repository corpus that is the price of the two shipped code defaults,
+   and the documents are named there (`crates/jev-core/default_rules/code/README.md`, "the flat
+   band, and why the floors sit above it"). The alternative is one call per candidate: from the
+   same measurement's gaps (`0.45–0.91` and `0.11–0.94`) both rules would take floors of
+   **0.45–0.5** and publish the whole violation band. The price of that is calls, one per
+   candidate instead of one per document, against the same per-minute budget (`docs/MODEL.md` §7;
+   the cost case in `README.md` is that batching). Two exits, one line each: **keep one call per
+   document** and hold the floors above the flat band, or **resolve per candidate** and re-measure
+   both floors down. Awaiting the user's call.
 
 ## Decisions taken (reversible, recorded so they are not relitigated)
 

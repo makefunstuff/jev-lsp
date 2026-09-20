@@ -256,6 +256,19 @@ again — no value of `min_probability` stabilises a boundary-straddling questio
 is invisible through `:Jev inspect`, which publishes only what clears the floor; read the negative
 side by posting the request directly, or with the floor at `0.0` (which still hides a `false`).
 
+**A floor separates only what the tier separates.** One decision call carries every candidate of a
+document, and on the tier this machine wires a call carrying two or more candidates of one rule is
+answered at one shared probability whatever the code says: the tier reads the lines once, and a
+flat answer cannot tell a violation from its neighbour. So the floor has to sit **above** that flat
+band, and a floor under it publishes the band rather than the class. Two consequences for a rule
+author: the rule publishes from documents whose candidates the tier separates and stays silent on
+documents it pulls together, and one call per document, the property the cost case rests on
+(`README.md`), is what buys those document-level verdicts at all. The bands and the runs behind
+each shipped floor are in that rule's own directory
+(`crates/jev-core/default_rules/prose/README.md`, `crates/jev-core/default_rules/code/README.md`,
+which also states what a lower floor would publish if the pass ever asked one candidate per call);
+`STATUS.md`'s open questions carry that alternative.
+
 On this repository: `no-unwrap-outside-tests` over `crates/jev-lsp/src/server.rs` (two `.unwrap()`
 calls on literal URLs — an invariant, not a defect) answered in a **0.75–0.79** band; at the 0.75
 floor it shipped with, **4 of 15 runs published one line and not the other**. It ships **0.85**
