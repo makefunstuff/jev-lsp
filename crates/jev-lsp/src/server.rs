@@ -752,21 +752,6 @@ fn severity_str(s: Severity) -> &'static str {
     }
 }
 
-/// One finding as a client receives it in a Result. The same fields the diagnostic carries,
-/// so the two surfaces cannot describe the same finding differently.
-fn finding_json(f: &Finding) -> Value {
-    json!({
-        "id": f.id,
-        "line": f.line,
-        "start_col": f.start_col,
-        "end_col": f.end_col,
-        "severity": severity_str(f.severity),
-        "label": f.label,
-        "detail": f.detail,
-        "verb": f.verb_hint.as_str(),
-    })
-}
-
 fn result_ok(payload: Value) -> Value {
     let mut base = json!({"schema": RESULT_SCHEMA, "ok": true});
     if let (Some(b), Value::Object(extra)) = (base.as_object_mut(), payload) {
@@ -2166,7 +2151,14 @@ impl JevServer {
                     Ok(out) => result_ok(json!({
                         "kind": "review",
                         "uri": uri,
-                        "findings": out.findings.iter().map(finding_json).collect::<Vec<_>>(),
+                        // One implementation of the finding shape for both surfaces: the CLI
+                        // prints `jev_core::findings::finding_json` and so does this, so a
+                        // field can no longer be added to one and forgotten in the other.
+                        "findings": out
+                            .findings
+                            .iter()
+                            .map(jev_core::findings::finding_json)
+                            .collect::<Vec<_>>(),
                         "from_cache": out.from_cache,
                         "discarded": out.rejected,
                     })),

@@ -114,7 +114,11 @@ pub fn findings_key(content_hash: &str, language: &str, max_findings: usize) -> 
 /// Findings from the rules pass, keyed by **every** input the conclusion is a function of.
 ///
 /// The rules axis is why this key exists at all: editing a rule changes what it finds, so a
-/// conclusion taken under the old text must not be served for the new one.
+/// conclusion taken under the old text must not be served for the new one. `rule_hash` is the
+/// hash of the *merged* set — the repository's rules and the shipped ones together
+/// (`rules::load`) — so a change to either invalidates every conclusion taken under the old
+/// pair, and `rules.defaults` needs no entry of its own here: turning the shipped set off
+/// changes the set the hash is taken over.
 ///
 /// The *path* is the second half of the same argument, and it is not decoration: a rule's
 /// `applies_to` is matched against the path, so two files with identical bytes but different
@@ -129,10 +133,16 @@ pub fn findings_key(content_hash: &str, language: &str, max_findings: usize) -> 
 /// service's own route against a provider's chat route): same host, different question.
 ///
 /// The bounds are the fourth, and they are inputs for the same reason.
-/// `max_candidates_per_rule` decides how many candidates become questions, and `max_state_lines`
+/// `max_candidates_per_rule` decides how many candidates become questions, `max_state_lines`
 /// and `max_state_bytes` decide how much of the file the decision is shown
-/// (`inspections::select`, `inspections::request`). Narrow any of them and identical bytes under
-/// identical rules can answer differently.
+/// (`inspections::select`, `inspections::request`), and `noise.max_visible_findings` is the cap
+/// the stored set was *truncated* to (`findings::build`, called by `inspections::resolve`).
+/// Narrow any of them and identical bytes under identical rules can answer differently.
+///
+/// That last one was missing while [`findings_key`] carried it with a comment saying why it must
+/// be here — the same conclusion, stored under two keys, one of which forgot an input. The
+/// symptom is the one this key exists to prevent: widen `noise.max_visible_findings` and the pass
+/// answers from the cache with the old cap's findings, so the setting looks like it does nothing.
 ///
 /// `rules.enabled` and `max_files_per_pass` are deliberately absent: the first is not an input to
 /// an answer that was produced (a disabled pass produces none, and re-enabling asks the same
@@ -141,13 +151,14 @@ pub fn rules_key(content_hash: &str, rule_hash: &str, path: &str, cfg: &Config) 
     let decide = &cfg.models.decide;
     let bounds = &cfg.rules;
     format!(
-        "rules|{content_hash}|{rule_hash}|{path}|{:?}|{}|{}|{}|{}|{}",
+        "rules|{content_hash}|{rule_hash}|{path}|{:?}|{}|{}|{}|{}|{}|{}",
         decide.wire,
         decide.base_url,
         decide.model,
         bounds.max_candidates_per_rule,
         bounds.max_state_lines,
-        bounds.max_state_bytes
+        bounds.max_state_bytes,
+        cfg.noise.max_visible_findings
     )
 }
 
@@ -196,6 +207,17 @@ mod tests {
     fn op(verb: &str, prompt_version: &str, language: &str) -> String {
         op_key(verb, prompt_version, "m", language, "h", 1, 2, "")
     }
+
+    /// Two versions of one shipped rule: everything a "the shipped set changed" test needs, and
+    /// nothing else. The pattern differs, so the rule's text does.
+    const SHIPPED_A: &str = r#"{"schema":"jev.rules/1","rules":[{"id":"shipped-one",
+        "title":"A shipped rule","text":"Do not leave a TODO.","applies_to":["**/*.rs"],
+        "inspection":{"kind":"regex","pattern":"TODO"},
+        "judgement":{"question":"Is this a violation?"}}]}"#;
+    const SHIPPED_B: &str = r#"{"schema":"jev.rules/1","rules":[{"id":"shipped-one",
+        "title":"A shipped rule","text":"Do not leave a FIXME.","applies_to":["**/*.rs"],
+        "inspection":{"kind":"regex","pattern":"FIXME"},
+        "judgement":{"question":"Is this a violation?"}}]}"#;
 
     #[test]
     fn keys_separate_the_axes_that_matter() {
@@ -298,6 +320,15 @@ mod tests {
         let mut bytes = cfg.clone();
         bytes.rules.max_state_bytes -= 1;
         assert_ne!(key(&cfg), key(&bytes), "and its byte budget");
+        // The cap the stored set was truncated to. This one was missing, so widening the
+        // setting served the old cap's findings out of the cache and the setting looked inert.
+        let mut cap = cfg.clone();
+        cap.noise.max_visible_findings += 1;
+        assert_ne!(
+            key(&cfg),
+            key(&cap),
+            "the stored findings are capped, so the cap is part of the question"
+        );
 
         // Two that are not inputs to this conclusion, and must not cost a hit: the switch (a
         // disabled pass produces no conclusion to serve) and the file budget (a property of a
@@ -310,6 +341,49 @@ mod tests {
             key(&switched),
             "neither changes what the answer to this question is"
         );
+    }
+
+    #[test]
+    fn changing_the_shipped_set_changes_the_key() {
+        // The shipped set is an input to every rules conclusion, and it enters through the rule
+        // hash the key carries: a conclusion taken under one shipped set must never answer for
+        // the next. The whole chain is exercised — shipped content → `load` → merged hash →
+        // key → cache — because the failure this guards against is exactly a link in it that
+        // forgets the set is there.
+        let root = std::env::temp_dir().join(format!("jev-cache-shipped-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let cfg = Config::default();
+        let path = "/w/a.rs";
+
+        let one = crate::rules::load(&root, true, &[("code/a.json", SHIPPED_A)]);
+        let same = crate::rules::load(&root, true, &[("code/a.json", SHIPPED_A)]);
+        let changed = crate::rules::load(&root, true, &[("code/a.json", SHIPPED_B)]);
+        assert_eq!(one.hash, same.hash, "the same shipped set is the same rules");
+        assert_ne!(one.hash, changed.hash, "so is not");
+
+        let cache = Cache::new(4);
+        cache.put(
+            &rules_key("h", &one.hash, path, &cfg),
+            conclusion("from the shipped set"),
+        );
+        assert!(
+            cache.get(&rules_key("h", &same.hash, path, &cfg)).is_some(),
+            "the same document under the same shipped set still hits"
+        );
+        assert!(
+            cache.get(&rules_key("h", &changed.hash, path, &cfg)).is_none(),
+            "a conclusion taken before the shipped rule changed must not answer for it"
+        );
+
+        // And with the shipped set off it is a third key again: what is hashed is the merged
+        // set, so `rules.defaults` is an input without needing an entry of its own.
+        let off = crate::rules::load(&root, false, &[("code/a.json", SHIPPED_A)]);
+        assert!(
+            cache.get(&rules_key("h", &off.hash, path, &cfg)).is_none(),
+            "the shipped rules the hash is taken over are absent, so this is another set"
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

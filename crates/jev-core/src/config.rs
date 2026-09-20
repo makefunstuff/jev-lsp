@@ -106,6 +106,16 @@ pub struct Models {
 #[serde(default)]
 pub struct RulesConfig {
     pub enabled: bool,
+    /// Whether the shipped rule set applies (PROTOCOL.md §9).
+    ///
+    /// On by default, because the alternative was measured: a repository with no `.jev/rules/`
+    /// produced no ambient findings at all, so a fresh install and a broken one looked the same,
+    /// and the conventions this project ships for its own tree published nothing on the
+    /// repository it was written for. `false` is the behaviour that predates the shipped set,
+    /// exactly: `.jev/rules/*.json` and nothing else, and `no_rules` when there are none. A
+    /// repository can also adopt the shipped rules as its own with `jev rules init`, after
+    /// which they are its files and this setting stops mattering to them.
+    pub defaults: bool,
     /// Most candidates one rule may contribute to a pass. Bounds the questions a single regex
     /// can put to the model, and with them the size of the request.
     pub max_candidates_per_rule: usize,
@@ -121,6 +131,7 @@ impl Default for RulesConfig {
     fn default() -> Self {
         RulesConfig {
             enabled: true,
+            defaults: true,
             max_candidates_per_rule: 8,
             max_state_lines: 200,
             max_state_bytes: 16_000,
@@ -793,6 +804,26 @@ mod tests {
     }
 
     #[test]
+    fn a_payload_that_turns_the_shipped_rules_off_is_honoured() {
+        // The setting the rules pass reads (`state::rule_set`, `run::inspect`): a repository
+        // that wants nothing but its own files says so here, and a payload that names it must
+        // reach the pass or the setting is another decorative key.
+        let c = Config::default().merged_with(Some(&serde_json::json!({
+            "rules": {"defaults": false}
+        })));
+        assert!(!c.rules.defaults);
+        assert!(c.rules.enabled, "its siblings survived");
+        assert_eq!(c.rules.max_candidates_per_rule, 8, "and so did the bounds");
+        assert!(c.triggers.rules.on_save, "and a different subtree was untouched");
+        // Absent means on, from wherever the payload came from.
+        assert!(Config::default().merged_with(None).rules.defaults);
+        assert!(Config::default()
+            .merged_with(Some(&serde_json::json!({"rules": {"enabled": true}})))
+            .rules
+            .defaults);
+    }
+
+    #[test]
     fn the_decision_and_rules_defaults_are_what_this_code_says() {
         let c = Config::default();
         assert_eq!(c.decision().wire, crate::decision::Wire::SystemOne);
@@ -804,6 +835,7 @@ mod tests {
         assert_eq!(c.decision().temperature, 0.0);
         assert_eq!(c.decision().think, Think::Off);
         assert!(c.rules.enabled, "the ambient pass is the rules pass by default");
+        assert!(c.rules.defaults, "and it runs the shipped set by default");
         assert_eq!(c.rules.max_candidates_per_rule, 8);
         assert_eq!(c.rules.max_state_lines, 200);
         assert_eq!(c.rules.max_state_bytes, 16_000);

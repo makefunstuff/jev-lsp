@@ -233,6 +233,33 @@ pub enum Severity {
     Warning,
 }
 
+/// Which rule set a finding came from.
+///
+/// A finding carries this so a reader can tell a shipped default from a rule their own
+/// repository wrote — a finding you cannot trace to a file you can open is one you cannot
+/// calibrate or turn off (PROTOCOL.md §9). `Option` on the finding for the same reason it is
+/// not `Review` in here: a chat-review finding has no rule behind it at all, and "the review
+/// tier's opinion" is a different statement from "a rule from the other source".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RuleSource {
+    /// `.jev/rules/<id>.json` — the repository's own file, and the one that wins.
+    #[default]
+    Repository,
+    /// The set shipped inside the binary, from `default_rules/<group>/*.json`.
+    Builtin,
+}
+
+impl RuleSource {
+    /// The wire name (`rule_source` on a finding, `Result`-shaped surfaces only).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RuleSource::Repository => "repository",
+            RuleSource::Builtin => "builtin",
+        }
+    }
+}
+
 /// A finding produced by the review tier (PROTOCOL.md §9).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Finding {
@@ -244,6 +271,9 @@ pub struct Finding {
     pub label: String,
     pub detail: String,
     pub verb_hint: Verb,
+    /// The rule's source, or `None` for a finding no rule stands behind.
+    #[serde(default)]
+    pub rule_source: Option<RuleSource>,
 }
 
 /// A single replacement, in whole-line terms. `end_col` excludes the trailing newline, so

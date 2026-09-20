@@ -97,6 +97,7 @@ pub fn build(
             label,
             detail,
             verb_hint,
+            rule_source: r.rule_source,
         });
     }
 
@@ -116,6 +117,12 @@ pub fn build(
 /// Shared rather than written twice: the CLI and the language server answer the same question
 /// about the same document, and a field that drifts between them is a parity bug nobody notices
 /// until a client reads the one that is wrong.
+///
+/// `rule_source` is where the *rule* came from — `"repository"`, `"builtin"`, or `null` when no
+/// rule stands behind the finding (the chat review's opinion, PROTOCOL §9). It is deliberately
+/// not called `source`: `source` on a diagnostic names the *pass* (`"rules"` / `"review"`), and
+/// the two questions — which pass wrote this, and which rule set it came from — have different
+/// answers and different remedies.
 pub fn finding_json(f: &Finding) -> serde_json::Value {
     serde_json::json!({
         "id": f.id,
@@ -129,6 +136,7 @@ pub fn finding_json(f: &Finding) -> serde_json::Value {
         "label": f.label,
         "detail": f.detail,
         "verb": f.verb_hint.as_str(),
+        "rule_source": f.rule_source.map(|s| s.as_str()),
     })
 }
 

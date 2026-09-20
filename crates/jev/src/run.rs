@@ -92,6 +92,12 @@ pub struct Deps<'a> {
     pub budget: &'a Budget,
     pub cache: &'a Cache,
     pub files: &'a dyn Files,
+    /// The shipped rule set, as `(name, contents)` — `rules::builtin_files()` in the binary, a
+    /// fixture in a test. Injected for the same reason the two model clients are: the rules pass
+    /// `jev inspect` runs and the one these tests run are then the same pass over a
+    /// substitutable input, rather than a pass whose answer depends on whether the authoring
+    /// sessions have landed their files yet.
+    pub builtin: &'a [(&'static str, &'static str)],
 }
 
 /// Parse and run. The only entry point, so what the tests exercise is what the binary does.
@@ -132,6 +138,7 @@ fn dispatch(command: &Command, overrides: &Overrides, deps: &Deps) -> Outcome {
         Command::Inspect { target, force } => {
             with_log(|log| inspect(&config, target, *force, deps, log))
         }
+        Command::RulesInit { dir, force } => rules_init(dir.as_deref(), *force, deps),
     }
 }
 
@@ -483,7 +490,11 @@ fn inspect(
     let prepared = prepare(config, target, deps)?;
     let doc = &prepared.doc;
     let root = rules_root(&doc.path).unwrap_or_else(|| ".".to_string());
-    let set = rules::load(std::path::Path::new(&root));
+    let set = rules::load(
+        std::path::Path::new(&root),
+        config.rules.defaults,
+        deps.builtin,
+    );
     // `applies_to` is written the way a repository names its own files, so it is matched
     // against the path relative to the root — the same rule the server follows.
     let match_path = gates::relative_to(&doc.path, &root);
@@ -495,22 +506,16 @@ fn inspect(
     );
     let candidates = asked.len();
     let mut skipped = set.skipped.clone();
-    // The same lint the language server reports, from the same function, in the same list: a rule
-    // whose pattern does not compile is inert, and the pass it was written for is where that has
-    // to be visible. `lint` is reported and never enforced — the rule still runs.
+    // The same notes the language server reports, from the same function, in the same list: a
+    // rule whose pattern does not compile is inert, a pass carried by the shipped set has to say
+    // so rather than looking like a repository's own rules, and a repository with nothing to run
+    // says `no_rules` rather than reporting a clean document. `lint` is reported and never
+    // enforced — the rule still runs.
     //
-    // It is a fact about the *rule set* rather than about this document, so the unchanged shortcut
-    // below reports it too (see there).
-    let lint: Vec<(String, String)> = jev_core::rules::lint(&set)
-        .into_iter()
-        .map(|message| ("lint".to_string(), message))
-        .collect();
-    skipped.extend(lint.iter().cloned());
-    // The same skip the language server reports for the same tree, from the same function: a
-    // repository with no rules that claim this file has nothing to run, and says so.
-    if let Some(skip) = inspections::nothing_to_run(&set, considered, &doc.path, &root) {
-        skipped.push(skip);
-    }
+    // They are facts about the *rule set* rather than about this document, so the unchanged
+    // shortcut below reports them too (see there).
+    let notes = inspections::pass_notes(&set, considered, &doc.path, &root);
+    skipped.extend(notes.iter().cloned());
 
     // One process, one command: the cache is always cold here, so a hit can only come from
     // something this invocation already did. Kept anyway, because the key is what a *rule edit*
@@ -534,7 +539,7 @@ fn inspect(
                         // The rules' own problems come first and for the same reason the server
                         // sends them here: they are true of the rule set whatever this file is,
                         // and this is the path a user who just edited a rule is on.
-                        let mut listed = lint.clone();
+                        let mut listed = notes.clone();
                         listed.push(("unchanged".to_string(), doc.path.clone()));
                         let mut body = envelope();
                         merge(
@@ -650,15 +655,97 @@ fn rules_root(path: &str) -> Option<String> {
             dir.to_string()
         }
     })?;
-    let mut here = std::path::PathBuf::from(&dir);
+    Some(find_root(std::path::Path::new(&dir)).to_string_lossy().into_owned())
+}
+
+/// The nearest ancestor of `start` holding `.git`, or `start` when there is none.
+///
+/// One walk, shared by the file case above and the no-file case below: what `rules_root` gets
+/// from the document's directory, `rules init` needs from the working directory, and two copies
+/// of this loop is two answers to "where is the repository" that can disagree.
+fn find_root(start: &std::path::Path) -> std::path::PathBuf {
+    let mut here = start.to_path_buf();
     loop {
         if here.join(".git").exists() {
-            return Some(here.to_string_lossy().into_owned());
+            return here;
         }
         match here.parent() {
             Some(parent) if parent != here => here = parent.to_path_buf(),
-            _ => return Some(dir),
+            _ => return start.to_path_buf(),
         }
+    }
+}
+
+/// Materialise the shipped rule set (PROTOCOL.md §11, `jev rules init`).
+///
+/// The shipped rules are defaults a user can read: this writes them into `.jev/rules/` (or
+/// `--dir`), one file per shipped file, in the format a repository's own rules already use. After
+/// that they are the repository's rules — editable, and shadowing the shipped rule they came
+/// from, so nothing is reported twice.
+///
+/// A file that is already there is never overwritten without `--force`, and the report names
+/// every one it left alone. That is a *refusal* (exit 2) when the file differs from the shipped
+/// rule: the bytes a user edited win over bytes this command would write, and saying so is the
+/// difference between a command that is safe to run twice and one that quietly undoes an edit.
+fn rules_init(dir: Option<&str>, force: bool, deps: &Deps) -> Outcome {
+    let target = match dir {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => std::env::current_dir()
+            .map(|cwd| find_root(&cwd))
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(rules::DIR),
+    };
+    let report = match rules::materialise(deps.builtin, &target, force) {
+        Ok(report) => report,
+        // The job cannot be done at all: not a directory, or a shipped set that cannot be
+        // written whole. Nothing was written, and nothing will be.
+        Err(why) => {
+            return Outcome {
+                code: EXIT_USAGE,
+                stdout: Some(one_line(&result_err("usage", &why))),
+                stderr: vec![format!("jev: {why}")],
+            }
+        }
+    };
+
+    let refused = report.is_refusal();
+    let message = if refused {
+        format!(
+            "{} file(s) already exist and differ from the shipped rule; \
+             pass --force to overwrite them: {}",
+            report.refused.len(),
+            report.refused.join(", ")
+        )
+    } else {
+        String::new()
+    };
+    let mut body = json!({
+        "schema": RESULT_SCHEMA,
+        "ok": !refused,
+        "dir": report.dir,
+        "written": report.written,
+        "unchanged": report.unchanged,
+        "refused": report.refused,
+    });
+    if refused {
+        if let Value::Object(map) = &mut body {
+            map.insert(
+                "error".to_string(),
+                json!({"code": "rules_exist", "message": message}),
+            );
+        }
+    }
+    Outcome {
+        // A refusal is a contract-level failure, not a crash: the exit code is PROTOCOL §11's
+        // `2`, the same code the CLI uses for anything it will not do, so a script that runs
+        // `rules init` before committing notices rather than proceeding on a half-set.
+        code: if refused { EXIT_USAGE } else { EXIT_OK },
+        stdout: Some(one_line(&body)),
+        stderr: if refused {
+            vec![format!("jev: {message}")]
+        } else {
+            Vec::new()
+        },
     }
 }
 
@@ -1278,6 +1365,7 @@ mod tests {
         cache: Cache,
         config: Config,
         files: Box<dyn Files>,
+        builtin: &'static [(&'static str, &'static str)],
     }
 
     /// A decision backend that answers every question with a fixed probability, and remembers
@@ -1329,7 +1417,18 @@ mod tests {
                 cache: Cache::new(8),
                 config: Config::default(),
                 files,
+                // No shipped rules: the CLI asserts that *the shipped set's* plumbing works in
+                // `shipped_rules_are_run_when_a_repository_has_none`, and every other test here
+                // is about this command's own contract, which a fixture rule set would only
+                // complicate.
+                builtin: &[],
             }
+        }
+
+        /// A shipped set, as `main` would pass the embedded one.
+        fn builtin(mut self, builtin: &'static [(&'static str, &'static str)]) -> Harness {
+            self.builtin = builtin;
+            self
         }
 
         fn decision(mut self, decision: Arc<ScriptedDecision>) -> Harness {
@@ -1360,6 +1459,7 @@ mod tests {
                 budget: &self.budget,
                 cache: &self.cache,
                 files: &*self.files,
+                builtin: self.builtin,
             }
         }
 
@@ -1841,6 +1941,7 @@ mod tests {
                     label: "cached finding".to_string(),
                     detail: "detail".to_string(),
                     verb_hint: Verb::Fix,
+                    rule_source: None,
                 }],
                 ..Default::default()
             },
@@ -2021,5 +2122,311 @@ mod tests {
         if let Some(parent) = std::path::Path::new(path).parent() {
             let _ = std::fs::remove_dir_all(parent);
         }
+    }
+
+    // ---- the shipped rule set -------------------------------------------------
+
+    /// A shipped set a test can see, in the document shape `default_rules/*.json` holds — so
+    /// these tests say nothing about whether the authoring sessions have landed their files.
+    const SHIPPED: &[(&str, &str)] = &[(
+        "code/shipped.json",
+        r#"{"schema":"jev.rules/1","rules":[{
+            "id":"shipped","title":"Shipped: unwrap","text":"A shipped convention.",
+            "severity":"warning","applies_to":["**/*.rs"],
+            "inspection":{"kind":"regex","pattern":"\\.unwrap\\(\\)"},
+            "judgement":{"question":"Is it a violation?","min_probability":0.75},
+            "verb_hint":"fix"}]}"#,
+    )];
+
+    /// A temp root with no `.jev/rules` at all.
+    fn bare_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("jev-cli-shipped-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_repository_with_no_rules_of_its_own_is_inspected_by_the_shipped_set() {
+        // The fresh-install case, through the command a person runs: before the shipped set
+        // existed this printed `no_rules` and no findings, which is indistinguishable from a
+        // broken install.
+        let dir = bare_dir("inspect");
+        let path = format!("{}/a.rs", dir.display());
+        std::fs::write(&path, UNWRAP_RS).unwrap();
+
+        let harness = Harness::new(Box::new(Scripted::new(&[])), Box::new(Fs))
+            .decision(ScriptedDecision::new(0.9))
+            .builtin(SHIPPED);
+        let out = harness.run(&["inspect", "--force", &path]);
+        assert_eq!(out.code, EXIT_OK, "{:?}", out.stderr);
+        let body = line(&out);
+        assert_eq!(body["considered"], 1);
+        let findings = body["findings"].as_array().unwrap();
+        assert_eq!(findings.len(), 1, "{body}");
+        assert_eq!(
+            findings[0]["rule_source"], "builtin",
+            "and the finding says where it came from: {body}"
+        );
+        let codes: Vec<&str> = body["skipped"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["code"].as_str().unwrap_or(""))
+            .collect();
+        assert!(codes.contains(&"default_rules"), "{body}");
+
+        // `rules.defaults = false` — through the settings the client sends, which is how a
+        // repository opts out — and the same tree has nothing to run again.
+        let off = Harness::new(Box::new(Scripted::new(&[])), Box::new(Fs))
+            .decision(ScriptedDecision::new(0.9))
+            .builtin(SHIPPED)
+            .config(Config::default().merged_with(Some(&serde_json::json!({
+                "rules": {"defaults": false}
+            }))));
+        let out = off.run(&["inspect", "--force", &path]);
+        assert_eq!(out.code, EXIT_OK, "{:?}", out.stderr);
+        let body = line(&out);
+        assert!(body["findings"].as_array().unwrap().is_empty(), "{body}");
+        assert_eq!(body["considered"], 0);
+        assert_eq!(body["skipped"][0]["code"], "no_rules", "{body}");
+        assert!(
+            body["skipped"][0]["detail"]
+                .as_str()
+                .unwrap()
+                .contains("rules.defaults = false"),
+            "{body}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rules_init_writes_the_shipped_set_out_and_never_clobbers_what_is_there() {
+        let dir = bare_dir("init");
+        let target = dir.join(".jev/rules");
+        let target_arg = target.to_str().unwrap().to_string();
+        let harness =
+            Harness::new(Box::new(Scripted::new(&[])), Box::new(Fs)).builtin(SHIPPED);
+
+        // `--dir` always, here: the default is the repository root of the working directory, and
+        // a test that ran without it would write into *this* checkout's `.jev/rules`.
+        let out = harness.run(&["rules", "init", "--dir", &target_arg]);
+        assert_eq!(out.code, EXIT_OK, "{:?}", out.stderr);
+        let body = line(&out);
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["dir"], target_arg.as_str());
+        assert_eq!(body["written"], serde_json::json!(["code-shipped.json"]));
+        assert_eq!(body["unchanged"], serde_json::json!([]));
+        assert_eq!(body["refused"], serde_json::json!([]));
+        let written = std::fs::read(target.join("code-shipped.json")).unwrap();
+        assert_eq!(written, SHIPPED[0].1.as_bytes(), "the file is the shipped rule");
+        let before = written.clone();
+
+        // A user edits it — the reason the command exists — and the next run leaves it alone and
+        // says so, with the bytes untouched.
+        std::fs::write(target.join("code-shipped.json"), b"{\"schema\":\"jev.rules/1\",\"rules\":[]}").unwrap();
+        let edited = std::fs::read(target.join("code-shipped.json")).unwrap();
+        let out = harness.run(&["rules", "init", "--dir", &target_arg]);
+        assert_eq!(out.code, EXIT_USAGE, "a refusal is not a success: {:?}", out.stderr);
+        let body = line(&out);
+        assert_eq!(body["ok"], false, "{body}");
+        assert_eq!(body["written"], serde_json::json!([]));
+        assert_eq!(
+            body["refused"], serde_json::json!(["code-shipped.json"]),
+            "and it names what it refused to touch: {body}"
+        );
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("code-shipped.json"));
+        assert!(out.stderr.iter().any(|l| l.contains("--force")), "{:?}", out.stderr);
+        assert_eq!(std::fs::read(target.join("code-shipped.json")).unwrap(), edited);
+
+        // `--force` is the only thing that replaces it, and a run after that is a no-op with a
+        // success code.
+        let out = harness.run(&["rules", "init", "--dir", &target_arg, "--force"]);
+        assert_eq!(out.code, EXIT_OK, "{:?}", out.stderr);
+        assert_eq!(line(&out)["written"], serde_json::json!(["code-shipped.json"]));
+        assert_eq!(std::fs::read(target.join("code-shipped.json")).unwrap(), before);
+        let out = harness.run(&["rules", "init", "--dir", &target_arg]);
+        assert_eq!(out.code, EXIT_OK, "{:?}", out.stderr);
+        let body = line(&out);
+        assert_eq!(body["written"], serde_json::json!([]));
+        assert_eq!(body["refused"], serde_json::json!([]));
+        assert_eq!(body["unchanged"], serde_json::json!(["code-shipped.json"]));
+        assert_eq!(std::fs::read(target.join("code-shipped.json")).unwrap(), before);
+
+        // `--dir` names somewhere else on its own, and nothing outside it is written.
+        let elsewhere = dir.join("copy");
+        let out = harness.run(&["rules", "init", "--dir", elsewhere.to_str().unwrap()]);
+        assert_eq!(out.code, EXIT_OK, "{:?}", out.stderr);
+        assert_eq!(line(&out)["written"], serde_json::json!(["code-shipped.json"]));
+        assert!(elsewhere.join("code-shipped.json").is_file());
+        let mut beside: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        beside.sort();
+        assert_eq!(beside, vec![".jev".to_string(), "copy".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The prose a repository with no rules of its own is inspected against, in the shipped set
+    /// this binary carries: a sentence that trips the shipped document rules. The expectations
+    /// below are *derived* from `builtin_files()` rather than written down, so a rule landing in
+    /// either group does not make this test wrong — nothing is pinned to a count the shipped set
+    /// owns.
+    const PROSE: &str = "# Notes\n\nIt is worth noting that this is obvious, etc.\n";
+
+    fn shipped_rules_claiming(path: &str) -> Vec<(String, String)> {
+        let loaded = jev_core::rules::load(
+            std::path::Path::new("/nonexistent-root"),
+            true,
+            jev_core::rules::builtin_files(),
+        );
+        assert!(
+            loaded.skipped.is_empty(),
+            "the shipped set must load: {:?}",
+            loaded.skipped
+        );
+        loaded
+            .rules
+            .iter()
+            .filter(|r| r.applies_to.iter().any(|p| gates::glob_match(p, path)))
+            .map(|r| (r.id.clone(), r.title.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn a_repository_with_no_rules_is_inspected_by_the_shipped_set_this_binary_carries() {
+        // The acceptance case, over the *real* embedded set: no `.jev/rules/` anywhere, a
+        // document the shipped rules are about, and the findings saying where they came from.
+        let root = bare_dir("real-shipped");
+        let path = format!("{}/notes.md", root.display());
+        std::fs::write(&path, PROSE).unwrap();
+        let shipped = shipped_rules_claiming("notes.md");
+        assert!(
+            !shipped.is_empty(),
+            "this build ships no rule about a document, so there is nothing to accept"
+        );
+
+        let harness = Harness::new(Box::new(Scripted::new(&[])), Box::new(Fs))
+            .decision(ScriptedDecision::new(0.9))
+            .builtin(jev_core::rules::builtin_files());
+        let out = harness.run(&["inspect", "--force", &path]);
+        assert_eq!(out.code, EXIT_OK, "{:?}", out.stderr);
+        let body = line(&out);
+        assert_eq!(
+            body["considered"], shipped.len(),
+            "every shipped rule that claims the file was loaded: {body}"
+        );
+        let findings = body["findings"].as_array().unwrap();
+        assert!(!findings.is_empty(), "and the prose found something to ask about: {body}");
+        for f in findings {
+            assert_eq!(f["rule_source"], "builtin", "named as the shipped set's: {body}");
+            let label = f["label"].as_str().unwrap_or("");
+            assert!(
+                shipped.iter().any(|(_, title)| title == label),
+                "the label is the title of a shipped rule that claims the file ({label}): {body}"
+            );
+        }
+        assert!(
+            body["skipped"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s["code"] == "default_rules"),
+            "and the pass says it is running on the shipped set: {body}"
+        );
+
+        // A repository rule with one shipped rule's id shadows exactly that one: one fewer rule
+        // considered, and the finding it produces is the repository's own.
+        let shadowed = shipped[0].0.clone();
+        let rules = root.join(".jev/rules");
+        std::fs::create_dir_all(&rules).unwrap();
+        std::fs::write(
+            rules.join("mine.json"),
+            format!(
+                r#"{{"schema":"jev.rules/1","rules":[{{"id":"{shadowed}",
+                    "title":"Ours: a note claim","text":"Our own convention.",
+                    "severity":"warning","applies_to":["**/*.md"],
+                    "inspection":{{"kind":"regex","pattern":"It is worth noting"}},
+                    "judgement":{{"question":"Is it a violation?","min_probability":0.75}},
+                    "verb_hint":"docs"}}]}}"#
+            ),
+        )
+        .unwrap();
+        let out = harness
+            .decision(ScriptedDecision::new(0.9))
+            .run(&["inspect", "--force", &path]);
+        assert_eq!(out.code, EXIT_OK, "{:?}", out.stderr);
+        let body = line(&out);
+        // The repository's rule replaces the shipped one rather than joining it, so the number
+        // of rules claiming the file is unchanged — a merge that kept both would count 5 — and
+        // the shipped rule's title appears nowhere, which is what "the shadowed one is not also
+        // reported" looks like from outside.
+        assert_eq!(
+            body["considered"],
+            shipped.len(),
+            "one shipped rule was replaced, not added to: {body}"
+        );
+        let findings = body["findings"].as_array().unwrap();
+        assert!(
+            findings
+                .iter()
+                .any(|f| f["label"] == "Ours: a note claim" && f["rule_source"] == "repository"),
+            "and the repository's rule is what ran for that id: {body}"
+        );
+        assert!(
+            !findings
+                .iter()
+                .any(|f| Some(f["label"].as_str().unwrap_or("")) == Some(shipped[0].1.as_str())),
+            "and the shipped rule it shadowed reported nothing: {body}"
+        );
+        assert!(
+            !body["skipped"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s["code"] == "default_rules"),
+            "a repository with rules of its own is not told about the shipped set: {body}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rules_init_writes_what_the_rules_pass_then_reads() {
+        // The command's whole purpose: after it, the rule a user can see is the rule that runs,
+        // and it is theirs — which means it shadows the shipped rule rather than doubling it.
+        let dir = bare_dir("roundtrip");
+        let path = format!("{}/a.rs", dir.display());
+        std::fs::write(&path, UNWRAP_RS).unwrap();
+        let target = dir.join(".jev/rules");
+        let harness =
+            Harness::new(Box::new(Scripted::new(&[])), Box::new(Fs)).builtin(SHIPPED);
+        assert_eq!(
+            harness
+                .run(&["rules", "init", "--dir", target.to_str().unwrap()])
+                .code,
+            EXIT_OK
+        );
+
+        let out = harness
+            .decision(ScriptedDecision::new(0.9))
+            .run(&["inspect", "--force", &path]);
+        assert_eq!(out.code, EXIT_OK, "{:?}", out.stderr);
+        let body = line(&out);
+        assert_eq!(body["considered"], 1, "{body}");
+        assert_eq!(
+            body["findings"].as_array().unwrap().len(),
+            1,
+            "one finding, not two: {body}"
+        );
+        assert_eq!(
+            body["findings"][0]["rule_source"], "repository",
+            "the file on disk is what ran: {body}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

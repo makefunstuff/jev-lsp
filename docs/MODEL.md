@@ -91,8 +91,10 @@ is not compared. It does not parse the result, and nothing in `crates/` does
 **The ambient row is the one that changed.** With rules on — the default — the pass that runs on
 save asks the `decide` tier one question per candidate and never touches a chat tier; the chat
 review runs only when it is asked for (`jev.review`) or when rules are off. There is no
-fallback from one to the other: a repository with no rules gets no ambient findings and the pass
-says `no_rules` (PROTOCOL §12). The generative tiers are what only they can do: edits, plans,
+fallback from one to the other: the ambient pass runs the repository's rules plus, with
+`rules.defaults` on (the default), the set the binary ships, and `jev status`'s `loaded` counts
+both sources together; with nothing to run, the pass says `no_rules` (PROTOCOL §12). The
+generative tiers are what only they can do: edits, plans,
 explanations. Their findings are labelled `review` where the rules pass's are `rules`
 (PROTOCOL §9).
 

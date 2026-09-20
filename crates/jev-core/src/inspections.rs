@@ -128,39 +128,83 @@ pub fn select<'a>(
     (considered, asked)
 }
 
-/// The skip a pass owes a document when it has nothing to run, if that is the case.
+/// Everything a pass owes a reader about the rule set it was run with, in the one list both
+/// front ends send as `skipped` (PROTOCOL §6).
 ///
-/// This is the case the ambient demotion creates: rules are the ambient path, and a repository
-/// that has written none gets no ambient findings — the chat review does not step in to fill the
-/// gap. What it must not be is *silence*: "no findings" and "nothing was inspected" look
-/// identical from a sign column, and only one of them is a bug.
+/// Three kinds, one implementation:
+///
+/// * `("lint", <message>)` — everything wrong with the rules *document* (`rules::lint`). A rule
+///   whose pattern does not compile finds no candidates and is inert in silence otherwise, which
+///   is the failure mode lint exists for.
+/// * `("default_rules", <sentence>)` — the pass is running on the shipped set because this
+///   repository has written no rules of its own. Without this, a fresh install and a broken one
+///   read the same: findings from a file nobody can open, with nothing saying where they came
+///   from or how to switch them off.
+/// * `("no_rules", <sentence>)` — the pass had nothing to run: no rules at all, or none that
+///   claims this document. This is the case the ambient demotion creates, and what it must not
+///   be is *silence*: "no findings" and "nothing was inspected" look identical from a sign
+///   column, and only one of them is a bug.
 ///
 /// It lives here, beside the pass it describes, so the language server and `jev inspect` cannot
 /// drift: one implementation, called by both shells. A front end that reports nothing while the
 /// other reports the reason is a parity failure, and this function exists because that happened.
-pub fn nothing_to_run(
+pub fn pass_notes(
     rules: &RuleSet,
     considered: usize,
     doc_path: &str,
     root: &str,
-) -> Option<(String, String)> {
+) -> Vec<(String, String)> {
+    let mut notes: Vec<(String, String)> = rules::lint(rules)
+        .into_iter()
+        .map(|message| ("lint".to_string(), message))
+        .collect();
+
     let dir = std::path::Path::new(root).join(rules::DIR).display().to_string();
+    let (repo, shipped) = rules.counts();
+
     if rules.rules.is_empty() {
-        return Some((
+        // "There is nothing to run" has two causes now, and they send a reader in opposite
+        // directions: this build ships no rules at all, or it ships them and this repository
+        // turned them off. Saying the first when the second is true would send someone looking
+        // for a missing file that is right there.
+        notes.push((
             "no_rules".to_string(),
-            format!("no rules loaded from {dir} — the ambient pass has nothing to run"),
+            if rules.shipped > 0 {
+                format!(
+                    "no rules loaded from {dir}, and the {} shipped rule file(s) are switched off (rules.defaults = false) — the ambient pass has nothing to run",
+                    rules.shipped
+                )
+            } else {
+                format!(
+                    "no rules loaded from {dir} and none shipped in this build — the ambient pass has nothing to run"
+                )
+            },
         ));
+        return notes;
     }
-    if considered == 0 {
-        return Some((
-            "no_rules".to_string(),
+
+    // The rule files this repository does *not* have, said out loud. A pass that ran is never
+    // silent about where its rules came from.
+    if repo == 0 && shipped > 0 {
+        notes.push((
+            "default_rules".to_string(),
             format!(
-                "no rule applies to {doc_path} ({} loaded from {dir}) — the ambient pass has nothing to run",
-                rules.rules.len()
+                "{shipped} shipped rule(s) are carrying this pass; {dir} holds none of this \
+                 repository's own — `jev rules init` writes them out to read and edit, and \
+                 `rules.defaults = false` turns them off"
             ),
         ));
     }
-    None
+
+    if considered == 0 {
+        notes.push((
+            "no_rules".to_string(),
+            format!(
+                "no rule applies to {doc_path} ({repo} from {dir}, {shipped} shipped) — the ambient pass has nothing to run"
+            ),
+        ));
+    }
+    notes
 }
 
 /// The request the whole candidate set is asked in. One call, one document.
@@ -239,6 +283,10 @@ pub fn resolve(
             label: a.rule.title.clone(),
             detail: Some(detail),
             verb_hint: a.rule.verb_hint.clone(),
+            // Which rule set this came from rides onto the finding: a shipped default and a
+            // rule the repository wrote are turned off in different places, and a reader who
+            // cannot tell which they are looking at can do neither.
+            rule_source: Some(a.rule.source),
         });
     }
     findings::build(text, &raw, profile, max_findings)
@@ -365,6 +413,7 @@ mod tests {
             },
             verb_hint: None,
             docs: None,
+            source: crate::types::RuleSource::Repository,
         }
     }
 
@@ -461,13 +510,28 @@ mod tests {
     }
 
     #[test]
-    fn nothing_to_run_names_the_two_ways_a_pass_can_have_nothing_to_do() {
+    fn pass_notes_name_the_three_ways_a_pass_reports_itself() {
+        // Nothing at all: no files, and this build ships none either.
         let empty = RuleSet::default();
-        let none = nothing_to_run(&empty, 0, "/w/a.md", "/w").unwrap();
-        assert_eq!(none.0, "no_rules");
-        assert!(none.1.contains("no rules loaded from /w/.jev/rules"), "{}", none.1);
-        assert!(none.1.contains("nothing to run"), "{}", none.1);
+        let none = pass_notes(&empty, 0, "/w/a.md", "/w");
+        assert_eq!(none.len(), 1, "{none:?}");
+        assert_eq!(none[0].0, "no_rules");
+        assert!(none[0].1.contains("no rules loaded from /w/.jev/rules"), "{}", none[0].1);
+        assert!(none[0].1.contains("none shipped in this build"), "{}", none[0].1);
+        assert!(none[0].1.contains("nothing to run"), "{}", none[0].1);
 
+        // The shipped set exists and was switched off: a different sentence, because the reader
+        // has a file to find rather than nothing to find.
+        let off = RuleSet {
+            shipped: 3,
+            ..Default::default()
+        };
+        let switched = pass_notes(&off, 0, "/w/a.md", "/w");
+        assert_eq!(switched[0].0, "no_rules");
+        assert!(switched[0].1.contains("switched off"), "{}", switched[0].1);
+        assert!(!switched[0].1.contains("none shipped"), "{}", switched[0].1);
+
+        // Rules exist and none claims the file: the same code, a different sentence.
         let set = RuleSet {
             rules: vec![rule(Inspection::Regex {
                 pattern: "x".into(),
@@ -475,14 +539,109 @@ mod tests {
             })],
             ..Default::default()
         };
-        let unclaimed = nothing_to_run(&set, 0, "/w/a.md", "/w").unwrap();
-        assert_eq!(unclaimed.0, "no_rules", "the same code, a different sentence");
-        assert!(unclaimed.1.contains("no rule applies to /w/a.md"), "{}", unclaimed.1);
-        assert!(unclaimed.1.contains("nothing to run"), "{}", unclaimed.1);
+        let unclaimed = pass_notes(&set, 0, "/w/a.md", "/w");
+        assert_eq!(unclaimed.len(), 1, "{unclaimed:?}");
+        assert_eq!(unclaimed[0].0, "no_rules", "the same code, a different sentence");
+        assert!(unclaimed[0].1.contains("no rule applies to /w/a.md"), "{}", unclaimed[0].1);
+        assert!(unclaimed[0].1.contains("nothing to run"), "{}", unclaimed[0].1);
         assert!(
-            nothing_to_run(&set, 1, "/w/a.md", "/w").is_none(),
+            pass_notes(&set, 1, "/w/a.md", "/w").is_empty(),
             "a rule that claims the file means there is something to run"
         );
+
+        // The shipped set is carrying the pass: the reader is told where the rules came from,
+        // and how to get them onto disk. This is the note that makes a fresh install and a
+        // broken one different answers.
+        let shipped_only = RuleSet {
+            rules: vec![Rule {
+                source: crate::types::RuleSource::Builtin,
+                ..rule(Inspection::Regex {
+                    pattern: "x".into(),
+                    max_matches: None,
+                })
+            }],
+            shipped: 1,
+            ..Default::default()
+        };
+        let carried = pass_notes(&shipped_only, 1, "/w/a.rs", "/w");
+        assert_eq!(carried.len(), 1, "{carried:?}");
+        assert_eq!(carried[0].0, "default_rules");
+        assert!(carried[0].1.contains("1 shipped rule(s)"), "{}", carried[0].1);
+        assert!(carried[0].1.contains("jev rules init"), "{}", carried[0].1);
+        assert!(!carried[0].1.contains("no rule applies"), "{}", carried[0].1);
+
+        // A repository that has written rules of its own is not told about the shipped ones.
+        assert!(pass_notes(&set, 1, "/w/a.rs", "/w").is_empty(), "{:?}", set.counts());
+    }
+
+    #[test]
+    fn a_repository_with_no_rule_files_gets_its_findings_from_the_shipped_set() {
+        // End to end through the rules pass, over the shipped-but-absent-from-disk input: no
+        // `.jev/rules/` anywhere, so the only rules that can run are the shipped ones.
+        let root = std::env::temp_dir().join(format!("jev-inspections-shipped-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let shipped: &[(&str, &str)] = &[(
+            "code/shipped.json",
+            r#"{"schema":"jev.rules/1","rules":[{"id":"shipped","title":"Shipped rule",
+                "text":"A shipped convention.","severity":"warning","applies_to":["**/*.rs"],
+                "inspection":{"kind":"regex","pattern":"\\.unwrap\\(\\)"},
+                "judgement":{"question":"Is it a violation?","criteria":{"true":"yes","false":"no"},
+                              "min_probability":0.75},
+                "verb_hint":"fix"}]}"#,
+        )];
+
+        let cfg = crate::config::Config::default();
+        let set = crate::rules::load(&root, cfg.rules.defaults, shipped);
+        let (considered, asked) = select(&set.rules, "src/a.rs", SRC, 8);
+        assert_eq!((considered, asked.len()), (1, 2), "{:?}", set.skipped);
+        assert!(pass_notes(&set, considered, "/w/src/a.rs", "/w")
+            .iter()
+            .any(|(c, _)| c == "default_rules"));
+
+        let request = request("/w/src/a.rs", SRC, &asked, &cfg.rules);
+        assert_eq!(request.questions.len(), 2, "one question per candidate");
+        let response = crate::decision::DecisionResponse {
+            answers: ["shipped#1", "shipped#2"]
+                .iter()
+                .map(|id| crate::decision::DecisionAnswer {
+                    id: id.to_string(),
+                    value: crate::decision::DecisionValue::Bool(true),
+                    probability: Some(0.9),
+                    reason: None,
+                })
+                .collect(),
+            input_tokens: 0,
+            output_tokens: 0,
+        };
+        let built = resolve(
+            SRC,
+            &asked,
+            &response,
+            &crate::lang::profile("rust"),
+            cfg.noise.max_visible_findings,
+        );
+        assert_eq!(built.findings.len(), 2, "{:?}", built.findings);
+        assert!(built
+            .findings
+            .iter()
+            .all(|f| f.rule_source == Some(crate::types::RuleSource::Builtin)));
+
+        // And the setting, through the config path a client's `workspace/configuration` payload
+        // takes, is the only thing between that and nothing at all.
+        let off = cfg.merged_with(Some(&serde_json::json!({"rules": {"defaults": false}})));
+        let set = crate::rules::load(&root, off.rules.defaults, shipped);
+        assert!(set.rules.is_empty());
+        let (considered, asked) = select(&set.rules, "src/a.rs", SRC, 8);
+        assert_eq!((considered, asked.len()), (0, 0));
+        assert_eq!(
+            pass_notes(&set, 0, "/w/src/a.rs", "/w")
+                .iter()
+                .map(|(c, _)| c.as_str())
+                .collect::<Vec<_>>(),
+            vec!["no_rules"]
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

@@ -178,7 +178,18 @@ def main():
     server = Lsp([args.bin, "--stdio"], env)
     # The harness makes many decision calls in a few seconds; the shipped per-minute ceiling is
     # sized for a person typing, and a refusal here would be the harness measuring itself.
-    server.settings = {"budget": {"max_calls_per_min": 500, "max_calls_per_hour": 2000}}
+    #
+    # `rules.defaults` is off for these fixtures on purpose: every count below ("considered == 2",
+    # "loaded == 3") is about the rules *this* fixture wrote, and the shipped set is a second
+    # source whose contents this file cannot know — a shipped rule that claims `**/*.rs` would
+    # make every one of those counts wrong without anything being broken. What the shipped set
+    # does when a repository has written nothing is asserted in the crate tests
+    # (`jev-lsp::engine::tests::a_repository_with_no_rules_of_its_own_is_inspected_by_the_shipped_set`,
+    # `jev::run::tests::...`), where the shipped input is a fixture of the test's own.
+    server.settings = {
+        "budget": {"max_calls_per_min": 500, "max_calls_per_hour": 2000},
+        "rules": {"defaults": False},
+    }
     uri = "file://" + fixture
 
     def inspect(path, force=True, timeout=30):

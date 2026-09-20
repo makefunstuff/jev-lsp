@@ -508,6 +508,15 @@ re-asking about files nobody touched; then one budget permit taken *before* one 
 for the whole document. No answer is invented: a question the response does not mention
 publishes nothing.
 
+**The rules' hash is taken over the merged set** — the repository's rules and the shipped ones
+(§9) — so the shipped set enters the cache key through it, and there is no separate version
+string to keep in step. Editing a shipped rule, adding one, or turning the whole set off with
+`rules.defaults` changes the hash and no conclusion taken under the previous set is served. A
+shipped rule the repository shadows is not in the hash, because it is not in the set that ran.
+The key also carries `noise.max_visible_findings`: the stored findings are the *capped* set
+(`findings::build`), so widening the cap is a different question and was, until 2026-09-20, a
+cache hit that answered it with the old cap's findings.
+
 ---
 
 ## 6. Commands
@@ -568,22 +577,32 @@ more than one is open. `force` skips the changed-set check: **without it a docum
 not report as changed is not inspected at all**, which is the whole reason the flag exists. The
 result carries what the pass did, not only what it found:
 
-- `considered` — how many loaded rules claim this file (`applies_to`, §9);
+- `considered` — how many loaded rules claim this file (`applies_to`, §9) — the repository's and
+  the shipped ones together;
 - `candidates` — how many places their inspections named;
 - `findings` — the same shape `jev.review` prints: `{id, line, start_col, end_col, severity,
-  label, detail, verb}`, with `label` the rule's title and `detail` its prose plus the reason
-  the decision gave and the probability it cleared;
+  label, detail, verb, rule_source}`, with `label` the rule's title and `detail` its prose plus
+  the reason the decision gave and the probability it cleared. `rule_source` is `"repository"`
+  for a rule in `.jev/rules/`, `"builtin"` for one shipped in the binary, and `null` on a
+  finding no rule stands behind (the review's, §9). It is not `data.source`: that names the
+  *pass*, this names the *rule set*, and a reader needs both — one says what ran, the other says
+  where to go to change it;
 - `skipped` — a list of `{code, detail}`: a rule file that could not be read (the code is its
-  path), `("unchanged", <path>)` for a document the changed set does not name,
-  `("unlocatable_anchor", <n> finding(s) …)` for an answer whose anchor occurs zero or several
-  times in the text — the same rule the review pathway applies (§4) — and `("no_rules",
-  <sentence>)` when the pass had nothing to run.
+  path, and a shipped one is named `default_rules/<group>/<file>.json`), `("lint", <message>)`
+  for a rule that cannot work, `("unchanged", <path>)` for a document the changed set does not
+  name, `("unlocatable_anchor", <n> finding(s) …)` for an answer whose anchor occurs zero or
+  several times in the text — the same rule the review pathway applies (§4) —
+  `("default_rules", <sentence>)` when the pass is running on the shipped set because this
+  repository has written no rules of its own, and `("no_rules", <sentence>)` when the pass had
+  nothing to run.
 
-**There is no fallback.** A repository with no rules gets no ambient findings, and the pass
-*says so* (`no_rules`) rather than reporting a clean document — "nothing was inspected" and
-"nothing was wrong" must never look the same (§12). The failure codes are the ordinary ones:
-`over_budget` for a refused permit, `model_error` for a decision call that did not answer,
-`contract_error` for an answer that arrived and could not be read, `skipped` for a gate.
+**There is no fallback.** The rules are data, and always were; what changed is that they now
+have a *shipped* source as well as the repository's own (§9). Nothing generative steps in: a
+repository that has switched the shipped set off and written no rules of its own gets no ambient
+findings, and the pass *says so* (`no_rules`) rather than reporting a clean document — "nothing
+was inspected" and "nothing was wrong" must never look the same (§12). The failure codes are the
+ordinary ones: `over_budget` for a refused permit, `model_error` for a decision call that did not
+answer, `contract_error` for an answer that arrived and could not be read, `skipped` for a gate.
 
 ### 6.1 Error codes
 
@@ -714,10 +733,33 @@ is applied when the document has not moved, and is refused by the client when it
 - Publish is reserved for changes the server made; otherwise findings are served by pull,
   refreshed by `workspace/diagnostic/refresh` `[R5]`.
 
+**Two sources, and the repository's own wins.** A rule comes from one of exactly two places,
+and every finding says which (`rule_source`, §6):
+
+- **the repository's** — `.jev/rules/<id>.json`, read in path order, relative to the workspace
+  root (or, with no root, the document's own directory);
+- **the shipped set** — the defaults embedded in the binary from `default_rules/<group>/*.json`,
+  applied when `rules.defaults` is true (the default, §10). They are ordinary rule files in the
+  same format, and `jev rules init` writes them out so a user can read and edit them (§11).
+
+**Precedence: the repository's file shadows the shipped rule with the same `id`.** A shipped
+rule is a default, not an override: where the repository has written a file for that `id`, that
+file is the one that runs, and the shipped rule is dropped rather than run beside it — two rules
+with one id would report the same line twice under one label, and the reader could not tell
+which of them they had calibrated. That is a rule about *sources only*: **within one source**
+duplicate ids are all kept and all run, and `rules::lint` reports "duplicate rule id" for them,
+which is the loader's behaviour unchanged. Nothing about a shadowed shipped rule is reported as a
+skip, because nothing was skipped. The scope of this section is the *rules*; there is still no
+generative fallback (§12).
+
+**The shipped set is an input to every rules conclusion.** The rules' hash is taken over the
+merged set, and the cache key carries it (§5), so a conclusion taken under one shipped set is
+never served under another — and a repository that shadows a shipped rule is unaffected by that
+rule changing. `rules.defaults: false` is the setting to run the repository's rules alone.
+
 **Where ambient findings come from: the repository, not the model's taste.** The ambient pass
 is the *rules* pass (`docs/MODEL.md` §2, `docs/UX.md` §1.1), and what it runs is data the
-repository owns — `.jev/rules/*.json`, read in path order, relative to the workspace root (or,
-with no root, the document's own directory):
+repository owns:
 
 ```jsonc
 { "schema": "jev.rules/1",
@@ -749,8 +791,10 @@ pass through, so ids, ordering, dismissal and the noise cap behave identically e
 
 A rule file that cannot be read, cannot be parsed, or does not carry
 `"schema": "jev.rules/1"` is skipped **with a stated reason** and the rest still load; so is a
-candidate whose anchor is not uniquely locatable. A repository that has written no rules gets
-no ambient findings (§6, `jev.inspect`), and that is the whole of the fallback story — see §12.
+candidate whose anchor is not uniquely locatable. A repository that has written no rules of its
+own is inspected with the shipped set and is *told so* (`default_rules`, §6, `jev.inspect`); with
+the shipped set switched off as well it gets no ambient findings and hears `no_rules`. Neither
+of those is silence, and neither is a generative fallback — see §12.
 
 ---
 
@@ -776,8 +820,8 @@ repository's rules document (§9), and no environment variables beyond the model
     "max_scope_lines": 400,
     "ignore": ["**/node_modules/**", "**/*.min.js"]
   },
-  "rules": { "enabled": true, "max_candidates_per_rule": 8, "max_state_lines": 200,
-             "max_state_bytes": 16000, "max_files_per_pass": 8 },
+  "rules": { "enabled": true, "defaults": true, "max_candidates_per_rule": 8,
+             "max_state_lines": 200, "max_state_bytes": 16000, "max_files_per_pass": 8 },
   "noise": { "max_visible_findings": 5, "suppress_after_dismissals": 2 },
   "log": "warn" }
 ```
@@ -811,10 +855,14 @@ variables name different tiers' keys, because the tiers can sit behind different
 
 **`rules` is the ambient pass.** With `rules.enabled` true — the default — the ambient pass is
 the rules pass, and the chat review runs only when it is asked for explicitly (`jev.review`,
-the "Review this" action) or when rules are off. The keys bound the work: `max_candidates_per_rule`
+the "Review this" action) or when rules are off. `rules.defaults` (default `true`) adds the set
+shipped inside the binary to the repository's own, with `.jev/rules/<id>.json` shadowing a
+shipped rule of the same id (§9); `false` is the behaviour that predates the shipped set
+exactly. The keys bound the work: `max_candidates_per_rule`
 is the most questions one regex may put to the decision, `max_state_lines` and
 `max_state_bytes` the most of the file it is shown, and `max_files_per_pass` how many documents
-one idle pass covers. What it declines to look at is reported, never dropped quietly (§9).
+one idle pass covers. What it declines to look at is reported, never dropped quietly (§9), and
+so is the fact that the shipped set is carrying a pass (`default_rules`, §6).
 
 **Ten declared settings are not read by this implementation**, and each is named here so a
 reader does not configure an effect that never happens. They are in the schema because a client
@@ -851,14 +899,33 @@ jev review <path>                          # findings, JSON
 jev action --verb <verb> <path>[:<range>]  # proposed edit, JSON (never applied)
 jev plan --goal <text> <path>              # plan artifact
 jev inspect <path> [--force]               # the repository's rules, run over <path>
+jev rules init [--dir <dir>] [--force]     # write the shipped rule set out to read and edit
 jev status                                 # budget and queue
 ```
 
 Flags: `--verb <verb>` (action, required), `--goal <text>` (plan, required), `--force`
-(inspect: run the rules even for a document git reports as unchanged), `--base-url <url>`
+(inspect: run the rules even for a document git reports as unchanged; rules init: overwrite rule
+files that are already there), `--dir <dir>` (rules init: where to write; default
+`<root>/.jev/rules`, where `<root>` is the nearest ancestor of the working directory holding
+`.git`), `--base-url <url>`
 and `--model <name>` (override every tier, the decision tier included; `JEV_BASE_URL`,
 `JEV_MODEL` and `JEV_REVIEW_MODEL` do the same for the chat tiers), `--max-tokens <n>`;
 `-h`/`--help`, `-V`/`--version`. Flags may be written `--k v` or `--k=v`.
+
+**`jev rules init` materialises the shipped set** (§9): one file per shipped file, in the format
+`.jev/rules/*.json` already uses, so that what a repository is inspected with is a file it can
+open. Each is written under **its group and its name** — `default_rules/prose/lists-end-in-etc.json`
+becomes `.jev/rules/prose-lists-end-in-etc.json` — because the loader reads one flat directory
+and the groups are authored in parallel by people who cannot see each other's file names; a name
+carrying its group is the thing that makes that coordination unnecessary, and it puts the
+provenance on disk that `rule_source` reports about a finding. Two files *within* one group with
+the same basename are still refused (one would be written over the other) and nothing is written
+at all when that happens. It is idempotent and non-clobbering — a file that is already there is
+never replaced without `--force`, and the result names every file it left alone, split into
+`unchanged` (already byte-identical to the shipped rule) and `refused` (different: the user's
+bytes won). It writes nothing outside the target directory, and it calls no model. A refusal
+exits `2` with the refused names in the result and on stderr; a run that writes nothing because
+everything already matched exits `0`. `rules` takes no other subcommand.
 
 - stdin: additional context (diff, buffer text) when the path is `-`.
 - stdout: exactly one artifact or result, JSON, one line, no decoration.
@@ -873,7 +940,7 @@ everything the pass skipped — from the same code, and writes nothing to the fi
 |---|---|
 | 0 | Success, artifact on stdout |
 | 1 | Transport or model failure |
-| 2 | Usage error or contract violation (bad verb, unparsable range) |
+| 2 | Usage error or contract violation (bad verb, unparsable range; a `rules init` that would have overwritten a file the user edited) |
 | 3 | Budget exhausted |
 | 4 | Stale target — the document changed since the request was built |
 
@@ -910,9 +977,15 @@ Recorded so the refusals are not relitigated:
 - **A fallback from the rules pass to the chat review.** The ambient pass is the rules pass or
   nothing: a generative review on every save costs thousands of tokens where a decision costs
   dozens, and when it found nothing there would be no way to tell a clean file from a pass that
-  never ran. A repository with no rules gets no ambient findings and `jev.inspect` says
-  `no_rules`; if a user wants the review tier's opinion they ask for it, and the finding says
-  which pass it came from (`data.source`, §9).
+  never ran. **This still holds now that the rules have a shipped source** (2026-09-20, §9): the
+  defaults are data, written by hand, in the same format the repository's own rules use — no
+  model writes a rule, nothing is generated at run time, and a repository can read them
+  (`jev rules init`), shadow them by id, or switch them off (`rules.defaults = false`), after
+  which a repository with no rules gets no ambient findings and `jev.inspect` says `no_rules`.
+  What the shipped source changes is only that "no rule files of your own" no longer means
+  "nothing to inspect with": the pass names its source (`default_rules` / `rule_source`) so that
+  a fresh install and a broken one are different answers. A user who wants the review tier's
+  opinion asks for it, and the finding says which pass it came from (`data.source`, §9).
 - **A second source of truth for document state.** The client owns text; the server's
   cache is keyed by content hash and evictable at any time.
 
@@ -940,3 +1013,4 @@ Recorded so the refusals are not relitigated:
 | 2026-09-20 | **§3.4.1 now states what a client without the plugin gets from a lens, and §2's completeness claim is checked against a live `initialize`.** The `jev.plugin.` namespace in a lens command is deliberate (the plugin dispatches it in-process; §7 leaves the server no way to open the buffer an explanation goes in), but the consequence for a client that is not the plugin was left implicit. It is now written down and measured: such a client runs the lens through its stock path, the command reaches the server as `workspace/executeCommand`, and the answer is `{"ok": false, "error": {"code": "not_implemented", "message": "jev.plugin.pick is not implemented in this version"}}` — an inert lens with a structured refusal, not silence. Recorded because a reader who finds `jev.plugin.*` in the server's source deserves the reason and the cost. A rule in `.jev/rules/` (`no-client-namespace-in-a-server-id`) fires on this line; whether the ids change or the rule is narrowed is an open item (`STATUS.md`, open questions), and this row records the fact rather than the choice. |
 | 2026-09-20 | **§10 overstated what it implements: ten declared settings have no reader.** §10 named two unread keys (`triggers.severity_floor`, `noise.suppress_after_dismissals`); a sweep of `crates/` finds eight settings and two override fields that no code reads — `ambient.code_lens`, `ambient.inlay_hints`, `auto_apply.fix`, `auto_apply.fixAll`, `budget.timeout_ms`, `log`, `triggers.severity_floor`, `noise.suppress_after_dismissals`, and `languages.overrides.<lang>.tier` / `.prompt` (`config.rs::verbs_for` reads only `.verbs`, `crates/jev-core/src/config.rs:477-483`). Each is in the schema only so a payload naming it deserialises. §10 now lists all ten with their defaults and what each appears to promise; `docs/LANGUAGE.md` §7 stops showing `tier` and `prompt` as working settings, `docs/GUIDE.md` §3 stops presenting the unread keys as settings a user turns, and `docs/MODEL.md` §2 and `docs/UX.md` §4 stop claiming they act. Whether to implement each setting or delete the key with its paragraph is an open item (`STATUS.md`, open questions). |
 | 2026-09-20 | **§3.5's "the `end` arrives before the response" was the transport's ordering, and the row that asserted it was a coin flip.** That parenthetical was `verify/lsp_client.py`'s own reading of "valid only until the response to that request is sent" (`[R12]`): the command keeps the lifetime in the order it controls — the `end` is awaited into the transport before the command body returns — but `tower-lsp` writes the two through two arms of one `futures::stream::select` (`transport.rs`), polled round-robin, so which of the server's own two messages is written first is the scheduler's. Measured on one unchanged binary: `jev.status` inverted in 4/50 runs (−36.1 µs … +29.9 µs), with the CI red at −21 µs and a green run the same day at +29 µs, and step 10's paths sat 5 µs from flipping. §3.5 now states what step 9 and step 10 assert — one `begin`, one `end`, and nothing under the token after it, read after a settle window — and that the order of those two is not the command's to fix; `--selftest` gained the `progress_after_end` defect so the replacement can fail. |
+| 2026-09-20 | **The rules have a shipped source, and missing rule files are no longer silence.** A repository with no `.jev/rules/` produced no ambient findings at all — `no_rules` was the whole answer — so a fresh install and a broken one were indistinguishable, and this project's own conventions published nothing on the repository they were written for. §9 now names **two sources**: the repository's files and a set embedded in the binary from `crates/jev-core/default_rules/<group>/*.json` (globbed by `build.rs`; an empty tree builds and behaves exactly as before). The repository's file **shadows** the shipped rule with the same `id`, and within one source duplicate ids are still kept and still linted. `rules.defaults` (default `true`, §10) turns the shipped set off. `jev rules init [--dir <dir>] [--force]` (§11) writes it into `.jev/rules/` so a rule can be read before it is believed — each file named for its group (`prose-lists-end-in-etc.json`), so two groups authored in parallel cannot collide, and idempotent, non-clobbering, exit `2` when it refuses to overwrite a file the user edited. Every finding now carries `rule_source` (`repository` | `builtin` | `null`, §6), because a finding you cannot trace to a file you can open is one you cannot turn off; `:Jev inspect` and `jev inspect` print it, and a pass carried by the shipped set says so (`default_rules`). §5's key is taken over the merged set, so the shipped rules are an input to every rules conclusion — and `noise.max_visible_findings`, which was missing from it, is in it now. §12 keeps its refusal: no generative fallback, and the defaults are hand-written data an editor can open. |

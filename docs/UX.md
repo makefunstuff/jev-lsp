@@ -65,7 +65,10 @@ complete answer, the first 3 of which are prefill and reasoning.
 
 ### 1.1 The rules pass — where an ambient finding comes from
 
-The ambient pass is the repository's *rules* (PROTOCOL §9). A rule is a convention in prose
+The ambient pass is the repository's *rules* (PROTOCOL §9), and it may run rules the repository
+did not write: unless `rules.defaults` is `false`, the set shipped in the binary runs alongside
+`.jev/rules/`, and each finding says which source it came from (` [builtin]` / ` [repository]`,
+printed by `:Jev inspect` after the label). A rule is a convention in prose
 plus the inspection that names the places it might be about; the decision tier answers one
 question about each of those places, and only a `true` above the rule's own floor becomes a
 finding:

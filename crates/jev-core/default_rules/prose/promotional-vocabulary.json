@@ -1,0 +1,27 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "promotional-vocabulary",
+      "title": "Promotional word where a fact belongs",
+      "text": "A word earns its place by carrying a fact. `seamless`, `powerful`, `blazing`, `cutting-edge`, `enterprise-grade`, `effortless` praise the work and tell the reader nothing they can check, and `Simply run …` in front of a step is the same move. `robust` and `unlock` are not in the list, by cause: one names a method (a robust z-score), the other a lock, a session or a vesting schedule. Say what the thing does, with the number that shows it. Counts the document's own voice only: a quoted example, a ban list, or another project's description cited in the tree is not this document's prose.",
+      "severity": "warning",
+      "applies_to": [
+        "**/*.md"
+      ],
+      "inspection": {
+        "kind": "regex",
+        "pattern": "(?mi)(?:^|[ \\t])(?:seamless(?:ly)?|effortless(?:ly)?|blazing(?:ly)?|cutting[- ]edge|state[- ]of[- ]the[- ]art|enterprise[- ]grade|world[- ]class|best[- ]in[- ]class|industry[- ]leading|frictionless|turnkey|game[- ]chang\\w+|supercharg\\w+|unleash\\w+|revolutioniz\\w+|delightful|powerful|simply (?:run|use|add|set|install|initialize|create|call|replace|open|remove|delete|write|edit|enable|disable|wrap|copy|paste|clone|fork|prefix|put|place|choose|pick|export|import|apply|build|deploy|start|stop))(?:[ \\t]|[.,;:!?)\\]])"
+      },
+      "judgement": {
+        "question": "Does the document's own sentence praise something with vocabulary that carries no fact behind it?",
+        "criteria": {
+          "true": "the document's own sentence calls something seamless, powerful, blazing, cutting-edge, effortless, enterprise-grade or the like, and nothing measurable stands behind the word",
+          "false": "the word is quoted or named in order to ban it, sits in a code span, identifier or path, is a term of art (a `robust` z-score, a token `unlock`, a `blazing` product name), or is another project's own description cited here (a catalogue entry, a vendored library's README, a paper, sample model output)"
+        },
+        "min_probability": 0.87
+      },
+      "verb_hint": "docs"
+    }
+  ]
+}

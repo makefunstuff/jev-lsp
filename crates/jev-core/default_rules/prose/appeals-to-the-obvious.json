@@ -1,0 +1,27 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "appeals-to-the-obvious",
+      "title": "A claim that appeals to what the reader knows",
+      "text": "`It is worth noting`, `Of course`, `Obviously`, `Needless to say`: the sentence tells the reader that a fact is already known or needs no argument, and then states it as though the audience had supplied the evidence. State the fact; drop the frame.",
+      "severity": "warning",
+      "applies_to": [
+        "**/*.md"
+      ],
+      "inspection": {
+        "kind": "regex",
+        "pattern": "(?mi)(?:^|[ \\t])(?:it(?:'|\\u2019)s worth noting|it is worth noting|worth noting that|it (?:should|must) be noted|it(?:'|\\u2019)s important to note|it is important to note|needless to say|as (?:we all|you) know|of course|obviously|it goes without saying)(?:[ \\t]|[.,;:!?)])"
+      },
+      "judgement": {
+        "question": "Does this line frame a fact as obvious or already known instead of stating it?",
+        "criteria": {
+          "true": "the line hedges or appeals to shared knowledge (`it is worth noting`, `of course`, `obviously`, `needless to say`) in place of the fact or the measurement",
+          "false": "the phrase is quoted or named in order to ban it, or the word is doing factual work (a test that is not obviously broken, a step the reader can in fact skip)"
+        },
+        "min_probability": 0.75
+      },
+      "verb_hint": "docs"
+    }
+  ]
+}

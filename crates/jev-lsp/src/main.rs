@@ -66,6 +66,9 @@ async fn main() {
         Arc::new(OpenAiCompat::new()),
         Arc::new(jev_core::decision::DecisionClient::new()),
         config,
+        // The shipped rule set, embedded at build time (PROTOCOL.md §9): what a repository with
+        // no `.jev/rules/` of its own is inspected with, and what `jev rules init` writes out.
+        jev_core::rules::builtin_files(),
     );
 
     let stdin = tokio::io::stdin();
