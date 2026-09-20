@@ -117,11 +117,24 @@ sha_tool() { if command -v shasum >/dev/null 2>&1; then echo "shasum -a 256"; el
 # caught and nothing local did, because a hand-run used an absolute `--out`.
 absolute() { ( cd "$1" && pwd ); }
 
-# Basenames of the assets in $DIR, one per line, sorted. `SHA256SUMS` and `RELEASE-NOTES.md` are
-# not assets; everything else in the directory is.
-asset_names() {
+# What SHA256SUMS covers: every asset except itself, because a checksum file that checksums
+# itself is a file that can never verify.
+summed_names() {
   ( cd "$DIR" && find . -maxdepth 1 -type f ! -name 'SHA256SUMS' ! -name 'RELEASE-NOTES.md' -print ) \
     | sed 's|^\./||' | LC_ALL=C sort
+}
+
+# What the release carries: every file in DIR except the note text, `SHA256SUMS` included. The
+# first dispatch of release.yml failed on a second thing here — `gh release` resolves each argument
+# as a path or a pattern against the current directory, so a bare basename matches nothing — and
+# the checksums were missing from the upload for a while because the two sets were one set.
+asset_names() {
+  ( cd "$DIR" && find . -maxdepth 1 -type f ! -name 'RELEASE-NOTES.md' -print ) \
+    | sed 's|^\./||' | LC_ALL=C sort
+}
+
+asset_paths() {
+  asset_names | while IFS= read -r n; do printf '%s/%s\n' "$DIR" "$n"; done
 }
 
 require_assets() {
@@ -150,7 +163,7 @@ guard_clean_release_tree() {
     die "the release inputs above are not committed; commit them or revert them first"
   fi
   ignored="$(git status --porcelain | cut -c4- \
-    | grep -v -E '^(Cargo\.toml|Cargo\.lock|crates/|editors/cursor/|scripts/)' || true)"
+    | awk '!/^(Cargo\.toml|Cargo\.lock|crates\/|editors\/cursor\/|scripts\/)/')"
   if [ -n "$ignored" ]; then
     say "not part of a release, ignored:"
     printf '  %s\n' $ignored >&2
@@ -245,13 +258,14 @@ platform_of() {
 }
 
 cmd_assemble() {
-  local tag names notes sha
+  local tag names summed notes sha
   tag="$(tag_or_die)"
   [ -n "$DIR" ] || die "assemble needs --dir DIR"
   [ -d "$DIR" ] || die "$DIR is not a directory"
   DIR="$(absolute "$DIR")"
   require_assets
   names="$(asset_names)"
+  summed="$(summed_names)"
   sha="$(sha_tool)"
   notes="$DIR/RELEASE-NOTES.md"
 
@@ -308,7 +322,7 @@ cmd_assemble() {
     echo "manifests declare no licence."
   } > "$notes"
 
-  ( cd "$DIR" && $sha $names > SHA256SUMS )
+  ( cd "$DIR" && $sha $summed > SHA256SUMS )
   say "wrote $notes"
   say "wrote $DIR/SHA256SUMS"
   sed 's/^/    /' "$DIR/SHA256SUMS" >&2
@@ -332,7 +346,7 @@ cmd_publish() {
   [ -f "$DIR/SHA256SUMS" ] || die "$DIR has no SHA256SUMS; run assemble first"
   [ -f "$DIR/RELEASE-NOTES.md" ] || cmd_assemble
   require_assets
-  names="$(asset_names)"
+  names="$(asset_paths)"
   notes="$DIR/RELEASE-NOTES.md"
   annotation=""
   if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then

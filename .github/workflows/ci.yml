@@ -19,8 +19,13 @@ name: ci
 #     something any headless job here can see (docs/CURSOR.md weighs what is and is not verified).
 #   * the `quality_eval` row measures a review against a real model. There is no API key in CI,
 #     so the row reports `?` with its reason: never a pass, never a failure.
-#   * the rules gate over the shipped `jev inspect --force` needs a decide endpoint and a key;
-#     it is a step of its own below, and it says in the log which of the two it lacks.
+#   * the suite's own `rules_gate` row runs the same gate the step below runs. This workflow
+#     exports no decide endpoint into the verify jobs, so the row reports its own SKIP with the
+#     reason and `EXIT=0` — visible in the summary as a `?` row, not as a pass.
+#   * the gate itself needs a decide endpoint and a key. It is a step of the build-and-test job,
+#     below, with the endpoint as a plain value and the key read from the `TYPESAFE_API_KEY`
+#     repository secret — which does not exist yet, so the step reports NOT CHECKED, with the
+#     reason, rather than a green step that proved nothing.
 
 on:
   push:
@@ -88,9 +93,9 @@ jobs:
           JEV_DECIDE_TIMEOUT_MS: '15000'
         run: |
           set -eu
-          # `verify/rules-gate.sh` is another session's file and is not committed yet. Until it is
-          # in the tree this step says so — NOT CHECKED, with the reason, never a pass. Once the
-          # file is committed this whole clause is dead code and the gate runs.
+          # `verify/rules-gate.sh` is committed, and this guard is for a checkout that does not
+          # have it — a fork, or a ref from before it landed. A gate that cannot run must not look
+          # like a pass, so this says NOT CHECKED with the reason and never a green step.
           if [ ! -f verify/rules-gate.sh ]; then
             echo "::warning::the rules gate is NOT CHECKED: verify/rules-gate.sh is not in this checkout"
             {
@@ -113,7 +118,9 @@ jobs:
             base=""
           fi
           if [ -n "$base" ]; then
-            paths="$(git diff --diff-filter=d --name-only "$base" HEAD || true)"
+            # No `|| true`: a base that will not diff is a real problem, and a step that carries on
+            # anyway would check the wrong files and call it a pass.
+            paths="$(git diff --diff-filter=d --name-only "$base" HEAD)"
             echo "changed since $base:"
           else
             paths="$(git ls-files -- crates)"
@@ -194,19 +201,31 @@ jobs:
           set +e
           NVIM_BINS="/opt/nvim-0.12.5/bin/nvim /opt/nvim-0.12.1/bin/nvim" \
             bash verify/run-suite.sh /tmp/suite.log
-          echo "run-suite.sh exited $? (its exit code is its last step, the summary, whatever the rows said)"
+          table=$?
           set -e
+          echo "verify/run-suite.sh exited $table"
           sed -n '/^=== summary ===$/,$p' /tmp/suite.log
-          # The verdict is the summary's first column. `FAIL` is a failure of this job; `?` is a
-          # row that could not run, and it carries its own reason in the log — a skipped row is
-          # reported as one rather than passing quietly.
-          if sed -n '/^=== summary ===$/,$p' /tmp/suite.log | grep -q '^FAIL '; then
-            echo "::error::the verification table has FAIL rows; the whole log is attached to this run"
+          # Two conditions, the exit code first: `run-suite.sh` aggregates the rows' recorded
+          # `EXIT=` values into its own exit code, so a red row is a red step and this is the
+          # primary verdict. The text grep stays as the second net, for a row that printed `FAIL`
+          # without a failing exit — which is what the summary looked like before `007cbb6`.
+          if [ "$table" -ne 0 ]; then
+            echo "::error::the verification table exited $table; the whole log is attached to this run"
             exit 1
           fi
+          if sed -n '/^=== summary ===$/,$p' /tmp/suite.log | grep -q '^FAIL '; then
+            echo "::error::a row printed FAIL although the table exited 0; the whole log is attached to this run"
+            exit 1
+          fi
+          # `?` is a row that could not run. It carries its own reason in the log, and this step
+          # names it rather than letting it read as a pass: the suite's own `rules_gate` row is
+          # one of these in CI, because no decide endpoint is exported into this job (see the
+          # header). The keyed check is the build-and-test job's gate step, which names the
+          # `TYPESAFE_API_KEY` secret and reports NOT CHECKED without it.
           if sed -n '/^=== summary ===$/,$p' /tmp/suite.log | grep -q '^? '; then
             echo "::notice::rows that could not run in CI (each names its reason in the log):"
-            sed -n '/^=== summary ===$/,$p' /tmp/suite.log | grep '^? ' || true
+            # Inside this branch there is at least one match, so nothing here needs `|| true`.
+            sed -n '/^=== summary ===$/,$p' /tmp/suite.log | grep '^? '
           fi
       - name: the summary, in the run
         if: always()
