@@ -133,7 +133,7 @@
         "jev.chat.apiKeyFile": {
           "type": "string",
           "default": "",
-          "markdownDescription": "A file to read the chat tiers' key's value from, in the same two forms as `jev.decide.apiKeyFile`."
+          "markdownDescription": "A file to read the chat tiers' key's value from, in the same two forms as `jev.decide.apiKeyFile`. When it supplies a value the extension also tells the server which variable to look it up in — `apiKeyEnv` if it is set, else `JEV_API_KEY_ENV`, else `OPENROUTER_API_KEY` — because the chat tiers have no default key variable of their own (`api_key_env` is unset by default) and a value under an unnamed variable is never sent."
         },
         "jev.settings": {
           "type": "object",

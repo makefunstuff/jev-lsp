@@ -39,6 +39,8 @@ const CLIENT_NAME = 'jev-cursor';
 const CLIENT_VERSION = '0.1.0';
 const DIAGNOSTIC_SOURCE = 'jev';
 const DEFAULT_DECIDE_KEY_VARIABLE = 'TYPESAFE_API_KEY';
+/** Used only when neither the setting nor the environment names the chat tiers' key variable. */
+const DEFAULT_CHAT_KEY_VARIABLE = 'OPENROUTER_API_KEY';
 
 /** The code action kinds the server advertises (PROTOCOL.md §2), so VS Code can filter. */
 const CODE_ACTION_KINDS = [
@@ -530,25 +532,62 @@ function childEnvironment(settings, log) {
   if (Number.isInteger(settings.decide.timeoutMs) && settings.decide.timeoutMs > 0) {
     env.JEV_DECIDE_TIMEOUT_MS = String(settings.decide.timeoutMs);
   }
-  fillKey(env, settings.decide.apiKeyEnv || DEFAULT_DECIDE_KEY_VARIABLE, settings.decide.apiKeyFile, log);
-  fillKey(env, settings.chat.apiKeyEnv || 'OPENROUTER_API_KEY', settings.chat.apiKeyFile, log);
+  // A key read from a file is a key the server only looks for if it is told the name, and the
+  // two tiers disagree about what happens when nobody tells it. The decide tier's default name
+  // is `TYPESAFE_API_KEY` (PROTOCOL §10), which happens to be the fallback here, so the file
+  // route always worked there. The chat tiers' `api_key_env` defaults to *none*
+  // (`TierConfig::default`, `config.rs:45`) and the header is attached only
+  // `if let Some(env)` (`model.rs:269`), so a value left in a variable that nothing names is a
+  // value nothing reads — while the channel said the key had been read, which reads like
+  // success. Naming it is therefore part of handing it over, not a courtesy.
+  const chatVariable = keyVariable(
+    settings.chat.apiKeyEnv,
+    env.JEV_API_KEY_ENV,
+    DEFAULT_CHAT_KEY_VARIABLE,
+  );
+  if (fillKey(env, chatVariable, settings.chat.apiKeyFile, log) !== '') {
+    put('JEV_API_KEY_ENV', chatVariable);
+  }
+  const decideVariable = keyVariable(
+    settings.decide.apiKeyEnv,
+    env.JEV_DECIDE_API_KEY_ENV,
+    DEFAULT_DECIDE_KEY_VARIABLE,
+  );
+  if (fillKey(env, decideVariable, settings.decide.apiKeyFile, log) !== '') {
+    put('JEV_DECIDE_API_KEY_ENV', decideVariable);
+  }
   return env;
 }
 
-function fillKey(env, variable, file, log) {
-  if (typeof file !== 'string' || file.trim() === '') return;
-  const name = variable.trim();
+/**
+ * The variable the server will look a tier's key up in: the setting, else the name already in
+ * the environment, else the fallback. The ambient name is consulted rather than overwritten
+ * because an empty setting is documented to leave the ambient variable alone — and a key that
+ * already works must not stop working because a file was also configured.
+ */
+function keyVariable(configured, ambient, fallback) {
+  for (const candidate of [configured, ambient]) {
+    if (typeof candidate === 'string' && candidate.trim() !== '') return candidate.trim();
+  }
+  return fallback;
+}
+
+/** Returns the name when a value was handed over, and `''` when there was no key to hand over. */
+function fillKey(env, name, file, log) {
+  if (typeof file !== 'string' || file.trim() === '') return '';
   try {
     const key = keyFromFile(file.trim(), name);
     if (key === '') {
-      log(`${file} holds no assignment for ${name}, so ${name} stays unset`);
-      return;
+      log(`${file} holds no assignment for ${name}, so no key was handed over`);
+      return '';
     }
     // The value is never logged, and never put anywhere but this process's environment.
     env[name] = key;
-    log(`${name} read from ${file} (${key.length} bytes)`);
+    log(`${name} read from ${file} (${key.length} bytes); the server is told to look for it in ${name}`);
+    return name;
   } catch (error) {
     log(`cannot read the key file ${file}: ${error.message}`);
+    return '';
   }
 }
 

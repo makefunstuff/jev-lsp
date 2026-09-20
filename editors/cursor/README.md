@@ -101,6 +101,18 @@ the value of its last `NAME=value` for the name in `apiKeyEnv`. It exists becaus
 cannot see `export TYPESAFE_API_KEY=…` in your profile, and because a key that is pasted into a
 setting is a key that gets committed. The value is passed to the child process and never logged.
 
+**When a key file supplies a value, the extension also tells the server which variable to look
+it up in** — `JEV_API_KEY_ENV` for the chat tiers, `JEV_DECIDE_API_KEY_ENV` for the decide tier.
+The name is resolved from `apiKeyEnv`, else the name already in the environment, else the tier's
+own default (`TYPESAFE_API_KEY` for decide, `OPENROUTER_API_KEY` for chat). That step is not
+cosmetic: the decide tier's default name is a real name, so the file route always worked there,
+while the chat tiers' `api_key_env` defaults to *none* (`TierConfig::default`,
+`crates/jev-core/src/config.rs:45`) and the header is attached only `if let Some(env)`
+(`crates/jev-core/src/model.rs:269`). A key handed over under a name nothing configured was a key
+nothing read — and the channel said the key had been read, which reads like success while every
+chat command answered `model_error`. Measured both ways against a decide endpoint that 401s any
+model route without a key.
+
 ## Where an answer appears
 
 `jev.artifacts.viewColumn` decides, and it defaults to **`active`**: an explanation, a plan or a
