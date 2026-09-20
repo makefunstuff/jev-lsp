@@ -1,0 +1,27 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "module-doc-says-why",
+      "title": "A Rust module says why it exists",
+      "text": "Every module opens with a `//!` that says why it exists rather than what its functions are called: the file a reader opens first should tell them whether they are in the right place, and the reason it is separate from its neighbours.",
+      "severity": "warning",
+      "applies_to": [
+        "**/crates/**/*.rs"
+      ],
+      "inspection": {
+        "kind": "absent",
+        "pattern": "^//!"
+      },
+      "judgement": {
+        "question": "Does this module say why it exists \u2014 the decision, the invariant, the reason it is its own file \u2014 rather than only what it contains?",
+        "criteria": {
+          "true": "there is no module documentation, or it lists contents without saying why the module exists",
+          "false": "the header states the reason the module is separate and what it is for"
+        },
+        "min_probability": 0.65
+      },
+      "verb_hint": "docs"
+    }
+  ]
+}

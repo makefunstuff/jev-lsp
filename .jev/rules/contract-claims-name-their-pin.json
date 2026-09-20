@@ -1,0 +1,27 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "contract-claims-name-their-pin",
+      "title": "A contract claim names what pins it",
+      "text": "A `verified`, `measured` or `pinned by` claim in the frozen contract names the harness, command or measurement that pins it: a claim the reader cannot re-run is indistinguishable from one nobody checked.",
+      "severity": "warning",
+      "applies_to": [
+        "**/PROTOCOL.md"
+      ],
+      "inspection": {
+        "kind": "regex",
+        "pattern": "(?i)\\b(verified|measured|pinned by|proven|proves)\\b"
+      },
+      "judgement": {
+        "question": "Does this sentence name the harness, command, log or measurement that pins the claim, or does the reader have to trust it?",
+        "criteria": {
+          "true": "the claim is asserted without naming how it was checked",
+          "false": "the sentence names the harness, command, path or measurement, or it is not a claim about a result"
+        },
+        "min_probability": 0.8
+      },
+      "verb_hint": "docs"
+    }
+  ]
+}

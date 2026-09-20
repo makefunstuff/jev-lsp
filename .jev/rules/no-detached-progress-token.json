@@ -1,0 +1,27 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "no-detached-progress-token",
+      "title": "A task that owns a token closes it on every path",
+      "text": "A spawned task owns the `$/progress` token it reports under, so it must be aborted and the token closed on every path: a dropped `JoinHandle` detaches, so a cancel does not cancel and `begin` stays open past the response it belonged to.",
+      "severity": "warning",
+      "applies_to": [
+        "**/crates/jev-lsp/src/**/*.rs"
+      ],
+      "inspection": {
+        "kind": "regex",
+        "pattern": "tokio::spawn"
+      },
+      "judgement": {
+        "question": "Does this spawned task own a `$/progress` token, and is it spawned so that a cancel or a panic still sends exactly one `end` rather than leaving the token to the task's own good behaviour?",
+        "criteria": {
+          "true": "the task reports under a token and a plain spawn, or a dropped handle, can leave that token open",
+          "false": "the task owns no token, or the spawn is wrapped so abort and close happen on every path"
+        },
+        "min_probability": 0.65
+      },
+      "verb_hint": "fix"
+    }
+  ]
+}

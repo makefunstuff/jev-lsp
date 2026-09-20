@@ -1,0 +1,27 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "no-prompt-text-in-the-server",
+      "title": "The server passes prompts, it does not carry them",
+      "text": "`jev-lsp` renders no prompt text: the words a model reads live in the core's verb specs, so the server passes a spec and never holds an instruction of its own. A literal instruction here is a second prompt nobody versions. ARCHITECTURE \u00a71.",
+      "severity": "warning",
+      "applies_to": [
+        "**/crates/jev-lsp/src/**/*.rs"
+      ],
+      "inspection": {
+        "kind": "regex",
+        "pattern": "(?i)\"(you are|your task|you must|return (only )?(json|a json)|answer (with|in)|do not (ask|reply)|reply with)\\b"
+      },
+      "judgement": {
+        "question": "Is this instruction text a model will read, embedded in the server, rather than a spec that `jev-core` renders?",
+        "criteria": {
+          "true": "the literal is an instruction addressed to a model",
+          "false": "it is a type, a version constant, a comment, or a message written for a person"
+        },
+        "min_probability": 0.75
+      },
+      "verb_hint": "fix"
+    }
+  ]
+}

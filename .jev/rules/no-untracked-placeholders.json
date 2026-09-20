@@ -1,0 +1,33 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "no-untracked-placeholders",
+      "title": "A placeholder ships as a tracked promise",
+      "text": "A `TODO`, `FIXME`, `XXX` or `HACK` on a path that ships is a promise with no owner: either finish it, or record it where the work is tracked, because an untracked note reads as a plan to the next reader.",
+      "severity": "warning",
+      "applies_to": [
+        "**/crates/**/*.rs",
+        "**/nvim/**/*.lua",
+        "**/editors/**/*.js",
+        "**/README.md",
+        "**/STATUS.md",
+        "**/PROTOCOL.md",
+        "**/docs/**/*.md"
+      ],
+      "inspection": {
+        "kind": "regex",
+        "pattern": "\\b(TODO|FIXME|XXX|HACK)\\b"
+      },
+      "judgement": {
+        "question": "Is this placeholder a promise nobody tracks, on a path that ships, rather than a note that names where the work is tracked?",
+        "criteria": {
+          "true": "it ships with no reference to where the work is tracked and no dated decision beside it",
+          "false": "it points at the place the work is tracked, or the line is a document stating the convention itself"
+        },
+        "min_probability": 0.8
+      },
+      "verb_hint": "fix"
+    }
+  ]
+}

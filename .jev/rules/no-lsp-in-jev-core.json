@@ -1,0 +1,27 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "no-lsp-in-jev-core",
+      "title": "jev-core never learns about LSP",
+      "text": "The core answers questions about documents and knows nothing about a transport: no `lsp-types`, no `Uri`, no `tower-lsp`. `crates/jev-lsp` is the only place that knows a client exists, which is what lets `crates/jev` share the core. ARCHITECTURE \u00a71.",
+      "severity": "warning",
+      "applies_to": [
+        "**/crates/jev-core/src/**/*.rs"
+      ],
+      "inspection": {
+        "kind": "regex",
+        "pattern": "\\blsp_types\\b|\\blsp-types\\b|\\btower_lsp\\b|tower-lsp|\\bUri\\b"
+      },
+      "judgement": {
+        "question": "Does this put LSP vocabulary into the core \u2014 an `lsp-types` type, a `Uri`, a transport \u2014 rather than a document, a question or an answer?",
+        "criteria": {
+          "true": "the core now depends on a name only a protocol client can supply",
+          "false": "it is prose about the protocol, a test, or a local type that merely carries the name"
+        },
+        "min_probability": 0.75
+      },
+      "verb_hint": "fix"
+    }
+  ]
+}

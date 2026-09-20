@@ -1,0 +1,28 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "no-sweeping-adds-or-rewritten-history",
+      "title": "Stage what you own, never rewrite history",
+      "text": "A script stages and pushes only the paths it owns: `git add -A` sweeps a sibling's half-finished files into someone else's commit, and an amend or a force-push rewrites commits another writer has already pulled.",
+      "severity": "warning",
+      "applies_to": [
+        "**/*.sh",
+        "**/.github/workflows/*.yml"
+      ],
+      "inspection": {
+        "kind": "regex",
+        "pattern": "git add -A|git add --all|git add \\.$|push --force|push -f\\b|commit --amend|reset --hard|filter-branch"
+      },
+      "judgement": {
+        "question": "Would this line stage files another writer owns, or rewrite history someone else has already pulled?",
+        "criteria": {
+          "true": "it stages everything or rewrites history, putting a sibling's in-flight work or another writer's commits at risk",
+          "false": "it names the paths it stages and pushes without rewriting, or it operates on a throwaway fixture outside the repository"
+        },
+        "min_probability": 0.75
+      },
+      "verb_hint": "fix"
+    }
+  ]
+}

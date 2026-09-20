@@ -1,0 +1,27 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "cache-keys-name-their-inputs",
+      "title": "A cache key names every input it depends on",
+      "text": "A cache key lists everything the cached value is a function of: a key that omits one input serves the answer computed for a different question, and the miss is invisible because the entry looks warm.",
+      "severity": "warning",
+      "applies_to": [
+        "**/crates/**/*.rs"
+      ],
+      "inspection": {
+        "kind": "regex",
+        "pattern": "\\w*_key\\s*\\("
+      },
+      "judgement": {
+        "question": "Does this key, or this call that builds it, name every input the cached value is a function of, or does an input that changes the answer go unmentioned?",
+        "criteria": {
+          "true": "an input the cached value depends on is absent from the key or from this call to it",
+          "false": "the key and this call carry every input, or this is not a cache key and not a call to one"
+        },
+        "min_probability": 0.8
+      },
+      "verb_hint": "fix"
+    }
+  ]
+}

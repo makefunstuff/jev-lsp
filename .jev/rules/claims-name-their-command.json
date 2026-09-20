@@ -6,8 +6,15 @@
       "title": "A claim names the command that produced it",
       "text": "A number or a verdict in a document names the command that produced it; an unbacked claim is indistinguishable from a wrong one.",
       "severity": "warning",
-      "applies_to": ["**/STATUS.md", "**/README.md", "**/docs/**/*.md"],
-      "inspection": { "kind": "regex", "pattern": "(?i)^[^`]*(\\b\\d+\\s*(ok|passing|green|proven|verified)\\b|\\b(verified|proven|passing|green)\\b[^.]{0,40}\\d)[^`]*$" },
+      "applies_to": [
+        "**/STATUS.md",
+        "**/README.md",
+        "**/docs/**/*.md"
+      ],
+      "inspection": {
+        "kind": "regex",
+        "pattern": "(?i)^[^`]*(\\b\\d+\\s*(ok|passing|green|proven|verified)\\b|\\b(verified|proven|passing|green)\\b[^.]{0,40}\\d)[^`]*$"
+      },
       "judgement": {
         "question": "Does this line state a result the document backs with the command that produced it, or is it a verdict the reader has to trust?",
         "criteria": {

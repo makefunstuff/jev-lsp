@@ -1,0 +1,30 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "words-must-carry-a-fact",
+      "title": "A word must carry a fact, not a temperature",
+      "text": "The register bans the words that cannot be checked \u2014 powerful, seamless, robust, simple, easy, effortless, just, very, mostly \u2014 because a reader can neither verify nor act on them; a sentence that needs one has not said what it means.",
+      "severity": "warning",
+      "applies_to": [
+        "**/README.md",
+        "**/STATUS.md",
+        "**/PROTOCOL.md",
+        "**/docs/**/*.md"
+      ],
+      "inspection": {
+        "kind": "regex",
+        "pattern": "(?i)\\b(powerful|simple|simply|seamless|robust|delightful|easy|easily|effortless|just|mostly|quite|very)\\b"
+      },
+      "judgement": {
+        "question": "Does this line use a banned word in its own voice, rather than quoting it as an example or using it for a specific fact?",
+        "criteria": {
+          "true": "the document itself uses the word as a hedge or a temperature",
+          "false": "it is quoted as a banned example, or it names a measurement, or it means only (`just` the cursor's line)"
+        },
+        "min_probability": 0.8
+      },
+      "verb_hint": "docs"
+    }
+  ]
+}

@@ -6,8 +6,13 @@
       "title": "No todo!() or unimplemented!() left in",
       "text": "A `todo!()` or `unimplemented!()` that ships is a promise the code does not keep: either finish the branch, or return an error the caller can act on.",
       "severity": "warning",
-      "applies_to": ["**/crates/**/*.rs"],
-      "inspection": { "kind": "regex", "pattern": "\\b(todo|unimplemented)!\\s*\\(" },
+      "applies_to": [
+        "**/crates/**/*.rs"
+      ],
+      "inspection": {
+        "kind": "regex",
+        "pattern": "\\b(todo|unimplemented)!\\s*\\("
+      },
       "judgement": {
         "question": "Is this placeholder on a path a caller can reach, rather than a branch that genuinely cannot happen?",
         "criteria": {

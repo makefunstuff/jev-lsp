@@ -1,0 +1,27 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "no-client-namespace-in-a-server-id",
+      "title": "A command id must name a client that can run it",
+      "text": "A command id promises that the client receiving it implements that command: an id in another client's namespace, such as `jev.plugin.*` emitted by the server, is answered with silence, and a silent button is indistinguishable from a broken one.",
+      "severity": "warning",
+      "applies_to": [
+        "**/crates/**/*.rs"
+      ],
+      "inspection": {
+        "kind": "regex",
+        "pattern": "\"jev\\.plugin\\."
+      },
+      "judgement": {
+        "question": "Does this id name a namespace belonging to a client that will not receive it, so that the command is answered with silence?",
+        "criteria": {
+          "true": "the id names another client's namespace and is emitted to a client that does not implement it",
+          "false": "the id names the surface that receives it, or this code is the bridge inside the client that implements it"
+        },
+        "min_probability": 0.55
+      },
+      "verb_hint": "fix"
+    }
+  ]
+}

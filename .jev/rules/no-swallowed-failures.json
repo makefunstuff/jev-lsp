@@ -1,0 +1,31 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "no-swallowed-failures",
+      "title": "A failure the caller needed is not swallowed",
+      "text": "A script reports the failures it cannot handle: `|| true` and an empty `except` turn a broken run into a green one, and the log reader cannot tell the two apart. A best-effort step that may fail says so where it fails.",
+      "severity": "warning",
+      "applies_to": [
+        "**/verify/**/*.py",
+        "**/verify/**/*.sh",
+        "**/verify/**/*.lua",
+        "**/scripts/**/*.sh",
+        "**/.github/workflows/*.yml"
+      ],
+      "inspection": {
+        "kind": "regex",
+        "pattern": "\\|\\|\\s*true\\b|except[^:]*:\\s*(pass|break|continue)\\b"
+      },
+      "judgement": {
+        "question": "Does this hide a failure the caller or the log needed to see, rather than a best-effort step whose failure cannot matter?",
+        "criteria": {
+          "true": "the failure is discarded and nothing records it",
+          "false": "the failure is reported or asserted on, or the line is cleanup whose failure cannot change the result"
+        },
+        "min_probability": 0.7
+      },
+      "verb_hint": "fix"
+    }
+  ]
+}

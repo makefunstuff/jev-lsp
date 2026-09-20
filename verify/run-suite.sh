@@ -195,6 +195,9 @@ if [ "${NVIM_ONLY:-0}" != "1" ]; then
   run "lsp_framing_test" python3 verify/lsp_framing_test.py
   # The rules pass, from a second Python client (`smoke.Stub` on its own port, so no collision).
   run "rules_test" python3 verify/rules_test.py --bin "$REPO/target/release/$BIN_NAME"
+  # The rules gate, over the shipped CLI and the stub: a seeded violation must exit 1, a file no
+  # rule claims 0, and a gate that cannot run 2. This is what a session runs before it commits.
+  run "rules_gate" python3 verify/rules_gate_test.py
 fi
 
 # Both spellings: the pre-rename tree reads META_*, the renamed one JEV_*. Each ignores the
