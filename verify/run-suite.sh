@@ -11,6 +11,12 @@
 # step runs from there. Never uses `set -e`: each command runs and its exit code is recorded, so a
 # red row is visible instead of aborting the run.
 #
+# Python: the Python rows need 3.10 or newer (`pathlib.Path.write_text(newline=…)` in
+#   `lsp_client.py`, and the same construct elsewhere); on 3.9 the row dies with a `TypeError`
+#   before its first assertion, which names nothing. CI gets 3.10+ from `ubuntu-latest` by
+#   accident of the image, not by a pin, so a machine that resolves `python3` to a system 3.9
+#   needs a newer toolchain's `python3` on `PATH`.
+#
 # Environment:
 #   NVIM_ONLY=1       skip cargo, the probes and every Python/OMP harness; run only the stub
 #                     lifecycle and the Lua harnesses. Use it when the Rust tree or the harnesses
