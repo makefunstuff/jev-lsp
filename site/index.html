@@ -45,7 +45,7 @@
         <span class="name">diagnostic · save</span>
         <span>server.rs:412</span>
       </div>
-      <pre><span class="dim"> 410 │ </span><span class="fill">fn handle_request(msg: Request) {</span>
+      <pre class="mock-code"><span class="dim"> 410 │ </span><span class="fill">fn handle_request(msg: Request) {</span>
 <span class="dim"> 411 │ </span><span class="fill">    let body = msg.payload();</span>
 <span class="row"> 412 │     let data = body.unwrap();  // p=0.91 · fail</span>
 <span class="dim"> 413 │ </span><span class="fill">    process(data);</span>
@@ -61,12 +61,24 @@
       <p>On save, matching lines become diagnostics a harness or editor already understands. No custom <code>jev/…</code> methods.</p>
     </div>
     <figure class="machine-well">
-      <div class="panel panel-wide">
+      <div class="panel panel-wide mock mock-harness" aria-label="Harness write loop mockup">
         <div class="panel-head">
-          <span class="name">steering · harness write</span>
+          <span class="name">harness · write loop</span>
           <span>OMP · ordinary diagnostic</span>
         </div>
-        <img src="./assets/jev-steering.svg" alt="Harness write, then a jev finding on the generated line steering the fix" width="960" height="540" loading="lazy">
+        <div class="mock-body">
+          <div class="term-line"><span class="dim">$</span> agent write crates/jev-lsp/src/server.rs</div>
+          <div class="term-line dim">… generating handler …</div>
+          <div class="term-line"><span class="ok">✓</span> wrote 24 lines</div>
+          <div class="term-sep"></div>
+          <pre class="mock-code tight"><span class="dim"> 410 │ </span><span class="fill">fn handle_request(msg: Request) {</span>
+<span class="dim"> 411 │ </span><span class="fill">    let body = msg.payload();</span>
+<span class="row"> 412 │     let data = body.unwrap();  // jev · fail · p=0.91</span>
+<span class="dim"> 413 │ </span><span class="fill">    process(data);</span>
+<span class="dim"> 414 │ </span><span class="fill">}</span></pre>
+          <div class="term-line"><span class="accent-txt">← finding on generated line</span> · harness reads it like any diagnostic</div>
+          <div class="term-line"><span class="dim">$</span> agent fix --from-diagnostics</div>
+        </div>
       </div>
       <figcaption>Harness write → jev finding on the generated line → fix. Ordinary diagnostic.</figcaption>
     </figure>
@@ -169,36 +181,108 @@
 <section id="clients" class="band">
   <div class="container">
     <div class="prose">
-      <h2>Standard LSP — Neovim first</h2>
-      <p>No custom methods. Primary client Neovim (<code>nvim/</code> plugin). Anything that starts a language server works — harnesses included. Cursor: <code>editors/cursor/</code>.</p>
+      <h2>Standard LSP — three surfaces, one protocol</h2>
+      <p>No custom methods. Neovim is primary (<code>nvim/</code>). Anything that starts a language server works — harnesses included. VS Code / Cursor via <code>editors/cursor/</code>.</p>
       <p class="chips" aria-label="LSP surfaces">
         <span class="chip">diagnostics</span>
         <span class="chip">code actions</span>
         <span class="chip">code lens</span>
       </p>
     </div>
-    <div class="shot-grid">
+
+    <div class="mock-grid">
+
+      <!-- Harness -->
       <figure class="shot">
-        <div class="panel panel-shot">
+        <div class="panel mock mock-harness" aria-label="Harness client mockup">
+          <div class="panel-head">
+            <span class="name">Harness</span>
+            <span>agent · diagnostics</span>
+          </div>
+          <div class="mock-body">
+            <div class="term-line"><span class="dim">lsp</span> publishDiagnostics · server.rs</div>
+            <pre class="mock-code tight"><span class="dim">411 │ </span><span class="fill">    let body = msg.payload();</span>
+<span class="row">412 │     let data = body.unwrap();</span>
+<span class="dim">413 │ </span><span class="fill">    process(data);</span></pre>
+            <div class="diag-pill">jev · fail · p=0.91 · no-unwrap</div>
+            <div class="term-line dim">harness reads Diagnostic[] → steers next write</div>
+          </div>
+        </div>
+        <figcaption>Terminal / agent loop: finding on the generated line, ordinary diagnostic payload.</figcaption>
+      </figure>
+
+      <!-- Neovim -->
+      <figure class="shot">
+        <div class="panel mock mock-nvim" aria-label="Neovim client mockup">
           <div class="panel-head">
             <span class="name">Neovim</span>
             <span>primary client</span>
           </div>
-          <img src="./assets/jev-neovim.webp" alt="Neovim with jev annotations beside the code, next to clangd" width="640" height="400" loading="lazy">
+          <div class="mock-chrome nvim-chrome">
+            <div class="nvim-status"><span class="nvim-mode">NORMAL</span> <span class="dim">server.rs</span> <span class="nvim-right">utf-8 · rust</span></div>
+            <div class="nvim-editor">
+              <div class="nvim-gutter">
+                <span class="ln">410</span>
+                <span class="ln">411</span>
+                <span class="ln warn">412</span>
+                <span class="ln">413</span>
+                <span class="ln">414</span>
+              </div>
+              <div class="nvim-lines">
+                <div class="ln-row"><span class="fill">fn handle_request(msg: Request) {</span></div>
+                <div class="ln-row"><span class="fill">    let body = msg.payload();</span></div>
+                <div class="ln-row find"><span class="fill">    let data = body.unwrap();</span><span class="virt"> ■ jev: fail p=0.91</span></div>
+                <div class="ln-row"><span class="fill">    process(data);</span></div>
+                <div class="ln-row"><span class="fill">}</span></div>
+              </div>
+            </div>
+          </div>
         </div>
-        <figcaption>Annotations beside the code, next to clangd (or your other LS).</figcaption>
+        <figcaption>Gutter sign + virtual text beside the line — next to clangd or your other LS.</figcaption>
       </figure>
+
+      <!-- VS Code -->
       <figure class="shot">
-        <div class="panel panel-shot">
+        <div class="panel mock mock-vsc" aria-label="VS Code client mockup">
           <div class="panel-head">
-            <span class="name">Cursor</span>
+            <span class="name">VS Code</span>
             <span>editors/cursor/</span>
           </div>
-          <img src="./assets/jev-cursor.webp" alt="Cursor showing a jev finding in hover with explain as code lens" width="640" height="400" loading="lazy">
+          <div class="mock-chrome vsc-chrome">
+            <div class="vsc-titlebar">
+              <span class="vsc-dots" aria-hidden="true"></span>
+              <span class="dim">server.rs — jev-lsp</span>
+            </div>
+            <div class="vsc-tabs">
+              <span class="vsc-tab on">server.rs</span>
+              <span class="vsc-tab">mod.rs</span>
+            </div>
+            <div class="vsc-body">
+              <div class="vsc-side" aria-hidden="true"></div>
+              <div class="vsc-editor">
+                <div class="ln-row"><span class="ln">410</span><span class="fill">fn handle_request(msg: Request) {</span></div>
+                <div class="ln-row"><span class="ln">411</span><span class="fill">    let body = msg.payload();</span></div>
+                <div class="ln-row find"><span class="ln">412</span><span class="fill squiggle">    let data = body.unwrap();</span><span class="bulb" title="code action">💡</span></div>
+                <div class="ln-row"><span class="ln">413</span><span class="fill">    process(data);</span></div>
+                <div class="ln-row"><span class="ln">414</span><span class="fill">}</span></div>
+                <div class="vsc-hover">
+                  <div class="hover-title">jev · no-unwrap</div>
+                  <div class="hover-body"><span class="amb">fail</span> · p=0.91</div>
+                  <div class="hover-lens">jev: explain</div>
+                </div>
+              </div>
+            </div>
+            <div class="vsc-problems">
+              <span class="prob-label">Problems</span>
+              <span class="prob-item"><span class="amb">●</span> unwrap may fail · server.rs:412</span>
+            </div>
+          </div>
         </div>
-        <figcaption>Finding in hover / squiggle; explain as code lens.</figcaption>
+        <figcaption>Squiggle + hover + lightbulb; explain as code lens. Problems panel lists the finding.</figcaption>
       </figure>
+
     </div>
+
     <div class="panel config-panel">
       <div class="panel-head">
         <span class="name">init.lua</span>
