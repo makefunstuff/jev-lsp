@@ -202,6 +202,12 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
       # The two versions the suite's own default names, from the release tarballs rather than a
       # distro package: `apt`'s Neovim is older than the 0.12 the plugin requires.
+      #
+      # 0.12.5 also goes on `PATH`, because two consumers want a bare `nvim` rather than the
+      # `NVIM_BINS` list: `verify/probes/run.sh` runs `nvim --headless` per probe, and the plugin's
+      # own local grep falls back through `vim.fn.executable`. Without this the `probes` row
+      # failed seven ways on the first run of this job, and it was this workflow's gap, not a
+      # product defect.
       - name: neovim 0.12.5 and 0.12.1
         run: |
           set -eu
@@ -212,6 +218,16 @@ jobs:
           sudo tar -xzf /tmp/nvim-0.12.1.tar.gz -C /opt/nvim-0.12.1 --strip-components=1
           /opt/nvim-0.12.5/bin/nvim --version | head -1
           /opt/nvim-0.12.1/bin/nvim --version | head -1
+          # What the plugin's local grep will find, printed so a later failure can be read without
+          # a second run. The fallback order is `rg`, then `grep` (nvim/lua/jev/context.lua).
+          if command -v rg >/dev/null 2>&1; then rg --version | head -1; else echo "no ripgrep: the grep fallback is what runs"; fi
+          if command -v grep >/dev/null 2>&1; then grep --version | head -1; else echo "no grep either"; fi
+          echo "/opt/nvim-0.12.5/bin" >> "$GITHUB_PATH"
+      # `/tmp/jev-ws` is where the suite's `lsp_client` row opens its workspace, and nothing
+      # creates it: on a fresh runner the row answered `--workspace is not a directory` (exit 2)
+      # on the first run of this job.
+      - name: the workspace the suite's client row wants
+        run: mkdir -p /tmp/jev-ws
       - name: the verification table
         run: |
           set -eu
