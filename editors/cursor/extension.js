@@ -557,6 +557,37 @@ function fillKey(env, variable, file, log) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Commands whose answer is a value to glance at rather than text to read.
+ *
+ * These report to *Output → Jev* and never open a document. `jev.inspect` is the case that
+ * forced the distinction: its whole answer is `{findings, considered, candidates, skipped}` —
+ * counts and skip codes, 280 bytes on the fixture — so a document for it replaced what the user
+ * was looking at with six lines they then had to close, which is precisely what a command you
+ * run *while* looking at a file must not do. `jev.status` is a numbers snapshot, and
+ * `jev.recompute` and `jev.revert` answer one value each. Everything else answers something
+ * meant to be read, and `jev.artifacts.viewColumn` says where that document goes.
+ */
+const SUMMARY_COMMANDS = new Set(['jev.inspect', 'jev.status', 'jev.recompute', 'jev.revert']);
+
+/** One line for a summary command, from the fields the server actually returns. */
+function summaryLine(command, value) {
+  const parts = [];
+  if (typeof value.version === 'string') parts.push(`jev ${value.version}`);
+  if (typeof value.enabled === 'boolean') parts.push(value.enabled ? 'enabled' : 'disabled');
+  if (Array.isArray(value.findings)) {
+    parts.push(value.findings.length === 0 ? 'no findings' : `${value.findings.length} finding(s)`);
+  }
+  if (typeof value.considered === 'number') parts.push(`${value.considered} rule(s) considered`);
+  if (typeof value.candidates === 'number') parts.push(`${value.candidates} candidate(s)`);
+  for (const skipped of value.skipped ?? []) parts.push(`skipped ${skipped.code}`);
+  if (typeof value.documents === 'number') parts.push(`${value.documents} open document(s)`);
+  if (typeof value.recomputed === 'boolean') parts.push(value.recomputed ? 'recomputed' : 'nothing to recompute');
+  if (typeof value.reverted === 'string') parts.push(`reverted ${value.reverted.split('/').pop()}`);
+  if (parts.length === 0) parts.push(command.replace(/^jev\./, ''));
+  return parts.join(' · ');
+}
+
+/**
  * The body of an artifact document.
  *
  * An artifact carries `markdown` when the server has prose to give (`explain`, `ask`,
@@ -861,6 +892,7 @@ class JevClient {
       section: config.get('settings', {}),
       codeLens: config.get('codeLens.enabled', true),
       inlayHints: config.get('inlayHints.enabled', false),
+      artifacts: { viewColumn: config.get('artifacts.viewColumn', 'active') },
     };
   }
 
@@ -1153,6 +1185,26 @@ class JevClient {
     }
     const body = artifactBody(value);
     this.log(`${command} → ${body.length} bytes`);
+
+    if (SUMMARY_COMMANDS.has(command)) {
+      // A summary goes to the channel and says so in one line with a way in. It never moves the
+      // editor's layout: the answer is smaller than the interruption would be.
+      this.log(body);
+      const answer = await vscode.window.showInformationMessage(
+        `Jev: ${summaryLine(command, value)}`,
+        'Details',
+      );
+      if (answer === 'Details') this.output.show();
+      return body;
+    }
+
+    const preference = this.settings().artifacts.viewColumn;
+    if (preference === 'output') {
+      this.log(body);
+      this.output.show(true);
+      return body;
+    }
+
     const uri = vscode.Uri.parse(
       `jev-artifact:/${command.replace(/^jev\./, '')}-${(this.artifactCount += 1)}.md`,
     );
@@ -1160,7 +1212,11 @@ class JevClient {
     const document = await vscode.workspace.openTextDocument(uri);
     await vscode.window.showTextDocument(document, {
       preview: false,
-      viewColumn: vscode.ViewColumn.Beside,
+      // `ViewColumn.Active` and not `ViewColumn.Beside`. With a single group open, `Beside` is
+      // a *split*: the editor rearranges itself around an answer to a question the user asked,
+      // which is the complaint this default exists to fix. `beside` is still available.
+      viewColumn:
+        preference === 'beside' ? vscode.ViewColumn.Beside : vscode.ViewColumn.Active,
     });
     return body;
   }

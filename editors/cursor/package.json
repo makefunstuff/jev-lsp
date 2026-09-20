@@ -140,6 +140,16 @@
           "default": {},
           "markdownDescription": "The server's own `jev` configuration section (PROTOCOL §10), passed through verbatim — `budget`, `triggers`, `rules`, `noise`, `languages`, `models`. The server reads it over `workspace/configuration`."
         },
+        "jev.artifacts.viewColumn": {
+          "type": "string",
+          "enum": [
+            "active",
+            "beside",
+            "output"
+          ],
+          "default": "active",
+          "markdownDescription": "Where a command's answer is shown. `active` opens it in the editor group you are already in, so the layout never changes. `beside` opens a new group to the right — with a single group open that is a split. `output` writes it to the **Jev** output channel and opens nothing. Commands whose answer is a value rather than prose (`jev.inspect`, `jev.status`, `jev.recompute`, `jev.revert`) always report to the channel, with a one-line message and a **Details** action."
+        },
         "jev.codeLens.enabled": {
           "type": "boolean",
           "default": true,

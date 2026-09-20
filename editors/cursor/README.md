@@ -86,6 +86,27 @@ the value of its last `NAME=value` for the name in `apiKeyEnv`. It exists becaus
 cannot see `export TYPESAFE_API_KEY=…` in your profile, and because a key that is pasted into a
 setting is a key that gets committed. The value is passed to the child process and never logged.
 
+## Where an answer appears
+
+`jev.artifacts.viewColumn` decides, and it defaults to **`active`**: an explanation, a plan or a
+review opens in the editor group you are already in, so the layout never changes.
+
+| value | what happens |
+|---|---|
+| `active` | a document in the current editor group — the default, and no rearrangement |
+| `beside` | a new group to the right; with one group open, that is a split |
+| `output` | the body goes to *Output → Jev*; no document is opened |
+
+`ViewColumn.Beside` was the first version's default, and with a single group open it splits the
+window — an answer to a question rearranging the editor, which is what the default exists to
+avoid.
+
+Four commands never open a document whatever the setting says, because their whole answer is a
+value rather than prose: `jev.inspect` (counts and skip codes), `jev.status` (a numbers
+snapshot), `jev.recompute` and `jev.revert`. They write to *Output → Jev* and put one line in a
+message with a **Details** action that reveals the channel. A diagnostic command that replaced
+what you were looking at with six lines you then had to close was the original complaint.
+
 ## Limits, all of them
 
 - **The protocol layer is verified without a GUI; the rendering is not.** `node --check` passes,

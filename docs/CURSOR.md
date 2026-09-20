@@ -33,7 +33,8 @@ extension" is the true sentence, and `editors/cursor/` is the extension.
 | The action menu | `⌘.` / the lightbulb on the finding → `Fix: …`, `Fix all findings (2)`, the verb list | the extension (`CodeActionProvider`) |
 | The lens line | per declaration: `jev: explain`, or `jev: N finding(s) · fix` | the extension (`CodeLensProvider`) |
 | What is already known | hover, from the cache, without a model call | the server (`textDocument/hover`) |
-| An explanation, a plan, a review | a Markdown document beside the code | the extension (a palette command) |
+| An explanation, a plan, a review | a Markdown document in the editor group you are already in | the extension (a palette command) |
+| Counts and snapshots | one line in a message, with a **Details** action; the body in *Output → Jev* | the extension (`jev.inspect`, `jev.status`, `jev.recompute`, `jev.revert`) |
 | The finding count, the queue | `jev: 2 finding(s)` in the status bar while a command runs | the extension (`$/progress`) |
 
 The commands are the server's own, over `workspace/executeCommand` (PROTOCOL §6): `Jev: inspect
@@ -153,7 +154,21 @@ repository, has `.git/`, one rule, and one `.rs` file with a `.unwrap()` in it:
 4. `⌘.` on the finding: `Fix: Unwrap in a request handler` first and `isPreferred`. Picking it
    resolves to an edit and the editor applies it.
 5. The lens line above `read_config` reads `jev: 2 finding(s) · fix`; click it for the picker, or
-   **Jev: explain the scope at the cursor** for a Markdown explanation beside the code.
+   **Jev: explain the scope at the cursor** for a Markdown explanation.
+
+**An answer never rearranges the editor.** `jev.artifacts.viewColumn` defaults to `active`, so a
+document opens in the group you are already in and the layout does not change; `beside` gives the
+old behaviour (a new group to the right — with one group open, a split) and `output` writes to
+*Output → Jev* and opens nothing. `ViewColumn.Beside` was the first default here, and with a
+single group open it split the window: an answer to a question rearranging the editor is what the
+default now exists to avoid.
+
+**Four commands never open a document**, because their whole answer is a value rather than prose:
+`jev.inspect` (counts and skip codes — 280 bytes on this fixture), `jev.status` (a numbers
+snapshot), `jev.recompute` and `jev.revert`. They write the body to *Output → Jev* and put one
+line in a message with a **Details** action that reveals the channel — measured in Cursor:
+`Jev: 2 finding(s) · 1 rule(s) considered · 2 candidate(s)`. A command you run *while* looking at
+a file must not replace what you are looking at with six lines you then have to close.
 
 **Save first.** This is the trap that costs the most time. A pull with no pass behind it answers
 *clean*: the rules pass runs on save and on `jev.inspect`, so a client that never sends
@@ -235,6 +250,9 @@ Verified on this machine, Cursor 3.21.16, `target/release/jev-lsp`:
 - **The extension installs and activates.** `cursor --install-extension` reports success,
   `--list-extensions` names `makefunstuff.jev`, and the extension host log records
   `Extension activated success` with a `jev-lsp --stdio` child process underneath it.
+- **An answer and a summary go where they should.** In the real window, `explain` left exactly
+  one editor group at the same geometry with the artifact as a tab — no split — and `inspect`
+  opened no document, showed one line and put the body in the channel.
 - **Diagnostics reach the editor.** Driving the real window — `⌘S` on the fixture — leaves an
   `analysis` entry in the server's own record (`<root>/.git/jev/session.jsonl`) with
   `count: 2`, `findings: [4, 6]`; the capture shows the squiggle and the hover that follow, and
