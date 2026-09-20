@@ -344,6 +344,56 @@ def main():
         check(len(cli_nested.get("findings") or []) == len(lsp_nested.get("findings") or []) == 1,
               "and the same finding, from the same root")
 
+        # ---- inspect, unchanged: the pair's order, field by field -------------
+        # `PROTOCOL.md` §6 defines `skipped` as `{code, detail}` — the code names the skip, the
+        # detail names what it is about. The CLI had them the other way round for the one skip
+        # whose detail is a path, and no case here noticed: the matching file reports no skip at
+        # all, and the unclaimed one reports a sentence, so the *order* of the pair was never
+        # compared. A client keying on `code` read a filesystem path where the server reads
+        # `unchanged`. This commits the tree, so git genuinely reports the file as untouched, and
+        # then reads both sides field by field.
+        print("[parity] inspect, unchanged: code and detail, field for field")
+        for argv in (["add", "-A"],
+                     ["-c", "user.email=parity@example.invalid", "-c", "user.name=parity",
+                      "-c", "commit.gpgsign=false", "commit", "-q", "-m", "fixture"]):
+            subprocess.run(["git", "-C", workdir, *argv], capture_output=True)
+        cli_out = subprocess.run([args.cli, "inspect", fixture], capture_output=True, text=True,
+                                 env=inspect_env, timeout=60)
+        check(cli_out.returncode == 0,
+              f"the CLI inspect of an unchanged file succeeded: {cli_out.stderr.strip()[:160]}")
+        cli_unchanged = json.loads(cli_out.stdout)
+
+        lsp_server = Lsp([args.bin, "--stdio"], inspect_env)
+        try:
+            lsp_server.request("initialize", {
+                "processId": os.getpid(), "rootUri": "file://" + workdir,
+                "capabilities": {"workspace": {"configuration": True}},
+            })
+            lsp_server.notify("initialized", {})
+            lsp_server.notify("textDocument/didOpen", {"textDocument": {
+                "uri": uri, "languageId": "python", "version": 1, "text": before}})
+            lsp_unchanged = (lsp_server.request("workspace/executeCommand", {
+                "command": "jev.inspect",
+                "arguments": [{"path": fixture}],
+            }, timeout=60).get("result") or {})
+        finally:
+            lsp_server.stop()
+
+        cli_skip = (cli_unchanged.get("skipped") or [{}])[0]
+        lsp_skip = (lsp_unchanged.get("skipped") or [{}])[0]
+        check(cli_skip.get("code") == lsp_skip.get("code") == "unchanged",
+              f"both front ends put the skip's name in `code` "
+              f"(cli={cli_skip.get('code')!r}, lsp={lsp_skip.get('code')!r})")
+        check(os.path.realpath(cli_skip.get("detail") or "") == os.path.realpath(fixture)
+              and os.path.realpath(lsp_skip.get("detail") or "") == os.path.realpath(fixture),
+              f"and the file it is about in `detail` "
+              f"(cli={cli_skip.get('detail')!r}, lsp={lsp_skip.get('detail')!r}, file={fixture!r})")
+        check(cli_unchanged.get("considered") == lsp_unchanged.get("considered") == 0
+              and cli_unchanged.get("candidates") == lsp_unchanged.get("candidates") == 0,
+              f"with neither pass claiming to have run "
+              f"(cli={cli_unchanged.get('considered')}/{cli_unchanged.get('candidates')}, "
+              f"lsp={lsp_unchanged.get('considered')}/{lsp_unchanged.get('candidates')})")
+
         return 0 if all(ok for ok, _ in RESULTS) else 1
     finally:
         server.stop()

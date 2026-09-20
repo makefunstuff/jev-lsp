@@ -490,6 +490,52 @@ def main():
             "the rules pass is on: this is the empty case, not a disabled one",
         )
 
+        print("[rules] 11. a rules document that cannot work is reported, never inert")
+        # The class the audit demonstrated on a real rule file: a pattern `regex` refuses finds no
+        # candidates, so the rule is inert, and the failure is invisible from the outside — a
+        # convention this repository keeps perfectly and a rule that never fires look the same.
+        # `rules::lint` says both problems, and the pass carries them in `skipped` beside
+        # `no_rules`; nothing about it is enforced (the rule still runs).
+        broken_rule = {
+            "id": "half-a-rule",
+            "title": "A pattern that does not compile",
+            "text": "The pattern is broken.",
+            "severity": "warning",
+            "applies_to": ["**/*.py"],
+            # JSON-decodes to `\w*_key\s*\(`, which `regex` rejects: an unescaped `(` opens a
+            # group. This is the shape a hand-written file actually arrives with.
+            "inspection": {"kind": "regex", "pattern": r"\\w*_key\\s*\\("},
+            "judgement": {"question": "Is it a violation?", "criteria": {"true": "yes", "false": "no"},
+                          "min_probability": 0.75},
+        }
+        # The second rule shares the id and is otherwise sound, so the two problems are one
+        # each: an uncompilable pattern, and an id two rules claim.
+        write_rules(11, broken_rule, dict(broken_rule, title="The same id twice",
+                                          inspection={"kind": "regex", "pattern": r"open\("}))
+        before = len(decisions())
+        broken = inspect(fixture, force=True)
+        lint = [s for s in broken.get("skipped", []) if s.get("code") == "lint"]
+        check(len(lint) == 2, f"both problems are reported ({broken.get('skipped')})")
+        check(
+            any("uncompilable regex" in (s.get("detail") or "") for s in lint),
+            f"the one that makes the rule inert names itself ({lint})",
+        )
+        check(
+            any("duplicate rule id" in (s.get("detail") or "") for s in lint),
+            f"and so does the id two rules share ({lint})",
+        )
+        check(
+            len(decisions()) == before,
+            f"with no rule claiming this file, so no call ({before} -> {len(decisions())})",
+        )
+        check(
+            ((server.request(
+                "workspace/executeCommand", {"command": "jev.status", "arguments": []}
+            ).get("result", {}).get("rules") or {}).get("lint")) == 2,
+            "and jev.status counts them, so a repository that never reads `skipped` still sees "
+            "a number where it had a silent rule",
+        )
+
         server.request("shutdown", None)
         server.notify("exit", None)
         return 0 if all(ok for ok, _ in RESULTS) else 1

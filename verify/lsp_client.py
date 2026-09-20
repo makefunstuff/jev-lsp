@@ -1863,6 +1863,7 @@ class StubServer(threading.Thread):
         self.action_versions = {}
         self.param_members = {}     # method -> [whether `params` was on the wire]
         self.did_save_params = []
+        self.config_answers = []   # answers to the `workspace/configuration` this stub asks for
         self.seen = []
         self.error = None
         self.refresh_sent = 0
@@ -1970,6 +1971,9 @@ class StubServer(threading.Thread):
         if state["kind"] == "ask":
             self._respond(state["origin"], {"body": message.get("result"),
                                             "error": message.get("error")})
+        elif state["kind"] == "config":
+            # The answer to the request above, kept so a phase can assert the client gave one.
+            self.config_answers.append(message.get("result"))
         elif state["kind"] == "unknown":
             error = message.get("error") or {}
             self._respond(state["origin"], {"error_code": error.get("code")})
@@ -2107,6 +2111,12 @@ class StubServer(threading.Thread):
         method = message["method"]
         params = message.get("params") or {}
         self.seen.append((method, params))
+        if method == "initialized":
+            # A faithful server's first act is `JevServer::initialized` -> `pull_configuration`:
+            # ask the client for the `jev` section *by name*. Step 2 asserts exactly that of the
+            # first configuration request, and it was unsatisfiable here — this stub never asked,
+            # so every baseline phase of this selftest reported that assertion red.
+            self._request("workspace/configuration", {"items": [{"section": "jev"}]}, "config")
         if method == "textDocument/didOpen":
             document = params["textDocument"]
             self.docs[document["uri"]] = {"version": document.get("version", 1),
@@ -2308,9 +2318,16 @@ def run_selftest(timeout):
                      kinds == ["begin", "report", "end"], "kinds=%s" % _describe(kinds))
 
         asked = session.request("stub/ask", {})
+        # One entry per requested item, and that entry is the client's `jev` section — not an
+        # empty object. `rules.enabled: false` is what every later step's measurements depend on
+        # (the ambient pass is then the chat review this client is written against), so an answer
+        # that carried fewer keys would quietly change what the rest of the run is measuring.
+        answer = asked.get("body") if isinstance(asked, dict) else None
         report.check("1.8", "the client answers a server->client workspace/configuration "
-                            "request", isinstance(asked, dict)
-                     and asked.get("body") == [{}],
+                            "request with its `jev` section",
+                     isinstance(answer, list) and len(answer) == 1
+                     and isinstance(answer[0], dict)
+                     and (answer[0].get("rules") or {}).get("enabled") is False,
                      "server saw %s" % _describe(asked)[:160])
 
         unknown = session.request("stub/unknown-request-back", {})
@@ -2468,8 +2485,9 @@ def build_parser():
                         help="point every model tier at URL through the "
                              "workspace/configuration channel (PROTOCOL §10) and through "
                              "JEV_BASE_URL in the server's environment; without it the "
-                             "client answers configuration requests with {} and the server "
-                             "keeps its own defaults")
+                             "client answers with `rules.enabled: false` (so the ambient pass "
+                             "is the chat review this client is written against) and the "
+                             "server keeps its own defaults for everything else")
     parser.add_argument("--keep-fixtures", action="store_true",
                         help="keep the fixture temp dir and log its path on stderr")
     parser.add_argument("--selftest", action="store_true",
