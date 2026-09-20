@@ -129,13 +129,21 @@ It performs, in order, and asserts at each step:
    received for the token and no `edit` followed.
 10. The three reachable §3.5 failure paths — **model error**, **budget refusal**, **cancellation** —
    each assert exactly one `begin` and one `end` in that order under the supplied `workDoneToken`,
-   the `Result` envelope's code (`model_error` / `over_budget` / `-32800 Canceled`), that the `end`
-   arrives **before** the response, and that the server answers a following command. The
-   cancellation case also asserts promptness: the `end` within 2 s of the cancel while the model
-   call stalls for 4 s, which is the assertion that goes red on the pre-fix behaviour.
+   that nothing arrives under that token after its `end` (read after a settle window, so a leak
+   that came out after the `end` is covered — for the cancellation path that is §3.5's "nothing
+   further is published under that token"), the `Result` envelope's code (`model_error` /
+   `over_budget` / `-32800 Canceled`), and that the server answers a following command. The order
+   of the `end` and the response is recorded, not asserted: both are the server's own messages and
+   the transport's merge decides which is written first (see PROTOCOL §3.5 and the client's own
+   note in `verify/lsp_client.py`). The cancellation case also asserts promptness: the `end`
+   within 2 s of the cancel while the model call stalls for 4 s, which is the assertion that goes
+   red on the pre-fix behaviour.
 
 Because it is written from the spec, a disagreement between it and the server is a real
-protocol defect, not a test artifact.
+protocol defect, not a test artifact — with one boundary, measured rather than assumed: the
+relative order of two of the *server's own* messages on the wire (a token's `end` and the
+response it belongs to) is decided by `tower-lsp`'s transport merge, not by the command, so the
+client records that interleaving rather than asserting it (PROTOCOL §3.5).
 
 ### 1.1 A third client: OMP
 
@@ -226,6 +234,7 @@ suite is the actual regression net; it is run in CI *and* as part of the design 
 | `title` derived from model output | determinism test: two cold runs must produce identical titles |
 | Budget check after the call instead of before | budget test asserting the stub sees exactly `max_calls_per_min` calls |
 | `$/progress` `end` omitted on the error path | `verify/lsp_client.py` step 9 (the normal path) and step 10 (model error, budget refusal, cancellation) |
+| A `$/progress` published under a token its `end` has closed | `verify/lsp_client.py` step 9, `--selftest` defect `progress_after_end` (the settled read catches it, the read at the instant the `end` arrived does not), and step 10 |
 | Progress sent for a token the client never supplied or created | `verify/lsp_client.py` conformance check; `verify/probes/streaming.lua` for the client side |
 | Token smuggled through `arguments` instead of `workDoneToken` | same — the server would still "work" against Neovim, which is why the check lives in the independent client |
 | `workDoneProgress: true` declared on a provider that never reports | capability audit in the independent client's `initialize` assertions |
