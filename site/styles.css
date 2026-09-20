@@ -98,22 +98,52 @@ body {
   padding-block: 0.85rem;
 }
 .brand {
-  display: inline-flex; align-items: center; gap: 0.5rem;
+  display: inline-flex; align-items: center; gap: 0.55rem;
   flex-shrink: 0; min-width: 0;
+}
+/* No logo ticks / accent bars — ever */
+.brand::before,
+.brand::after,
+.brand .wordmark::before,
+.brand .wordmark::after,
+.brand .wip::before,
+.brand .wip::after {
+  content: none !important;
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: none !important;
+  border: 0 !important;
 }
 .wordmark {
   display: inline-flex; align-items: center;
-  font: 700 1.05rem / 1 var(--mono);
-  letter-spacing: -0.02em; color: var(--ink); text-decoration: none;
+  font: 800 1.15rem / 1 var(--mono);
+  letter-spacing: -0.03em;
+  color: var(--ink);
+  text-decoration: none !important;
+  text-decoration-thickness: 0 !important;
+  text-underline-offset: 0 !important;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
 }
 .wordmark:hover, .wordmark:focus-visible {
-  color: var(--ink); background: transparent; text-decoration: none;
+  color: var(--ink);
+  background: transparent !important;
+  text-decoration: none !important;
+  filter: none;
 }
 .wip {
-  padding: 0.12rem 0.4rem;
-  border: 1px solid var(--line-strong); border-radius: 4px;
-  color: var(--muted); font: 550 0.65rem / 1.2 var(--sans);
-  letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 0.15rem 0.42rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  font: 550 0.62rem / 1.2 var(--sans);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  background: transparent;
+  /* never pick up accent */
+  box-shadow: none;
 }
 .toc {
   display: flex; flex-wrap: nowrap; gap: 0.15rem; align-items: center;
