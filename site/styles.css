@@ -66,6 +66,13 @@ body {
   font: var(--t-body) / 1.55 var(--sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overflow-x: clip;
+}
+img, svg, video, canvas { max-width: 100%; height: auto; }
+.shell, .hero-layout, .hero-stage, .hero-copy, .split, .loop-layout,
+.start-layout, .client-showcase, .demo-frame, .win, .float-card, .cost-card {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .skip {
@@ -80,8 +87,10 @@ body {
 
 .shell {
   max-width: var(--shell);
+  width: 100%;
   margin-inline: auto;
   padding-inline: var(--gutter);
+  box-sizing: border-box;
 }
 
 /* ---------- header ---------- */
@@ -818,12 +827,135 @@ tr.mark strong { color: var(--accent); }
 
 /* ---------- responsive ---------- */
 @media (max-width: 719px) {
-  h1 { max-width: none; }
+  :root {
+    --t-display: clamp(1.85rem, 7.5vw, 2.35rem);
+    --t-h2: clamp(1.25rem, 5vw, 1.55rem);
+    --t-lead: 1.02rem;
+    --t-body: 1rem;
+    --gutter: 1rem;
+  }
+  h1, h2 { max-width: none; }
+  .lead, .sec-lead, .muted-line, .pull, .sec-head, p, li {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .hero-layout,
+  .split,
+  .loop-layout,
+  .start-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+    width: 100%;
+  }
+  .hero-copy, .hero-stage, .split-copy, .compare-stack, .start-copy, .start-wins {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
   .float-rule { display: none; }
-  .hero-stage { padding: 0; min-height: 0; }
-  .float-diag { transform: none; width: 100%; }
-  table.cost tbody th { white-space: normal; }
+  .hero { padding-block: 2rem 2.75rem; }
+  .hero-stage { padding: 0; min-height: 0; overflow: hidden; }
+  .float-diag,
+  .win,
+  .win-lg,
+  .cost-card {
+    transform: none !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin-left: 0 !important;
+    overflow: hidden;
+  }
+  .float-diag .editor-pane,
+  .editor-pane.embedded,
+  .nvim-pane,
+  .vsc-pane {
+    font-size: 0.72rem;
+  }
+  .float-diag .ed-lines,
+  .float-diag .ed-gutter span,
+  .ed-lines,
+  .ed-gutter span {
+    font-size: 0.72rem;
+  }
+  .virt {
+    display: inline-block;
+    margin-left: 0.35rem;
+    max-width: 100%;
+    white-space: normal;
+  }
+  .ed-row {
+    white-space: nowrap;
+  }
+  .editor-pane,
+  .term,
+  .win-body,
+  .cost-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+  .win-chrome {
+    gap: 0.4rem;
+    padding-inline: 0.65rem;
+  }
+  .win-tabs { display: none; }
   .win-meta { display: none; }
+  .hero-actions {
+    width: 100%;
+  }
+  .hero-actions .btn {
+    flex: 1 1 calc(50% - 0.4rem);
+    min-width: 8rem;
+    text-align: center;
+  }
+  .sec-start .hero-actions .btn {
+    flex: 1 1 100%;
+  }
+  .fact-strip {
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+  .fact-strip li {
+    border-right: 0;
+    margin-right: 0;
+    padding-right: 0;
+  }
+  .client-seg {
+    display: flex;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .client-seg-btn {
+    flex: 1 1 0;
+    text-align: center;
+    padding: 0.5rem 0.4rem;
+    font-size: var(--t-xs);
+  }
+  .client-stage { min-height: 0; }
+  .vsc-hover { max-width: calc(100% - 1rem); }
+  .vsc-body { min-height: 10rem; }
+  table.cost {
+    font-size: 0.72rem;
+  }
+  table.cost th, table.cost td {
+    padding: 0.65rem 0.7rem;
+  }
+  table.cost tbody th { white-space: normal; }
+  .next-steps { padding-left: 1.1rem; }
+  .next-steps code {
+    word-break: break-all;
+    overflow-wrap: anywhere;
+    font-size: 0.78em;
+  }
+  .win-install .win-body {
+    font-size: 0.68rem;
+  }
+  .sec-clients,
+  .sec-start,
+  .hero {
+    overflow-x: clip;
+  }
+  .loop-steps li { gap: 0.65rem; }
+  .chat-blob { font-size: 0.9rem; }
 }
 
 @media (min-width: 720px) and (max-width: 959px) {
