@@ -286,8 +286,34 @@ the reason kept in the row.
 
 ### The decide tier against a real Jev endpoint
 
-The rules pass's questions were put to the hosted decision model through OpenRouter, wire
-`open_router` (`POST {base}/alpha/decisions`), model `typesafe/jev-1.13`:
+**The route in force now: OpenCode Zen** (`https://opencode.ai/zen/v1`), wire `system_one`
+(`POST {base}/systemone`), model `jev-1.13`, key from the harness's own credential store:
+
+```sh
+TYPESAFE_API_KEY="$(cat ~/.omp/agent/opencode.key)" JEV_DECIDE_TIMEOUT_MS=15000 \
+JEV_DECIDE_WIRE=system_one JEV_DECIDE_BASE_URL=https://opencode.ai/zen/v1 \
+JEV_DECIDE_MODEL=jev-1.13 target/release/jev inspect --force handler.rs
+```
+
+- through the shipped CLI: `rc=0`, **514 in / 29 out tokens, 732 ms**, the finding published at
+  **p = 0.91**; through the plugin, after a real save: `source=jev` on line 4 at **p = 0.87**;
+  through OMP, with no project `.omp/` and no `JEV_DECIDE_*` in the environment:
+  `4:5 [warning] [jev] Unwrap in a request handler … (p=0.90)`;
+- eight observations on this route ranged **p = 0.84–0.91** (OpenRouter, same model: 0.86–0.88) —
+  same judgement, ±0.04 of endpoint noise;
+- **the wire is not optional here**: `open_router` against Zen is `HTTP 404`, so the request must
+  be `system_one`. `opencode-go` (`…/zen/go/v1`) carries **no Jev** — its decision route answers
+  `400 Model is unavailable` — and `jev-1.13-free` answered **429 `FreeUsageLimitError`** three
+  calls into a burst, so it is not a default;
+- **the ceiling is a measurement**: at the shipped `timeout_ms = 5000` a client-attached call
+  failed with `decision call failed: POST …/systemone: timeout: global` while the CLI on the same
+  route succeeded (732–929 ms typical, 4.98 s once on the free tier, plus the client's first-call
+  config grace), and the same run answered `ok` at `15000`. Zen's price is **not** visible: the
+  response carries `usage` and no cost field.
+
+**The OpenRouter route**, kept as the documented alternative because its price is visible and it
+has no rate-limit surprise — wire `open_router` (`POST {base}/alpha/decisions`), model
+`typesafe/jev-1.13`:
 
 ```sh
 export TYPESAFE_API_KEY="$(cat ~/.omp/agent/openrouter.key)"   # the name api_key_env holds

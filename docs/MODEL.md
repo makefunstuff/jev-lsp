@@ -22,7 +22,13 @@ of questions, and the response is one value per question with a probability
 to run on every save — a decision costs a few dozen tokens where a review costs thousands — and
 why the tier has its own key shape, `{wire, base_url, model, api_key_env, timeout_ms, max_tokens,
 temperature, think}` with `timeout_ms` 5000 and `max_tokens` 64 rather than the chat tiers'
-90 000/8192 (PROTOCOL §10). `wire` names the path appended to `base_url`: `system_one`
+90 000/8192 (PROTOCOL §10). Three routes are documented, all measured: the built-in default
+(`https://api.typesafe.ai/v1`, model `jev-latest`, wire `system_one`); a local System One server
+(`base_url = "http://127.0.0.1:8009/v1"`, `model = "kev-latest"`); and a hosted gateway carrying the
+same model — OpenCode Zen (`https://opencode.ai/zen/v1`, model `jev-1.13`, wire **`system_one`**:
+its `/alpha/decisions` path 404s, so the wire is not optional) or OpenRouter
+(`https://openrouter.ai/api`, model `typesafe/jev-1.13`, wire `open_router`). §8 compares them.
+`wire` names the path appended to `base_url`: `system_one`
 (`/systemone`) or `open_router` (`/alpha/decisions`). `JEV_DECIDE_BASE_URL`,
 `JEV_DECIDE_MODEL`, `JEV_DECIDE_WIRE` and `JEV_DECIDE_TIMEOUT_MS` set those four from the
 environment; `JEV_DECIDE_WIRE` accepts `system_one`/`systemone` and `open_router`/`openrouter`
@@ -283,20 +289,37 @@ lowering the ceiling to nothing. Turning rules off returns the ambient path to t
 (§2) — which is also remote by default, so a reader who wants *nothing* leaving the machine should
 point `models.reason` and `models.review` at a local endpoint too.
 
-**A hosted provider other than the default needs two things, and one of them is easy to miss.**
+**A hosted provider other than the default needs the wire, the ceiling, and the key's name.**
 
 ```sh
-# the path is selected by the wire, not guessed from the host: without this the request would
-# POST {base}/systemone at OpenRouter and miss
-export JEV_DECIDE_BASE_URL=https://openrouter.ai/api
-export JEV_DECIDE_WIRE=open_router          # -> https://openrouter.ai/api/alpha/decisions
-export JEV_DECIDE_MODEL=<model>
+# the path is selected by the wire, not guessed from the host: OpenCode Zen answers on
+# /systemone and 404s on the open_router path
+export JEV_DECIDE_WIRE=system_one
+export JEV_DECIDE_BASE_URL=https://opencode.ai/zen/v1
+export JEV_DECIDE_MODEL=jev-1.13            # not jev-1.13-free: 429 FreeUsageLimitError in bursts
+export JEV_DECIDE_TIMEOUT_MS=15000          # the 5000 ms default is too close to its tail
 
 # the key is read from the variable *named by* `api_key_env`, which defaults to
 # TYPESAFE_API_KEY and has no environment override of its own — so export it under that name,
 # or set models.decide.api_key_env in config. Any other variable name is simply not read.
 export TYPESAFE_API_KEY=<key>
 ```
+
+The OpenRouter route is the alternative, and its price is visible from its API:
+
+```sh
+export JEV_DECIDE_WIRE=open_router          # -> {base}/alpha/decisions
+export JEV_DECIDE_BASE_URL=https://openrouter.ai/api
+export JEV_DECIDE_MODEL=typesafe/jev-1.13
+```
+
+Measured on the same fixture and rule: both routes answer the same judgement (Zen 0.85–0.86,
+OpenRouter 0.86, and today's spread on Zen 0.84–0.91), Zen is ~2× slower (0.93 s against 0.42 s),
+Zen's response carries `usage` but no cost field, and `opencode-go` — the subscription gateway,
+`…/zen/go/v1` — carries no Jev at all (`Model is unavailable`). The raised `timeout_ms` is a
+measurement, not a loosened check: at the shipped 5000 ms a client-attached call failed with
+`decision call failed: POST …/systemone: timeout: global` while the CLI on the same route
+succeeded, and the same run answered `ok` at 15000.
 
 An unrecognised `JEV_DECIDE_WIRE` is ignored rather than coerced, so a typo leaves the previous
 wire in force; `jev.status` (`models.decide.wire`) and the server's `settings applied` log line

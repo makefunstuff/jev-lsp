@@ -537,20 +537,26 @@ settings = {
   check that runs after an edit is not a model call: the server compares the applied bytes
   against its own prediction (`docs/VERIFICATION.md` §11, and nothing parses the result).
 - **The decide tier is remote by default**, so on a default install the text of a changed file
-  goes to `api.typesafe.ai` on every rules pass. To keep it local, point `models.decide` at a
-  System One server (`base_url = 'http://127.0.0.1:8009/v1'`, `model = 'kev-latest'`) or set
-  `rules.enabled = false` to end the ambient pass entirely (`docs/MODEL.md` §8). `JEV_BASE_URL`
-  does **not** move this tier: it names an OpenAI-compatible chat server, and a decision is not a
-  chat. `JEV_DECIDE_BASE_URL` / `JEV_DECIDE_MODEL` do.
+  goes to `api.typesafe.ai` on every rules pass. This machine runs the same model through OpenCode
+  Zen instead (`wire = 'system_one'`, `base_url = 'https://opencode.ai/zen/v1'`,
+  `model = 'jev-1.13'`, `timeout_ms = 15000`); OpenRouter (`wire = 'open_router'`,
+  `base_url = 'https://openrouter.ai/api'`, `model = 'typesafe/jev-1.13'`) is the alternative, and
+  its price is visible from its API. To keep it local, point `models.decide` at a System One server
+  (`base_url = 'http://127.0.0.1:8009/v1'`, `model = 'kev-latest'`) or set `rules.enabled = false`
+  to end the ambient pass entirely (`docs/MODEL.md` §8). `JEV_BASE_URL` does **not** move this
+  tier: it names an OpenAI-compatible chat server, and a decision is not a chat.
+  `JEV_DECIDE_BASE_URL` / `JEV_DECIDE_MODEL` do. `opencode-go` (`…/zen/go/v1`) carries no Jev.
 - **`wire` picks the path, and the key's name comes from `api_key_env`.** `wire` (or
   `JEV_DECIDE_WIRE`) is `system_one` → `{base_url}/systemone` or `open_router` →
   `{base_url}/alpha/decisions`; anything else is ignored and the wire in force is kept, so a typo
-  never silently posts to the wrong path (`:Jev status` shows `models.decide.wire`). The API key
-  is read from the variable **named by** `api_key_env` — `TYPESAFE_API_KEY` by default, with no
-  environment override for the name — so a hosted provider needs either that variable exported or
-  `api_key_env` changed in settings. `JEV_DECIDE_TIMEOUT_MS` raises the 5000 ms ceiling for a
-  hosted cold start; a value that does not parse, or parses to zero, is ignored.
-  `docs/MODEL.md` §8 has the worked recipe.
+  never silently posts to the wrong path (`:Jev status` shows `models.decide.wire`). Zen needs
+  `system_one` — its `open_router` path is a 404. The API key is read from the variable **named
+  by** `api_key_env` — `TYPESAFE_API_KEY` by default, with no environment override for the name —
+  so a hosted provider needs either that variable exported or `api_key_env` changed in settings
+  (which only a client can send; the CLI cannot). `JEV_DECIDE_TIMEOUT_MS` raises the 5000 ms
+  ceiling, and a hosted route needs it: at 5000 a client-attached call failed with
+  `timeout: global` while the CLI on the same route succeeded, and 15000 answered `ok`. A value
+  that does not parse, or parses to zero, is ignored. `docs/MODEL.md` §8 has the worked recipe.
 - `rules.enabled = false` also returns the ambient path to the `review` tier, which is what this
   server did before rules existed — and which is *also* remote by default.
 - `think = 'off'` sends `chat_template_kwargs: {enable_thinking: false}` and is the default for
@@ -594,6 +600,12 @@ jev status                             # budget, queue and cache
 - `jev inspect` prints the same body the LSP command `jev.inspect` returns: `findings`,
   `considered`, `candidates` and `skipped`. It is the same code the ambient pass runs, which is
   the whole point — a CLI that disagreed with the server about a rule would be worse than none.
+- **The decide tier's key has to be exported as `TYPESAFE_API_KEY`** (`TYPESAFE_API_KEY="$OTHER_KEY"
+  jev inspect …`): the variable *name* comes from `models.decide.api_key_env` and has no
+  environment override — `JEV_API_KEY_ENV` covers the chat tiers only — so a CLI user pointing at
+  another provider either uses that name or changes the setting in a client config the CLI does
+  not read. `JEV_DECIDE_BASE_URL`, `JEV_DECIDE_MODEL`, `JEV_DECIDE_WIRE` and
+  `JEV_DECIDE_TIMEOUT_MS` do the rest of the pointing; a hosted route needs the raised ceiling.
 - stdout is exactly one JSON value; stderr carries diagnostics including one cost line per
   model call.
 - Exit codes are the contract: `0` success, `1` transport or model failure, `2` usage or

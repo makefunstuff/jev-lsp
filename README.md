@@ -37,16 +37,23 @@ and reports `no_rules`. `docs/TUTORIAL.md` §3.7 has the rule shape.
 ### Endpoints
 
 Nothing appears until a rule exists **and** the decision tier answers, so that tier is what a first
-run needs. It is hosted Jev by default, key from `TYPESAFE_API_KEY`:
+run needs. It is hosted Jev by default (`api.typesafe.ai`, key from `TYPESAFE_API_KEY`); this
+machine runs it through **OpenCode Zen**, which carries the same model:
 
 ```sh
-export TYPESAFE_API_KEY=…                      # the hosted default (api.typesafe.ai)
-export JEV_DECIDE_WIRE=system_one              # or open_router -> {base}/alpha/decisions
+export TYPESAFE_API_KEY=…                      # the variable `api_key_env` names (see below)
+export JEV_DECIDE_WIRE=system_one              # required: Zen 404s on the open_router path
+export JEV_DECIDE_BASE_URL=https://opencode.ai/zen/v1
+export JEV_DECIDE_MODEL=jev-1.13               # NOT jev-1.13-free: it rate-limits (429) in bursts
+export JEV_DECIDE_TIMEOUT_MS=15000             # any hosted decide endpoint needs more than 5000 ms
+
+# the OpenRouter route, kept as the alternative (its price is visible from the API):
+#   JEV_DECIDE_WIRE=open_router  JEV_DECIDE_BASE_URL=https://openrouter.ai/api
+#   JEV_DECIDE_MODEL=typesafe/jev-1.13
 
 # or a local System One server, no key:
 export JEV_DECIDE_BASE_URL=http://127.0.0.1:8009/v1
 export JEV_DECIDE_MODEL=kev-latest
-export JEV_DECIDE_TIMEOUT_MS=20000             # a hosted cold start can exceed 5000 ms
 
 # the chat tiers answer actions, plans and explanations — needed only for those:
 export JEV_BASE_URL=http://127.0.0.1:8080/v1   # chat model, OpenAI-compatible
@@ -54,7 +61,11 @@ export JEV_MODEL=your-model-name
 export JEV_API_KEY_ENV=OPENROUTER_API_KEY      # a hosted chat tier: the NAME of the key variable
 ```
 
-`docs/TUTORIAL.md` §4 lists every setting.
+`opencode-go` (`…/zen/go/v1`) is the subscription gateway and carries **no Jev** — its decision
+route answers `Model is unavailable`. The key's *name* comes from `api_key_env` and has no
+environment override (`JEV_API_KEY_ENV` covers the chat tiers only), so the CLI exports its key
+under `TYPESAFE_API_KEY` whatever the provider; a client that sends settings can name another
+variable there. `docs/TUTORIAL.md` §4 lists every setting.
 
 ## Use it with another LSP client
 
@@ -75,8 +86,9 @@ OMP, the entry `verify/omp_lsp.sh` exercises, written to `<project>/.omp/lsp.jso
 ```json
 {"servers":{"jev-lsp":{"command":"/path/to/jev-lsp/target/release/jev-lsp","args":["--stdio"],
   "fileTypes":[".rs",".py",".md",".toml",".json",".lua",".sh"],"rootMarkers":[".git"],
-  "settings":{"jev":{"models":{"decide":{"wire":"open_router","base_url":"https://openrouter.ai/api",
-                                          "model":"typesafe/jev-1.13","api_key_env":"TYPESAFE_API_KEY"}}}}}}}
+  "settings":{"jev":{"models":{"decide":{"wire":"system_one","base_url":"https://opencode.ai/zen/v1",
+                                          "model":"jev-1.13","api_key_env":"TYPESAFE_API_KEY",
+                                          "timeout_ms":15000}}}}}}}
 ```
 
 `settings` can name the key's **variable** (`api_key_env`) but cannot carry the key itself, so
