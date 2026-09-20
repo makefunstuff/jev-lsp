@@ -962,6 +962,65 @@ async fn nothing_yet(client: &Client, token: &ProgressToken, waited: std::time::
         .await;
 }
 
+/// Sends `end` for a progress token unless it was already sent.
+///
+/// PROTOCOL.md §3.5 requires *exactly one* `end` on every path, "including model error, budget
+/// refusal, cancellation, and panic". The first three are code and are written out where they
+/// happen; a panic is not code — it is unwinding — so the clause had nothing behind it once the
+/// `bridge.rs` drop guard it was written for was deleted, and a panic between `begin` and `end`
+/// would have left the token open. This is that guard, in the one place that needs it.
+///
+/// A destructor cannot await, and this may run while a panic unwinds, so the send is handed to
+/// the runtime instead of performed here.
+///
+/// Two paths reach it: a panic unwinding through the body, and a `$/cancelRequest` that aborts
+/// the task the body runs in — which is why the task is spawned through `AbortOnDrop` and not
+/// merely `tokio::spawn`ed.
+struct EndOnDrop<F: FnOnce(ProgressToken)> {
+    token: Option<ProgressToken>,
+    send: Option<F>,
+}
+
+impl<F: FnOnce(ProgressToken)> EndOnDrop<F> {
+    fn new(token: ProgressToken, send: F) -> EndOnDrop<F> {
+        EndOnDrop {
+            token: Some(token),
+            send: Some(send),
+        }
+    }
+
+    /// The explicit `end` has been sent; the guard has nothing left to do.
+    fn done(&mut self) {
+        self.token = None;
+        self.send = None;
+    }
+}
+
+impl<F: FnOnce(ProgressToken)> Drop for EndOnDrop<F> {
+    fn drop(&mut self) {
+        if let (Some(token), Some(send)) = (self.token.take(), self.send.take()) {
+            send(token);
+        }
+    }
+}
+
+/// Aborts a spawned command when the request it belongs to goes away.
+///
+/// `$/cancelRequest` never reaches this crate: tower-lsp 0.20 aborts the task that is running
+/// the handler (`Pending::cancel` → `JoinHandle::abort`). Aborting *that* future would only drop
+/// the `JoinHandle` a plain `tokio::spawn` returned, and dropping a `JoinHandle` detaches — so
+/// the command would run on after the client cancelled it, keep streaming `report`s under a
+/// token the response has already closed, keep spending budget, and close the token only when
+/// work nobody is waiting for finally finished. Measured before this guard existed: `begin`,
+/// `-32800` at 53 ms, eight `report`s, and `end` 4.7 s later.
+struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 async fn progress(client: &Client, token: &ProgressToken, value: WorkDoneProgress) {
     client
         .send_notification::<Progress>(ProgressParams {
@@ -1486,87 +1545,130 @@ impl LanguageServer for JevServer {
         Ok(Some(lenses))
     }
 
+    /// Run a command in its own task, so a panic in it is a `JoinError` here rather than an
+    /// unwind through the transport loop.
+    ///
+    /// Measured, not assumed: tower-lsp 0.20.0 contains no `catch_unwind` anywhere and awaits
+    /// the service future in the transport task (`src/service.rs:333`) rather than spawning one
+    /// per request, so a panic in a handler propagates out of `serve` and takes the process with
+    /// it — leaving the client with no response *and* no `end`, and no destructor able to send
+    /// one because the runtime dies with it. Containing the body is therefore what makes
+    /// PROTOCOL.md §3.5's "exactly one `end` … including panic" true: the token is closed by the
+    /// guard inside the body, the request is answered, and the server keeps serving.
+    ///
+    /// The task is held through `AbortOnDrop`, so the other way this future can end — the client
+    /// cancelling the request, which drops it — stops the command instead of detaching it.
     async fn execute_command(
         &self,
         params: ExecuteCommandParams,
     ) -> RpcResult<Option<serde_json::Value>> {
-        let token = params.work_done_progress_params.work_done_token.clone();
-        let command = params.command.clone();
-        let started = std::time::Instant::now();
-        if let Some(t) = &token {
-            progress(
-                &self.client,
-                t,
-                WorkDoneProgress::Begin(WorkDoneProgressBegin {
-                    title: format!("jev {command}"),
-                    cancellable: Some(false),
-                    message: None,
-                    percentage: None,
-                }),
-            )
-            .await;
+        let body = JevServer::new(self.client.clone(), self.state.clone());
+        let mut task = AbortOnDrop(tokio::spawn(async move { body.command_body(params).await }));
+        match (&mut task.0).await {
+            Ok(value) => Ok(Some(value)),
+            // A panic: the guard inside the body has already closed the token, so this only has
+            // to say what happened and keep the server alive.
+            Err(join) if join.is_panic() => {
+                let why = join
+                    .try_into_panic()
+                    .ok()
+                    .and_then(|p| p.downcast_ref::<&str>().map(|s| s.to_string())
+                        .or_else(|| p.downcast_ref::<String>().cloned()))
+                    .unwrap_or_else(|| "a command panicked".to_string());
+                self.client
+                    .log_message(
+                        MessageType::ERROR,
+                        format!("jev: a command panicked and was contained: {why}"),
+                    )
+                    .await;
+                Ok(Some(result_err(
+                    "panic",
+                    &format!("the command panicked and was contained: {why}"),
+                )))
+            }
+            // Not a panic, so the task was aborted before it could answer: there is no work left
+            // to report, and nothing is waiting for it. A live cancellation does not arrive here
+            // — it drops this future, and `AbortOnDrop` aborts the task from there.
+            Err(_) => Ok(Some(result_err("cancelled", "the command was cancelled"))),
         }
+    }
+}
 
-        let value = self.run_command(&params).await;
+#[cfg(test)]
+mod progress_tests {
+    use super::*;
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
-        // One line per command, written where every command passes so none can be missed. The
-        // record is never read back to decide anything (N9); a read-only checkout that cannot
-        // be written to is not a reason to fail a request over a convenience.
-        //
-        // Five commands are left out on purpose, for the same reason: they are not work.
-        // `jev.document` is the client telling the server what it already knows, sent on every
-        // change; `jev.status` and `jev.session` are polls — the statusline asks for
-        // the first every few seconds and the session buffer for the second. Recording polls
-        // fills the record with the act of reading it and buries the work it exists to show,
-        // which is exactly what happened: a day of testing left ninety-five megabytes of
-        // `jev.status` behind and nothing else in the last two hundred entries. `jev.usage`
-        // reads the same record, so it is a poll by construction, and `jev.outcome` is not
-        // work either — it *is* the entry it would otherwise duplicate.
-        let recorded = !matches!(
-            command.as_str(),
-            "jev.document" | "jev.status" | "jev.session" | "jev.usage" | "jev.outcome"
+    /// A sink standing in for the client, so the guard can be exercised without a socket.
+    fn sink() -> (Arc<Mutex<Vec<String>>>, Box<dyn FnOnce(ProgressToken) + Send>) {
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let written = seen.clone();
+        (
+            seen,
+            Box::new(move |token: ProgressToken| {
+                written.lock().push(format!("{token:?}"));
+            }),
+        )
+    }
+
+    fn token() -> ProgressToken {
+        ProgressToken::String("jev:test".to_string())
+    }
+
+    #[test]
+    fn a_token_closed_normally_is_not_closed_twice() {
+        // The ordinary path: `begin` … `end` … `done()`. One end, from the code, not the guard.
+        let (seen, send) = sink();
+        let mut guard = EndOnDrop::new(token(), send);
+        guard.done();
+        drop(guard);
+        assert!(seen.lock().is_empty(), "the explicit end is the only one");
+    }
+
+    #[test]
+    fn a_panic_between_begin_and_end_still_sends_its_end() {
+        // The clause names panic explicitly, so the guard is exercised through a real unwind
+        // rather than only by dropping it on a path that cannot panic.
+        let (seen, send) = sink();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = EndOnDrop::new(token(), send);
+            panic!("as a command handler might, between begin and end");
+        }));
+        assert!(result.is_err(), "the probe panicked, which is the path under test");
+        assert_eq!(
+            seen.lock().len(),
+            1,
+            "exactly one end arrives for a token left open by unwinding"
         );
-        if recorded {
-        if let Some(root) = self.state.root() {
-            let _ = crate::trace::append(
-                &root,
-                &json!({
-                    "kind": "command",
-                    "command": command,
-                    // An artifact result carries no `ok` at all — it is the artifact — so
-                    // "not an error" is the honest reading, and only a Result envelope's own
-                    // `ok` overrides it.
-                    "ok": value
-                        .get("ok")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or_else(|| value.get("error").is_none()),
-                    "error": value
-                        .get("error")
-                        .and_then(|e| e.get("code"))
-                        .and_then(|v| v.as_str()),
-                    "ms": started.elapsed().as_millis() as u64,
-                    // Where the request was anchored, when it says. This is what makes the
-                    // record something you can walk back through rather than only read: an
-                    // entry that knows its file and line can be opened from the session
-                    // buffer. `plan` nests its anchor under `scope`, so both are checked.
-                    "uri": anchored(&params.arguments, "uri"),
-                    "line": anchored(&params.arguments, "line"),
-                }),
-            );
-        }
-        }
+    }
 
-        if let Some(t) = &token {
-            progress(
-                &self.client,
-                t,
-                WorkDoneProgress::End(WorkDoneProgressEnd {
-                    message: Some("done".to_string()),
-                }),
-            )
-            .await;
+    #[tokio::test]
+    async fn a_dropped_request_aborts_the_command_and_closes_its_token() {
+        // Cancellation, as the transport delivers it: `$/cancelRequest` drops this request's
+        // future, and the task running the command goes with it. Without `AbortOnDrop` the task
+        // would keep going, the guard would not run until the work nobody wants finished, and
+        // the token would stay open for as long as that took.
+        let (seen, send) = sink();
+        let task = AbortOnDrop(tokio::spawn(async move {
+            let _guard = EndOnDrop::new(token(), send);
+            std::future::pending::<()>().await;
+        }));
+        // Let the command start, so the guard exists before the request goes away — a cancel
+        // arrives while work is in flight, never before it begins.
+        tokio::task::yield_now().await;
+        drop(task);
+        for _ in 0..100 {
+            if !seen.lock().is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        Ok(Some(value))
+        assert_eq!(
+            seen.lock().len(),
+            1,
+            "the aborted command's token was closed exactly once"
+        );
     }
 }
 
@@ -1681,9 +1783,13 @@ impl JevServer {
         // produced by a configuration the client never sent.
         self.state.await_config(CONFIG_GRACE).await;
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let forwarder = token.map(|t| {
+        // Armed at the spawn, not after the work: the request can go away while the model call
+        // is still in flight, and a guard that is wrapped onto the handle only once the call has
+        // returned has nothing to abort — that is how a cancelled request kept sending `report`s
+        // under a token its own `end` had already closed.
+        let mut forwarder = token.map(|t| {
             let client = self.client.clone();
-            tokio::spawn(async move {
+            AbortOnDrop(tokio::spawn(async move {
                 let mut so_far = String::new();
                 let mut flushed = std::time::Instant::now();
                 let started = std::time::Instant::now();
@@ -1715,7 +1821,7 @@ impl JevServer {
                         }
                     }
                 }
-            })
+            }))
         });
         let outcome = self
             .blocking(move |engine| {
@@ -1725,8 +1831,15 @@ impl JevServer {
                 work(engine, &mut on_delta)
             })
             .await;
-        if let Some(handle) = forwarder {
-            let _ = handle.await;
+        // The forwarder must not outlive this future: a cancelled request closes the token
+        // through the command's guard, and a forwarder that survived that would go on sending
+        // `report`s under a token that is already closed — measured before this guard: `end`
+        // 46 ms after the cancel, then eight more `report`s over the next 4.5 s. The blocking
+        // model call itself cannot be interrupted (`spawn_blocking`, and `jev-core`'s client is
+        // synchronous), so it runs to the end of the tier timeout; its answer is discarded, and
+        // it has nothing left to report to.
+        if let Some(handle) = forwarder.as_mut() {
+            let _ = (&mut handle.0).await;
         }
         outcome
     }
@@ -1784,6 +1897,113 @@ impl JevServer {
         // Applied, refused, null, or impossible: the answer has arrived, and every model path
         // that waits on this gate may proceed instead of waiting out CONFIG_GRACE.
         self.state.mark_config_ready();
+    }
+
+    /// The command itself: `begin`, the work, `end`, and the record.
+    async fn command_body(&self, params: ExecuteCommandParams) -> serde_json::Value {
+        let token = params.work_done_progress_params.work_done_token.clone();
+        let command = params.command.clone();
+        let started = std::time::Instant::now();
+        // Armed *before* `begin`, because everything after it can unwind and the contract counts
+        // that path: a panic between the two explicit sends drops this and the token is closed
+        // on the way out.
+        let mut guard = token.as_ref().map(|t| {
+            let client = self.client.clone();
+            EndOnDrop::new(t.clone(), move |token: ProgressToken| {
+                // No runtime means there is no client left to notify; the alternative is
+                // panicking inside a destructor, which during an unwind aborts the process.
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.spawn(async move {
+                        progress(
+                            &client,
+                            &token,
+                            WorkDoneProgress::End(WorkDoneProgressEnd {
+                                message: Some("done".to_string()),
+                            }),
+                        )
+                        .await;
+                    });
+                }
+            })
+        });
+        if let Some(t) = &token {
+            progress(
+                &self.client,
+                t,
+                WorkDoneProgress::Begin(WorkDoneProgressBegin {
+                    title: format!("jev {command}"),
+                    cancellable: Some(false),
+                    message: None,
+                    percentage: None,
+                }),
+            )
+            .await;
+        }
+
+        let value = self.run_command(&params).await;
+
+        // One line per command, written where every command passes so none can be missed. The
+        // record is never read back to decide anything (N9); a read-only checkout that cannot
+        // be written to is not a reason to fail a request over a convenience.
+        //
+        // Five commands are left out on purpose, for the same reason: they are not work.
+        // `jev.document` is the client telling the server what it already knows, sent on every
+        // change; `jev.status` and `jev.session` are polls — the statusline asks for
+        // the first every few seconds and the session buffer for the second. Recording polls
+        // fills the record with the act of reading it and buries the work it exists to show,
+        // which is exactly what happened: a day of testing left ninety-five megabytes of
+        // `jev.status` behind and nothing else in the last two hundred entries. `jev.usage`
+        // reads the same record, so it is a poll by construction, and `jev.outcome` is not
+        // work either — it *is* the entry it would otherwise duplicate.
+        let recorded = !matches!(
+            command.as_str(),
+            "jev.document" | "jev.status" | "jev.session" | "jev.usage" | "jev.outcome"
+        );
+        if recorded {
+        if let Some(root) = self.state.root() {
+            let _ = crate::trace::append(
+                &root,
+                &json!({
+                    "kind": "command",
+                    "command": command,
+                    // An artifact result carries no `ok` at all — it is the artifact — so
+                    // "not an error" is the honest reading, and only a Result envelope's own
+                    // `ok` overrides it.
+                    "ok": value
+                        .get("ok")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or_else(|| value.get("error").is_none()),
+                    "error": value
+                        .get("error")
+                        .and_then(|e| e.get("code"))
+                        .and_then(|v| v.as_str()),
+                    "ms": started.elapsed().as_millis() as u64,
+                    // Where the request was anchored, when it says. This is what makes the
+                    // record something you can walk back through rather than only read: an
+                    // entry that knows its file and line can be opened from the session
+                    // buffer. `plan` nests its anchor under `scope`, so both are checked.
+                    "uri": anchored(&params.arguments, "uri"),
+                    "line": anchored(&params.arguments, "line"),
+                }),
+            );
+        }
+        }
+
+        if let Some(t) = &token {
+            progress(
+                &self.client,
+                t,
+                WorkDoneProgress::End(WorkDoneProgressEnd {
+                    message: Some("done".to_string()),
+                }),
+            )
+            .await;
+        }
+        // The end has been sent by the code above; the guard must not send a second one.
+        if let Some(guard) = guard.as_mut() {
+            guard.done();
+        }
+        value
     }
 
     async fn run_command(&self, params: &ExecuteCommandParams) -> Value {
