@@ -12,9 +12,10 @@ Runs, in order, and asserts at each step (docs/VERIFICATION.md §1):
 
   1. `initialize` -> `initialized`; `positionEncoding == "utf-8"` (N1),
      `codeActionProvider.resolveProvider == true`, `diagnosticProvider.identifier == "jev"`,
-     `executeCommandProvider.workDoneProgress == true`, all seven §6 commands advertised, and
-     no draft capability advertised — §2's "advertise only what is served" is the rule the set
-     is checked against, in both directions.
+     `executeCommandProvider.workDoneProgress == true`, the command set of §6 read from the
+     contract and matched to the capability block in both directions (nothing advertised that
+     §6 does not name, nothing §6 serves left unadvertised), and no draft capability advertised
+     — §2's "advertise only what is served" is the rule the set is checked against.
   2. `textDocument/didOpen` for two fixture documents written into a temp dir under the
      workspace (a normal `.py` and a never-touched control `.txt`). A notification carries
      no assertion of its own; the control document exists to make step 9 checkable.
@@ -45,6 +46,9 @@ Runs, in order, and asserts at each step (docs/VERIFICATION.md §1):
      minute, and a cancellation delivered mid-model-call. Each must produce exactly one
      `begin` and exactly one `end` under the token this client supplied, its own documented
      failure, and a server that answers the next command afterwards.
+ 11. Every advertised command, called on an open document: each must answer something other
+     than `not_implemented` (§2: an advertised command the server does not implement is a
+     promise it breaks).
 
 Three readings the frozen documents leave open, settled here and recorded so a reviewer can
 challenge them:
@@ -59,7 +63,7 @@ challenge them:
     client->server request under that name is not in the specification, and a client that
     invented one would report a defect where there is none.
   * Step 9 command. PROTOCOL §3.5's normal path is a `workDoneToken` inside the
-    `workspace/executeCommand` params, and PROTOCOL §6 serves all seven commands, so the
+    `workspace/executeCommand` params, and PROTOCOL §6 serves every command it lists, so the
     progress assertions are driven on `jev.status` when it is advertised (else the first
     advertised command) — a served command that answers immediately still owes the request
     its `begin` and `end`.
@@ -96,7 +100,8 @@ broken transport, bad usage).
 Standard library only, on purpose. The in-process stub at the bottom exists solely for
 `--selftest`, which proves the client — framing, request/response correlation, the nine steps
 a stub can serve, and that nine injected contract defects each turn the harness red — before
-the Rust server exists. Step 10 needs servers configured three different ways, so it is not
+the Rust server exists. The stub's command set is §6's, read from the contract like the
+harness's, so step 11 covers it too. Step 10 needs servers configured three different ways, so it is not
 reachable from the in-process stub; it reports that rather than pretending to have run.
 """
 
@@ -955,6 +960,78 @@ class Report(object):
 # --------------------------------------------------------------------------- helpers
 
 
+def spec_commands():
+    """PROTOCOL §6's command set, read from the contract itself: `(allowed, demanded)`.
+
+    Read rather than encoded here, and that is the point of the fix that produced this function:
+    the file's claim is that it asserts `PROTOCOL.md`, and a list written into it drifts the
+    moment §6 gains a row — which is how eight of the fifteen commands came to be advertised with
+    nothing pinning them. A row is `| `jev.name` | arguments | returns | yes|no |`; the section
+    ends at `### 6.1`.
+
+    `allowed` is every command §6 names; `demanded` is the ones it marks served. A parse that
+    finds nothing is a harness error, not a pass: a check that cannot read the contract must
+    never look like a check that read it and found nothing wrong.
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "PROTOCOL.md")
+    try:
+        text = pathlib.Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise HarnessError("cannot read the contract at %s: %s" % (path, exc))
+    sections = text.split("\n## 6. ", 1)
+    if len(sections) != 2:
+        raise HarnessError("PROTOCOL.md has no `## 6.` heading to read the command set from")
+    body = sections[1].split("\n### 6.1", 1)[0]
+    allowed, demanded = [], []
+    for line in body.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if len(cells) < 2 or not (cells[0].startswith("`jev.") and cells[0].endswith("`")):
+            continue
+        name = cells[0].strip("`")
+        allowed.append(name)
+        if cells[-1].lower() == "yes":
+            demanded.append(name)
+    if len(allowed) < 10 or not demanded:
+        raise HarnessError(
+            "§6's command table yielded %d command(s) (%d served): %s"
+            % (len(allowed), len(demanded), allowed))
+    return allowed, demanded
+
+
+def run_command_coverage(session, report, commands, uri, line, timeout):
+    """Step 11 (§2, §6): every advertised command is served.
+
+    Reading the capability block is not enough: a name can be advertised while the handler for it
+    has drifted, and the client then gets `not_implemented` from a command the server itself
+    promised — which happened here once, when `jev.review` was missing from the server's command
+    table while the plugin kept sending it, so every press answered "not implemented".
+
+    Each advertised command is called on a document where it can answer *at all*, and the
+    assertion is deliberately narrow: anything other than `not_implemented` proves the arm exists.
+    What each command does with these arguments is each command's own business — §6.1's codes and
+    step 9's `bad_arguments` check cover the shapes.
+    """
+    report.step(11, "every advertised command is served (§2, §6)")
+    unserved, answered = [], {}
+    for command in commands:
+        result, _ = _try_request(
+            session, report, 11, "workspace/executeCommand",
+            {"command": command, "arguments": [{"uri": uri, "line": line}]}, timeout)
+        envelope = result if isinstance(result, dict) else {}
+        body = envelope.get("error") if isinstance(envelope.get("error"), dict) else {}
+        code = body.get("code")
+        answered[command] = code or "ok"
+        if code == "not_implemented":
+            unserved.append(command)
+    report.check(11, "every advertised command answers something other than not_implemented "
+                     "(%d called)" % len(commands),
+                 not unserved,
+                 "advertised, and answered not_implemented: %s" % _describe(unserved))
+    report.info(11, "answers: %s" % _describe(answered)[:400])
+
+
 def _cap(server_capabilities, *path):
     node = server_capabilities
     for key in path:
@@ -1470,14 +1547,24 @@ def run_steps(session, workspace, timeout, report, keep_fixtures=False, server=N
                     % _describe(sorted(server_capabilities.keys()))[:200])
         session.save_include_text = _cap(
             server_capabilities, "textDocumentSync", "save", "includeText") is True
-        # PROTOCOL §2/§6: advertise exactly what is served, and §6's served set is all
-        # seven commands. codeLens/inlayHint remain unasserted either way — the info line
-        # above prints the whole advertised member set, so a client author can see it.
-        served = ("jev.status", "jev.recompute", "jev.explain", "jev.plan", "jev.apply",
-                  "jev.revert", "jev.cancel")
-        report.check(1, "all seven §6 commands are advertised (%s)" % ", ".join(served),
-                     all(command in commands for command in served),
-                     "missing: %s" % _describe([c for c in served if c not in commands]))
+        # PROTOCOL §2/§6: advertise exactly what is served. codeLens/inlayHint remain
+        # unasserted either way — the info line above prints the whole advertised member set,
+        # so a client author can see it.
+        #
+        # §6's command set, read from the contract rather than listed here: a list in this file
+        # drifts the moment §6 gains a row, and it did — eight of the fifteen commands were
+        # advertised with nothing pinning them, in a harness whose whole claim is that it is
+        # transcribed from `PROTOCOL.md`.
+        allowed, demanded = spec_commands()
+        extra = [command for command in commands if command not in allowed]
+        report.check(1, "every advertised command is a row of §6 (%d read from the contract: %s)"
+                     % (len(allowed), ", ".join(allowed)),
+                     not extra,
+                     "advertised but not named in §6: %s" % _describe(extra))
+        missing = [command for command in demanded if command not in commands]
+        report.check(1, "every command §6 serves is advertised", not missing,
+                     "§6 serves these and the capability block does not list them: %s"
+                     % _describe(missing))
         # The other half of "advertise only what is served": a capability nothing answers for
         # is a lie the client acts on, and inline completion was removed from the server
         # entirely (2026-09-19) — so its absence is asserted rather than assumed.
@@ -1810,6 +1897,7 @@ def run_steps(session, workspace, timeout, report, keep_fixtures=False, server=N
         else:
             shutil.rmtree(fixture_dir, ignore_errors=True)
     run_failure_paths(server, timeout, report)
+    run_command_coverage(session, report, commands, py_uri, target_line, timeout)
     return report
 
 
@@ -1843,8 +1931,9 @@ class StubServer(threading.Thread):
                  instead of by id would fail
     """
 
-    SERVED_COMMANDS = ("jev.status", "jev.recompute", "jev.explain", "jev.plan",
-                       "jev.apply", "jev.revert", "jev.cancel")
+    # §6's served rows, read from the contract: the stub exists to be contract-faithful, and a
+    # second copy of the command set here is exactly the drift this file is supposed to catch.
+    SERVED_COMMANDS = tuple(spec_commands()[1])
 
     def __init__(self, rfile, wfile, mode="actions", defect=None, superseded=False):
         threading.Thread.__init__(self, name="stub-server", daemon=True)
@@ -2167,8 +2256,7 @@ class StubServer(threading.Thread):
             "diagnosticProvider": {"identifier": "jev", "interFileDependencies": False,
                                    "workspaceDiagnostics": True},
             "executeCommandProvider": {
-                "commands": ["jev.status", "jev.recompute", "jev.explain", "jev.plan",
-                             "jev.apply", "jev.revert", "jev.cancel"],
+                "commands": list(self.SERVED_COMMANDS),
                 "workDoneProgress": True},
         }
         if self.defect == "extra_capability_member":
