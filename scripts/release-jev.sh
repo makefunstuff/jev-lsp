@@ -111,6 +111,12 @@ repo_slug() {
 
 sha_tool() { if command -v shasum >/dev/null 2>&1; then echo "shasum -a 256"; else echo "sha256sum"; fi; }
 
+# Every path this script hands to another program is absolute. `editors/cursor/pack.sh` zips from
+# inside a temporary directory of its own, so a *relative* output path lands there and is removed
+# with the directory — the bug this script shipped with, which the first dispatch of release.yml
+# caught and nothing local did, because a hand-run used an absolute `--out`.
+absolute() { ( cd "$1" && pwd ); }
+
 # Basenames of the assets in $DIR, one per line, sorted. `SHA256SUMS` and `RELEASE-NOTES.md` are
 # not assets; everything else in the directory is.
 asset_names() {
@@ -185,6 +191,7 @@ cmd_build() {
   target="${TARGET:-$(host_triple)}"
   [ -n "$OUT" ] || OUT="$REPO/target/dist/$tag"
   mkdir -p "$OUT"
+  OUT="$(absolute "$OUT")"
 
   if [ "$target" = "$(host_triple)" ]; then
     say "building $target (host)"
@@ -216,6 +223,7 @@ cmd_vsix() {
   tag="$(tag_or_die)"
   [ -n "$OUT" ] || OUT="$REPO/target/dist/$tag"
   mkdir -p "$OUT"
+  OUT="$(absolute "$OUT")"
   # pack.sh writes from package.json: name, publisher, version, display name, description, engine.
   bash "$REPO/editors/cursor/pack.sh" "$OUT/jev-$(version_or_die).vsix" >/dev/null
   say "packed jev-$(version_or_die).vsix ($(wc -c < "$OUT/jev-$(version_or_die).vsix" | tr -d ' ') bytes)"
@@ -241,6 +249,7 @@ cmd_assemble() {
   tag="$(tag_or_die)"
   [ -n "$DIR" ] || die "assemble needs --dir DIR"
   [ -d "$DIR" ] || die "$DIR is not a directory"
+  DIR="$(absolute "$DIR")"
   require_assets
   names="$(asset_names)"
   sha="$(sha_tool)"
@@ -319,6 +328,7 @@ cmd_publish() {
   slug="$(repo_slug)"
   [ -n "$DIR" ] || die "publish needs --dir DIR"
   [ -d "$DIR" ] || die "$DIR is not a directory"
+  DIR="$(absolute "$DIR")"
   [ -f "$DIR/SHA256SUMS" ] || die "$DIR has no SHA256SUMS; run assemble first"
   [ -f "$DIR/RELEASE-NOTES.md" ] || cmd_assemble
   require_assets
@@ -399,6 +409,8 @@ cmd_all() {
   guard_release_absent
   tag="$(tag_or_die)"
   [ -n "$OUT" ] || OUT="$REPO/target/dist/$tag"
+  mkdir -p "$OUT"
+  OUT="$(absolute "$OUT")"
   DIR="$OUT"
   cmd_build
   cmd_vsix
