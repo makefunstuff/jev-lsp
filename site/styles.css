@@ -87,46 +87,57 @@ body {
 /* ---------- header ---------- */
 .site-head {
   position: sticky; top: 0; z-index: 40;
-  background: rgba(7, 8, 11, 0.78);
+  background: rgba(7, 8, 11, 0.92);
   backdrop-filter: blur(14px) saturate(1.2);
   -webkit-backdrop-filter: blur(14px) saturate(1.2);
   border-bottom: 1px solid var(--line);
 }
 .site-head .shell {
-  display: flex; flex-wrap: wrap; align-items: center;
-  justify-content: space-between; gap: 0.75rem 1.5rem;
+  display: flex; flex-wrap: nowrap; align-items: center;
+  justify-content: space-between; gap: 1rem 1.5rem;
   padding-block: 0.85rem;
 }
+.brand {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  flex-shrink: 0; min-width: 0;
+}
 .wordmark {
-  display: inline-flex; align-items: center; gap: 0.45rem;
-  font: 650 var(--t-sm) / 1 var(--mono);
+  display: inline-flex; align-items: center;
+  font: 700 1.05rem / 1 var(--mono);
   letter-spacing: -0.02em; color: var(--ink); text-decoration: none;
 }
-.wordmark::after {
-  content: ""; width: 1.4rem; height: 2px; background: var(--accent);
-  border-radius: 1px; margin-left: 0.15rem;
+.wordmark:hover, .wordmark:focus-visible {
+  color: var(--ink); background: transparent; text-decoration: none;
 }
-.wordmark .wip {
-  margin-left: 0.15rem; padding: 0.12rem 0.4rem;
+.wip {
+  padding: 0.12rem 0.4rem;
   border: 1px solid var(--line-strong); border-radius: 4px;
-  color: var(--muted); font-weight: 550; font-size: 0.65rem;
+  color: var(--muted); font: 550 0.65rem / 1.2 var(--sans);
   letter-spacing: 0.06em; text-transform: uppercase;
 }
 .toc {
-  display: flex; flex-wrap: wrap; gap: 0.1rem; align-items: center;
+  display: flex; flex-wrap: nowrap; gap: 0.15rem; align-items: center;
+  min-width: 0; margin-left: auto;
 }
 .toc a {
-  padding: 0.35rem 0.55rem; font: 500 var(--t-xs) / 1.2 var(--sans);
+  padding: 0.4rem 0.65rem; font: 500 var(--t-sm) / 1.2 var(--sans);
   color: var(--muted); text-decoration: none; letter-spacing: 0.01em;
-  border-radius: 6px;
+  border-radius: 6px; white-space: nowrap;
 }
 .toc a:hover, .toc a:focus-visible {
   color: var(--ink); background: var(--accent-dim);
 }
 .toc-gh {
-  margin-left: 0.25rem !important;
+  margin-left: 0.35rem !important;
   border: 1px solid var(--line-strong) !important;
   color: var(--ink-soft) !important;
+  font-weight: 500 !important;
+}
+.toc-gh:hover, .toc-gh:focus-visible {
+  border-color: rgba(240, 184, 73, 0.4) !important;
+}
+@media (max-width: 719px) {
+  .toc a:not(.toc-gh) { display: none; }
 }
 
 /* ---------- type ---------- */
