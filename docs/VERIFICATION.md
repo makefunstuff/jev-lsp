@@ -251,6 +251,13 @@ is measured separately and reported as `[U]` context, never as a pass condition.
 Anything not covered above is reported as unverified, with the exact probe that would
 settle it.
 
+A green from the repository's own rules gate (`bash verify/rules-gate.sh`) is scoped the same way:
+a gate run reports only the paths it was given — by default the files that differ from
+`origin/main`. A green therefore means those paths were scanned and clean; it says nothing about a
+file that was not in the set. The gate is a per-change instrument by decision (`STATUS.md`,
+decisions taken), run at commit time and in CI over the changed files and never over the whole
+tree, so a clean report is a claim about the changed set and not about the repository.
+
 ## 7. Real endpoints
 
 The three harnesses below run against a real endpoint on request. They are runnable whenever one
