@@ -2,8 +2,8 @@
 
 ## 1. Tiers
 
-Three tiers, each an independently configured endpoint. Any tier may be local or remote; the
-router does not care.
+Three tiers, each an independently configured endpoint. Any tier may be local or remote; routing
+does not depend on which.
 
 | Tier | Purpose | Model shape | Latency target | Called from |
 |---|---|---|---|---|
@@ -11,18 +11,18 @@ router does not care.
 | `reason` | Actions, plans, explanations | 7–32B instruct | p50 < 2 s (resolve) | `codeAction/resolve`, `jev.plan` |
 | `review` | Findings (the chat review), `jev.review` | 7–32B instruct, different prompt | background, no user wait | worker, `jev.review` |
 
-`reason` and `review` are deliberately separate endpoint slots even when they point at the
-same server: a finding review and a rewrite must not share a prompt template version, and
-operators tune them independently.
+`reason` and `review` are separate endpoint slots even when they point at the same server: a
+finding review and a rewrite must not share a prompt template version, and operators tune them
+independently.
 
-**`decide` is not a chat tier, and that is the point.** It does not speak
+**`decide` is not a chat tier.** It does not speak
 `chat/completions` and it does not generate prose: the request is a *state* plus a numbered set
 of questions, and the response is one value per question with a probability
 (`{model, state, questions} → {model, answers, usage}`). That is why the ambient pass can afford
-to run on every save — a decision costs a few dozen tokens where a review costs thousands — and
-why the tier has its own key shape, `{wire, base_url, model, api_key_env, timeout_ms, max_tokens,
-temperature, think}` with `timeout_ms` 5000 and `max_tokens` 64 rather than the chat tiers'
-90 000/8192 (PROTOCOL §10). Three routes are documented, all measured: the built-in default
+to run on every save: a decision costs a few dozen tokens where a review costs thousands. It is
+also why the tier has its own key shape, `{wire, base_url, model, api_key_env, timeout_ms,
+max_tokens, temperature, think}` with `timeout_ms` 5000 and `max_tokens` 64 rather than the chat
+tiers' 90 000/8192 (PROTOCOL §10). Three routes are documented, all measured: the built-in default
 (`https://api.typesafe.ai/v1`, model `jev-latest`, wire `system_one`); a local System One server
 (`base_url = "http://127.0.0.1:8009/v1"`, `model = "kev-latest"`); and a hosted gateway carrying the
 same model — OpenCode Zen (`https://opencode.ai/zen/v1`, model `jev-1.13`, wire **`system_one`**:
@@ -44,9 +44,9 @@ different protocol, so `Config::decision()` answers this one.
 Config is configuration-layer, not code (PROTOCOL §10 `models`). The chat tiers take
 `{base_url, model, api_key_env, timeout_ms, max_tokens, temperature, think}`. `think` mirrors
 the CLI's reasoning control — `off` sends `chat_template_kwargs.enable_thinking = false`, a
-level sends `reasoning_effort`. Every tier defaults to `think = "off"` — `TierConfig::default()`
+level sends `reasoning_effort`. Every tier defaults to `think = "off"`: `TierConfig::default()`
 for the chat tiers, `DecisionTierConfig::default()` for the decide tier, and nothing overrides
-either — so a thinking model is opted *into* per tier rather than out.
+either. A thinking model is therefore opted *into* per tier rather than out.
 
 **Why `off` is the default, measured** (2026-09-19, `deepseek/deepseek-v4-flash` through the
 omp auth gateway, and the local `llama.cpp` server):
@@ -58,12 +58,12 @@ omp auth gateway, and the local `llama.cpp` server):
 | `medium` | **rejected**: `502 upstream_error — Thinking effort medium is not supported by deepseek/deepseek-v4-flash. Supported efforts: low, high, max`. Every call fails, so an analysis produces nothing at all |
 
 The supported effort set is a property of the endpoint and the model, not of the levels this
-config offers, and an unsupported one fails loudly rather than falling back — which is the
-right shape (`:Jev log` shows `model call failed: POST <url>: <cause>`: the whole `anyhow`
-chain, so a timeout reads as a timeout rather than as the URL alone). Two consequences worth
-knowing: this server's jobs are narrow and fully specified (locate an anchor, emit one JSON
-object), which is where thinking buys least; and a level spent against a fixed ceiling *removes*
-the answer rather than improving it. Raise `max_tokens` and `timeout_ms` with any level.
+config offers, and an unsupported one fails loudly rather than falling back (`:Jev log` shows
+`model call failed: POST <url>: <cause>`: the whole `anyhow` chain, so a timeout reads as a
+timeout rather than as the URL alone). Two consequences: this server's jobs are narrow and fully
+specified (locate an anchor, emit one JSON object), which is where thinking buys least; and a
+level spent against a fixed ceiling *removes* the answer rather than improving it. Raise
+`max_tokens` and `timeout_ms` with any level.
 
 ## 2. Routing
 
@@ -92,11 +92,11 @@ is not compared. It does not parse the result, and nothing in `crates/` does
 save asks the `decide` tier one question per candidate and never touches a chat tier; the chat
 review runs only when it is asked for (`jev.review`) or when rules are off. There is no
 fallback from one to the other: a repository with no rules gets no ambient findings and the pass
-says `no_rules` (PROTOCOL §12). The generative tiers are what only they can do — edits, plans,
-explanations — and the findings they produce are labelled `review` where the rules pass's are
-`rules` (PROTOCOL §9).
+says `no_rules` (PROTOCOL §12). The generative tiers are what only they can do: edits, plans,
+explanations. Their findings are labelled `review` where the rules pass's are `rules`
+(PROTOCOL §9).
 
-**Language is a second dimension, and it has a floor.** The resolved language may select a
+**Language is a second dimension.** The resolved language may select a
 prompt flavour and (via `languages.overrides`) a different tier — but when the language is
 `unknown`, or has no override, the row above still applies with the `generic_text` prompt.
 Routing can refine; it can never decline. This is N10 in `PROTOCOL.md` §1: no language,
@@ -104,8 +104,9 @@ filetype, or parser may decide *whether* something is served, only *how*.
 
 ## 3. Context builder
 
-Deterministic, ordered, and bounded. Built by `context.rs` from the document store and the
-filesystem; the model never chooses what it sees.
+Deterministic, ordered, and bounded. Built by `context.rs` from the document the client holds and
+the documents it sends with the request — nothing is read from disk; the model never chooses what
+it sees.
 
 | Slice | Budget | Notes |
 |---|---|---|
@@ -114,8 +115,12 @@ filesystem; the model never chooses what it sees.
 | Neighbours | the two preceding and two following top-level items, signatures only | local conventions |
 | Diagnostics | current findings in scope, with severities | stops the model contradicting the linter |
 | Imports | the file's import block, verbatim | naming and dependency awareness |
-| Repo | `AGENTS.md` / `CLAUDE.md` / `.jev/context.md` if present, verbatim, capped | durable project rules |
-| Git | last commit subject for the touched file, `git diff --stat` for the working tree | what is in flight |
+| Client context | the documents the client sends with the request, each labelled with its own `kind` — `imports`, `reference`, `sibling`, `test`, and `match` for `where` — verbatim, capped server-side at 4 documents / 40 lines (`context::MAX_PROVIDED_DOCS`, `MAX_PROVIDED_LINES`) | the client is the side with a parser, the other language servers and the list of buffers the user touched; the server decides how much of it reaches the prompt |
+
+There is **no** repository-rules slice and **no** git slice: nothing reads `AGENTS.md`,
+`CLAUDE.md` or a `.jev/context.md`, and no commit subject or diff reaches a prompt. Git is used
+for the *changed set* (§5) — which documents the ambient pass looks at — and for nothing else.
+The slices above are the whole prompt.
 
 Excluded by default: whole files, other open buffers, the repository tree, chat history.
 Each of those costs tokens to add ambiguity. Every slice is included only when the verb
@@ -125,7 +130,7 @@ context, so a cache hit means the model would have seen byte-identical input.
 ## 4. Output contracts
 
 The model emits **content and anchors**. It never emits ranges or versions; the server
-computes those. This is what makes N5 in PROTOCOL §1 enforceable rather than aspirational.
+computes those. This is what makes N5 in PROTOCOL §1 enforceable.
 
 ### 4.1 Edit contract
 
@@ -218,7 +223,7 @@ cannot slip past the per-minute cap (`a_repair_call_is_budgeted_like_any_other_c
 Why it exists, from a real model: against DeepSeek, roughly one run in six violated the
 contract — a prose answer with no JSON at all, or the schema echoed back with its field
 names as values. The complaint-based retry fixes both shapes, and the loop is bounded so a
-model that is simply wrong costs one extra call and then fails visibly rather than looping.
+model that answers wrongly costs one extra call and then fails visibly rather than looping.
 
 ## 6. Determinism
 
@@ -229,7 +234,7 @@ Required for a harness to be learnable:
   should not move between two runs over the same state. It still moves with how close the
   *question* sits to the decision boundary: hosted Jev answered 0.96–0.97 across 25 runs on a
   sharply-posed question and 0.82–0.86 across 8 on one nearer the boundary, which is why a
-  rule's `min_probability` belongs outside the measured spread (`docs/TUTORIAL.md` §3.7).
+  rule's `min_probability` belongs outside the measured spread (`docs/GUIDE.md` §4).
 - Title construction is a pure function of `(verb, scope name, finding label)`; the model
   supplies the label, never the whole title.
 - Identical `context_hash` + identical prompt template version ⇒ byte-identical output is
@@ -265,7 +270,7 @@ endpoints are opt-in per tier, and `api_key_env` names an environment variable �
 written to config, artifacts, or logs. Prompt text and response bodies are never persisted
 outside the conclusion cache, and the cache stores parsed conclusions, not raw model traffic.
 
-**The decide tier is the exception, and it is worth being blunt about.** Its default is *remote*:
+**The decide tier is the exception.** Its default is *remote*:
 `wire = "system_one"`, `base_url = "https://api.typesafe.ai/v1"`, model `jev-latest`, key from
 `TYPESAFE_API_KEY`. So on a default install, **the text of a changed file leaves the machine on
 every rules pass** — that is what a decision is made of (PROTOCOL §9: the file head, the
@@ -283,9 +288,9 @@ for. Two ways to keep it local, both one setting:
 `JEV_DECIDE_BASE_URL` / `JEV_DECIDE_MODEL` / `JEV_DECIDE_TIMEOUT_MS` do the same from the
 environment, and `JEV_BASE_URL` deliberately does **not** move this tier: it names an
 OpenAI-compatible chat server, and a decision is not a chat. `JEV_DECIDE_TIMEOUT_MS` exists for a
-hosted cold start — the endpoint's own p50 is ~0.3 s and 25 measured calls never came near the
-5000 ms default — and a value that does not parse, or parses to zero, is ignored rather than
-lowering the ceiling to nothing. Turning rules off returns the ambient path to the `review` tier
+hosted cold start: the endpoint's own p50 is ~0.3 s and 25 measured calls never came near the
+5000 ms default. A value that does not parse, or parses to zero, is ignored rather than lowering
+the ceiling to nothing. Turning rules off returns the ambient path to the `review` tier
 (§2) — which is also remote by default, so a reader who wants *nothing* leaving the machine should
 point `models.reason` and `models.review` at a local endpoint too.
 

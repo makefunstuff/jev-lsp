@@ -32,8 +32,7 @@ Measured, 11 fixtures: **`FileType` fired for 8, and 8 were auto-attached.** `f.
 | 2 | plugin | On `BufReadPost`, `BufNewFile`, `BufWinEnter` (idempotent): if the buffer is a normal file buffer and no `jev` client is attached, `vim.lsp.start(cfg, { bufnr = bufnr })`. `vim.lsp.start` with an explicit buffer bypasses the `filetypes` filter. |
 | 3 | plugin | Never attach twice; never attach to a buffer §6 excludes. |
 
-Step 2 is ~15 lines of Lua and is the whole reason "universal" is honest rather than
-aspirational. It is not optional.
+Step 2 is ~15 lines of Lua and is what makes "universal" true. It is not optional.
 
 **And nothing here is required of a client.** The server's contract is standard LSP: findings
 arrive by pull diagnostics plus `workspace/diagnostic/refresh`; actions by `codeAction` and
@@ -43,11 +42,11 @@ text by the client, because the protocol cannot ask for it (N7). Everything that
 standard surface — the universal attach pass, the `vim.lsp.codelens.run` interception, the
 picker, every scratch buffer — lives in `nvim/` and is **optional convenience, never required**:
 any LSP client gets the findings, the edits and the commands without it. What is not optional is
-narrower, and worth stating exactly: in Neovim, step 2 is what makes "every file" true, because
-the built-in path cannot see a buffer whose filetype was never set.
+narrower: in Neovim, step 2 is what makes "every file" true, because the built-in path cannot see
+a buffer whose filetype was never set.
 
-That claim is checkable rather than aspirational, because the server is exercised by three
-clients, two of which share no code with it: Neovim, through this plugin; `verify/lsp_client.py`,
+That claim is checkable because the server is exercised by three clients, two of which share no
+code with it: Neovim, through this plugin; `verify/lsp_client.py`,
 written from the specification against the standard library alone (`docs/VERIFICATION.md` §1); and
 OMP, through its own LSP support (`verify/omp_lsp.sh`, §1.1) — a client nobody here wrote, which
 receives a rule's finding over `textDocument/diagnostic` and calls `jev.inspect`. Neovim is the
@@ -120,7 +119,7 @@ partial results). What changed is that a *client* with a parser can answer first
 sends an explicit `range` for `explain` and `plan` when treesitter can name the enclosing
 declaration, and the server anchors on it and reports `scope_source = "explicit"`. Without a
 parser, without the language in the plugin's table, or without such a declaration, the range is
-simply absent and the server decides — which is the same path the CLI takes, always.
+absent and the server decides — which is the same path the CLI takes, always.
 
 So a client-resolved scope is visible, not hidden: the answer says which side resolved it. The
 listing in `nvim/lua/jev/init.lua` (`TS_SCOPE_NODES`) is deliberately short, and a language
@@ -146,7 +145,7 @@ improve.
 
 The LLM requires no AST, so the absence of a parser changes *quality of scope*, never
 availability of the feature. This is the structural difference from a real language server,
-and the reason a universal server is coherent at all.
+and the reason a universal server is coherent.
 
 ## 5. Practical gates — the only things that limit support
 
@@ -160,10 +159,10 @@ is stated, never silent** — the lesson taken from Copilot's `Inactive` status
 | size | > `max_file_bytes` (default 1 MiB): not analysed ambiently; explicit requests use a window around the cursor or the selected range | `over_size` |
 | binary | a NUL byte in the first 8 KiB: attached, no analysis, no verbs offered | `binary` |
 | grammar | no parser for the language | `generic_scope` — a quality flag, not a refusal |
-| ignore | matches `.gitignore` or `jev.ignore` globs | `ignored` |
+| ignore | matches one of the `languages.ignore` globs (default `**/node_modules/**`, `**/*.min.js`, `**/vendor/**`); the matched pattern is reported | `ignored` |
 
 Only the first is a hard exclusion, and it excludes non-files rather than files. A 4 GiB
-log is still *attached and synced*; it is simply not sent to a model whole. The plugin
+log is still *attached and synced*; it is not sent to a model whole. The plugin
 surfaces `over_size`, `binary`, `ignored`, and `generic_scope` in `:Jev status` and in the
 statusline segment, so a user can always tell why a buffer is quiet.
 

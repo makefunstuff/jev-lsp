@@ -53,9 +53,19 @@ does now.](assets/jev-cursor.webp)
 
 ## 3. Install it
 
+The server binary has a one-command route that needs no clone:
+
+```sh
+cargo install --git https://github.com/makefunstuff/jev-lsp --locked jev-lsp jev
+```
+
+→ `jev-lsp` and `jev` in `~/.cargo/bin`. Cursor's extension is the part without one: **no `.vsix`
+is published anywhere** — no release asset, no marketplace listing — so the extension has to be
+packaged from a clone of this repository. `pack.sh` needs only `bash`, `jq`, `zip` and `unzip`; it
+does not need npm and it does not touch the network.
+
 ```sh
 cd /path/to/jev-lsp
-cargo build --release
 
 # a .vsix, built with zip and jq alone — no npm, no network
 bash editors/cursor/pack.sh /tmp/jev-0.1.0.vsix

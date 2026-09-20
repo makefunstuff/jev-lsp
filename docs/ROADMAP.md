@@ -18,9 +18,9 @@ decide tier, `jev.inspect`, the keymap prefix, and the cache keys. U0–U8 done,
 half — the plan buffer renders the verified plan as steps, applies one at a time and takes them
 back (`nvim/lua/jev/init.lua`, `M.open_plan`). U9 partly: cancellation is cooperative only,
 backpressure is the per-document queue, and the daemon is not built. Two scoped gaps remain and are noted in their
-units: U2's treesitter scope is still structural-only — grammars are a dependency decision,
-not an oversight, and `scope_source` reports the fallback honestly — and its dismissal file
-*is* implemented, in the plugin (`nvim/lua/jev/init.lua`: `:Jev dismiss` writes
+units: U2's treesitter scope is still structural-only: grammars are a dependency decision,
+not an oversight, and `scope_source` reports the fallback honestly. Its dismissal file *is*
+implemented, in the plugin (`nvim/lua/jev/init.lua`: `:Jev dismiss` writes
 `<repo>/.git/jev/dismissed.json` and `filter_findings` drops dismissed ids from the pull).
 Inline completion (U7) was removed on 2026-09-19, at the user's decision: generated code is
 asked for rather than suggested under the cursor.

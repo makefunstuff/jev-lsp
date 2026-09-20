@@ -107,6 +107,7 @@ which a headless harness cannot drive.
 | `python3 verify/lsp_client.py --server … --stub-model-url …` | 44 ok, 0 FAIL, 0 skip (independent client, including step 10 — one `begin`, one `end` and a live server on the model-error, budget-refusal and cancellation paths — and the assertion that no draft capability is advertised) |
 | `nvim --headless -l verify/nvim_live.lua` | 0 failures, 0 skips with a stub endpoint (1 skip without one: the resolve step has no model) |
 | `nvim --headless -l verify/rules_live.lua` | 0 failures, 0 skips on Neovim **0.12.5 and 0.12.1** — a rule's finding on the sign column after a save, `:Jev inspect` answering with the same finding, its counts and its skips, `--force` re-running an unchanged document |
+| `nvim --headless -l verify/result_surface.lua` | 0 failures, 0 skips on **both** Neovim versions — a report never changes the window count, `q` puts the buffer the user was in back on screen, and an unsaved buffer is still modified afterwards |
 | `python3 verify/plan_test.py` | 35/35 |
 | `python3 verify/cli_parity.py` | 30/30 — the CLI and the LSP agree exactly, `jev inspect` included; five of the checks are the nested-file case that pins the CLI's rules root |
 | `bash verify/omp_lsp.sh` | 0 failures, 0 skips — OMP, a client that shares no code with this repository, receives a rule's finding over `textDocument/diagnostic` and reaches `workspace/executeCommand jev.inspect`; a no-rules control finds nothing |
@@ -114,6 +115,10 @@ which a headless harness cannot drive.
 | `python3 verify/quality_eval.py --base-url https://openrouter.ai/api/v1 --model google/gemini-2.5-flash-lite` | **recall 3/4, precision 3/3, 0 findings on both clean files**, 6 calls / 2950 tokens billed, 4.5 s, exit 0 — the miss (`swallowed_error.py`) is run-to-run variance on a cheap model (a control run with the same model caught 4/4). Runnable whenever an endpoint and a key are given (`JEV_API_KEY_ENV` names the chat tiers' key variable); the suite reports the row as `?` when none is |
 | `python3 verify/repo_bench.py --repo . --limit 40` | 40 files, 33 analysed, 62 findings, **3.21 per 1000 lines** (three runs: 3.21 / 3.48 / 3.71; 7 files per run outran the 60 s per-file bound and are reported as such). Measured 2026-09-18, before the inline-completion removal, which touches no findings path |
 | `nvim --headless -l verify/nvim_ui_test.lua` | 0 failures, 0 skips — three consecutive runs with a fresh stub (`--stub-model-url`-style endpoints matter: a stale stub on the port is what VERIFICATION.md §"red run" warns about) |
+
+Every row above was re-run on **2026-09-20** as one supervised pass (`verify/run-suite.sh`, one
+stub for the whole run, `NVIM_BINS` covering 0.12.5 and 0.12.1): all green, and `quality_eval` the
+single row that could not run (`?` — no endpoint key in the environment that day).
 
 The independent client is written from the specification and shares no code with the server;
 it caught two things the unit tests could not, both now resolved and one of them documented

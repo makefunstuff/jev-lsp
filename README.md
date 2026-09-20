@@ -11,6 +11,34 @@
 ![Neovim: jev's annotations beside the code, next to clangd's own diagnostics](docs/assets/jev-neovim.webp)
 <sub><b>Neovim</b>, the primary client: jev's annotations beside the code, next to clangd's own diagnostics.</sub>
 
+## What it is for
+
+**Jev is a classifier, not a chat model.** A rule asks one typed question about one line, and Jev
+answers with a value and a probability, never prose. The rule is your own words plus a
+deterministic pattern that names the exact lines; the per-line pass or fail is a model answer,
+repeatable to within a measured spread. That is what makes a rule semi-deterministic: the pattern
+is exact, the judgement is a probability, and the probability has to clear the rule's own floor
+before anything is published.
+
+The workflow it carries:
+
+1. **Plan or spec.** You, with coworkers or an LLM, write down what the code has to do.
+2. **Rules.** Turn that spec into `.jev/rules/*.json` — in the repository, under version control,
+   reviewed like code.
+3. **Steering.** jev-lsp applies the rules while you edit by hand, or while a harness generates
+   code, so the findings arrive where the code is: on the line, in the client you already use.
+4. **On track.** The codebase keeps matching the requirements, and a harness that reads diagnostics
+   picks the steering up.
+
+A person or an agent can do that review by hand. jev-lsp moves it into the loop: every save, every
+file, in whatever client you work in.
+
+What it is not: it does not know your spec unless a rule carries it, it answers the question in the
+rule and nothing else, and it is not a correctness oracle. With no rules there are no ambient
+findings and the pass reports `no_rules` — the workflow starts by writing one. The clients it is
+exercised by are Neovim through the plugin, the spec-derived client in `verify/lsp_client.py`, and
+OMP; a client that reads diagnostics is the whole requirement.
+
 An LSP server that runs a model over the files you have open and reports through your editor's
 own surfaces: diagnostics, code actions, code lens. The ambient pass runs the rules your
 repository states in `.jev/rules/*.json`; each line a rule points at is sent to **Jev**, a
@@ -19,59 +47,63 @@ surfaces only. Neovim is the primary client; `nvim/` is the plugin.
 
 ## Use it
 
-```sh
-cargo build --release   # target/release/jev-lsp (the server) and target/release/jev (a CLI)
+Neovim is the primary client. There is no release page yet, so the binary comes from `cargo
+install`, which needs a Rust toolchain (1.75 or later):
 
+```sh
+cargo install --git https://github.com/makefunstuff/jev-lsp --locked jev-lsp jev
+```
+
+That puts `jev-lsp` (the server) and `jev` (a CLI) in `~/.cargo/bin`, which is on `PATH` for a
+normal toolchain install. `git clone` plus `cargo build --release` produces the same two binaries
+under `target/release/`. `cargo binstall`, a Homebrew formula and a published `.vsix` do not exist
+yet.
+
+Two further things stand between an install and a first finding: the plugin, and a decision-tier
+endpoint that answers.
+
+```sh
 # 1. the plugin: the attach pass that covers files Neovim cannot identify, the keymaps and :Jev
 ln -s /path/to/jev-lsp/nvim ~/.local/share/nvim/site/pack/jev/start/jev
 ```
 
 ```lua
--- 2. in your config
-require('jev').setup({ cmd = { '/path/to/jev-lsp/target/release/jev-lsp' } })
+-- 2. in your config; with `jev-lsp` on PATH, the command is the plugin's own default
+require('jev').setup({})
 ```
 
 A lazy-managed config takes the same plugin as a local `dir` spec instead of the symlink:
-`{ dir = '/path/to/jev-lsp/nvim', name = 'jev', lazy = false, config = function() require('jev').setup { cmd = { … } } end }`.
+`{ dir = '/path/to/jev-lsp/nvim', name = 'jev', lazy = false, config = function() require('jev').setup {} end }`.
+Without the plugin, Neovim's own client reaches the same surfaces — findings, edits and every
+command — in two lines, and `filetypes` is then the client's job:
 
-3. Write a rule in `.jev/rules/*.json`, open a file and save. A finding appears on the line when the
-rule's inspection and the decision tier both accept it; with no rule files the pass publishes nothing
-and reports `no_rules`. `docs/TUTORIAL.md` §3.7 has the rule shape.
+```lua
+vim.lsp.config('jev', { cmd = { 'jev-lsp' }, filetypes = { 'rust' }, root_markers = { '.git' } })
+vim.lsp.enable('jev')
+```
+
+3. Write a rule in `.jev/rules/*.json`, open a file and save. A finding appears on the line when
+the rule's inspection and the decision tier both accept it; with no rule files the pass publishes
+nothing and reports `no_rules`. `docs/TUTORIAL.md` §3 writes the first one, and `docs/GUIDE.md` §4 has the full schema.
 
 ### Endpoints
 
-Nothing appears until a rule exists **and** the decision tier answers, so that tier is what a first
-run needs. It is hosted Jev by default (`api.typesafe.ai`, key from `TYPESAFE_API_KEY`); this
-machine runs it through **OpenCode Zen**, which carries the same model:
+Nothing is published until the decision tier answers. It is hosted Jev by default
+(`api.typesafe.ai`, key from `TYPESAFE_API_KEY`):
 
 ```sh
-export TYPESAFE_API_KEY=…                      # the variable `api_key_env` names (see below)
-export JEV_DECIDE_WIRE=system_one              # required: Zen 404s on the open_router path
-export JEV_DECIDE_BASE_URL=https://opencode.ai/zen/v1
-export JEV_DECIDE_MODEL=jev-1.13               # NOT jev-1.13-free: it rate-limits (429) in bursts
-export JEV_DECIDE_TIMEOUT_MS=15000             # any hosted decide endpoint needs more than 5000 ms
+export TYPESAFE_API_KEY=…
+```
 
-# the OpenRouter route, kept as the alternative (its price is visible from the API):
-#   JEV_DECIDE_WIRE=open_router  JEV_DECIDE_BASE_URL=https://openrouter.ai/api
-#   JEV_DECIDE_MODEL=typesafe/jev-1.13
+The other routes — OpenCode Zen, OpenRouter, a local System One server — and the `wire` and
+`timeout_ms` traps that go with them are in `docs/MODEL.md` §8. The chat tiers answer actions,
+plans and explanations rather than findings, and are needed only for those:
 
-# or a local System One server, no key:
-export JEV_DECIDE_BASE_URL=http://127.0.0.1:8009/v1
-export JEV_DECIDE_MODEL=kev-latest
-
-# the chat tiers answer actions, plans and explanations — needed only for those:
+```sh
 export JEV_BASE_URL=http://127.0.0.1:8080/v1   # chat model, OpenAI-compatible
 export JEV_MODEL=your-model-name
 export JEV_API_KEY_ENV=OPENROUTER_API_KEY      # a hosted chat tier: the NAME of the key variable
 ```
-
-`opencode-go` (`…/zen/go/v1`) is the subscription gateway and carries **no Jev** — its decision
-route answers `Model is unavailable`. The key's *name* comes from `api_key_env` (default
-`TYPESAFE_API_KEY`), and the environment can name another one: `JEV_DECIDE_API_KEY_ENV` for the
-decide tier, `JEV_API_KEY_ENV` for the chat tiers. Both take the **name** of the variable holding
-the key — never the key itself — and an empty value is ignored, so a shell pointing the decide tier
-at another provider names its own key variable instead of borrowing a name that belongs to
-somebody else's service. `docs/TUTORIAL.md` §4 lists every setting.
 
 ## Use it with another LSP client
 
@@ -146,8 +178,9 @@ The project checks itself with jev. `~/.omp/agent/lsp.json` registers
 `rootMarkers`, hosted Jev in a `settings` block), so a rule finding reaches OMP's own `lsp` tool
 with no project config, and the conventions this code is checked against live in
 `.jev/rules/*.json` — saving a file runs the pass over it. With hosted Jev the key has to be
-exported as `TYPESAFE_API_KEY`; measured over this repository's own code the rules published
-**zero** findings, and 12 of its 30 Rust files had no candidate.
+exported as `TYPESAFE_API_KEY`; measured over this repository's own code the rules publish
+**zero** findings at the floors they ship (at the 0.75 floor the unwrap rule once shipped, two
+lines of one file published), and 12 of its 30 Rust files had no candidate.
 
 ## What you get
 
@@ -165,11 +198,28 @@ re-runs it for a file git reports as unchanged. Other subcommands are reachable 
 
 ## Read more
 
-- `PROTOCOL.md` — the frozen contract: methods, commands, schemas, CLI, exit codes
-- `docs/TUTORIAL.md` — install, the keys, workflows, writing a rule
-- `docs/UX.md` — the surfaces and the keymaps
-- `docs/MODEL.md` — tiers, routing, the decision wire, and what leaves your machine
-- `docs/VERIFICATION.md` — how each claim is proven, and what is unverified
-- `STATUS.md` — project state and the verification table
+Two reader-facing documents, and then the record:
+
+- **`docs/TUTORIAL.md`** — the first run, end to end: install, the endpoints, one rule, a save, the
+  finding, the fix, and the workflow the rules carry. Start here.
+- **`docs/GUIDE.md`** — the reference for afterwards: surfaces and keys, where a report goes,
+  settings and environment variables, the `jev.rules/1` schema, budgets, the CLI, troubleshooting,
+  and what lives on disk.
+
+Per client and per subject:
+
+- `docs/CURSOR.md` — Cursor: the extension, the settings, and what its API does not do
+- `docs/UX.md` — the surfaces, and the decisions behind them (noise policy, approval, the plan buffer)
+- `docs/MODEL.md` — the tiers, routing, the decision wire, the provider routes, and what leaves your machine
+- `docs/LANGUAGE.md` — unconditional support: the attachment ladder, language resolution, scope, gates
+- `docs/ARCHITECTURE.md` — components, process topology, the document store, the scheduler
+
+The contract, the evidence, and the record:
+
+- `PROTOCOL.md` — **frozen**: the LSP method surface, the command list, artifact schemas, the CLI, exit codes
+- `docs/VERIFICATION.md` — how each claim is proven, which harnesses prove it, and what is unverified
+- `STATUS.md` — project state, decisions taken, and the dated log
+- `docs/ROADMAP.md` — the units of work and their acceptance criteria
+- `docs/STYLE.md` — the register these documents are written in
 
 The verification table is one command: `bash verify/run-suite.sh /tmp/suite.log`.

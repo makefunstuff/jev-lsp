@@ -422,7 +422,7 @@ ran at the floors then in force (0.75 for that rule); the rule ships **0.85** no
 against it: 15 runs of that document published **nothing** (at 0.75, 4 of 15 runs published one of
 its two lines and not the other), while the fixture that must fire answered **0.97–0.98** and
 published 15 of 15 at both floors. The false band's measured top is 0.79 and the true sample's
-bottom is 0.97; 0.85 sits in that gap (`docs/TUTORIAL.md` §3.7 has the guidance this is the worked
+bottom is 0.97; 0.85 sits in that gap (`docs/GUIDE.md` §4 has the guidance this is the worked
 instance of).
 
 - **`verify/rules_test.py`** (45 checks) drives it end to end against the real binary and the
@@ -563,6 +563,11 @@ Recorded because each was invisible to a scripted model, and each is now pinned 
 
 Recorded because they are deliberate boundaries, not oversights:
 
+- **A plan needs anchors that exist in an open document.** Steps are resolved against the content
+  the server holds and refused as `stale` when the target has moved, so a greenfield goal —
+  "scaffold a new project" — has no step to anchor and `jev.plan` answers *"the plan contained no
+  step whose target could be located"* rather than inventing files. Deliberate, and the reason
+  `docs/GUIDE.md` §8 puts the greenfield loop in the shell (`clank`) until a document exists.
 - **Inline completion is gone, and with it the two boundaries it used to carry.** Ghost text
   was verified interactively (a headless Neovim fires none of `InsertEnter` / `CursorMovedI` /
   `TextChangedP`) and `inlineCompletionProvider` had to be injected into the `initialize`

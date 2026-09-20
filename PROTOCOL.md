@@ -68,9 +68,9 @@ custom method and the transport-boundary injection that carried it are gone with
 **Rule: advertise only what is served.** A provider the server does not implement is a lie
 the client will act on — it will send requests that can only fail, or set up UI for progress
 that never reports. The block above is therefore the *complete* advertised set, and it grows
-one entry at a time as features land. `codeLensProvider` and `inlayHintProvider` are part of the design
-(`docs/UX.md`, `docs/ROADMAP.md`) and are deliberately **not** advertised yet: they are not
-implemented.
+one entry at a time as features land. `codeLensProvider` and `inlayHintProvider` are advertised
+because both are served (§3.4.1, §3.4.2); only their `resolve` halves are not, which is what the
+`resolveProvider: false` in the block above says.
 
 Standard kinds only, with a `.jev` suffix where the origin matters. Kind filtering in the
 client is prefix-based on `.` `[R4]`, so `refactor.rewrite` also matches

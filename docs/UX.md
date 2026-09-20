@@ -84,7 +84,7 @@ finding:
       "verb_hint": "fix" } ] }
 ```
 
-The file lives in `.jev/rules/`, and `docs/TUTORIAL.md` §3.7 walks through writing one. What you
+The file lives in `.jev/rules/`, and `docs/TUTORIAL.md` §3 walks through writing one. What you
 see when a rule fires is an ordinary finding — a sign in the margin, an entry in the menu, a
 count in the lens, something to dismiss — whose **label is the rule's title** and whose detail
 is the rule's prose followed by the reason the decision gave and the probability it cleared.
@@ -167,6 +167,9 @@ buffer is one setting, a `setup` option like the prefix:
 require('jev').setup({ surfaces = { layout = 'current' } })   -- the default
 ```
 
+The full settings reference — every key, its default, and the environment variable that
+overrides it — is `docs/GUIDE.md` §3.
+
 | value | what it does |
 |---|---|
 | `current` | **the default.** The report takes the buffer in the window you are already in: the window count, the sizes and every buffer are untouched, and the file you left stays loaded as the alternate buffer, so `q` and `<C-^>` both come straight back to it. This is what `:Jev inspect`, `:Jev explain`, `:Jev ask`, `:Jev followup`, `:Jev usage`, `:Jev plan` and `:Jev session` do |
@@ -236,7 +239,7 @@ and in-memory only.
 
 ## 4. Noise policy
 
-The failure mode of every ambient agent is crying wolf. Enforced:
+An ambient agent fails by being ignored, so the policy is written down and enforced:
 
 - **Nothing notifies during normal editing.** The only `window/showMessage` cases are a
   first budget exhaustion, model unreachability, and post-apply divergence.
@@ -255,9 +258,9 @@ The failure mode of every ambient agent is crying wolf. Enforced:
 - **Cost transparency.** Every model call logs one line (model, tier, tokens, ms, trigger
   reason) at debug level, and the statusline exposes the counters. Nothing hidden.
 
-## 5. Why this beats prompting in a TUI
+## 5. Why it lives in the editor
 
-| | Prompting in a TUI | jev-lsp in Neovim |
+| | Asking in a chat window | jev-lsp in Neovim |
 |---|---|---|
 | Context | You select it, usually incompletely | Scope, neighbours, diagnostics, imports, repo state are gathered by the server |
 | Latency to first useful token | Full round trip after you finish typing the prompt | Picker already open; the answer is cached work |
@@ -268,7 +271,7 @@ The failure mode of every ambient agent is crying wolf. Enforced:
 | Review | Read the whole answer | Per-step diff, approve or reject individually |
 | Undo | Manual, error-prone | One snapshot restore |
 
-The single largest difference is not quality of the model output. It is that the context
+The largest difference is not the quality of the model output. It is that the context
 is already where the code is, and the output lands where the code is.
 
 ## 6. Non-negotiable interactions
