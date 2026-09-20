@@ -54,7 +54,11 @@ local here = debug.getinfo(1, 'S').source:sub(2)
 vim.opt.runtimepath:prepend(vim.fn.fnamemodify(here, ':p:h:h') .. '/nvim')
 local context = require('jev.context')
 
-local root = vim.fn.tempname() .. '-jev-search'
+-- A repository root for the search to walk, and — like every harness here — one this harness
+-- removes again: `/tmp` accumulating repository markers is what made `/tmp/.git` somebody's
+-- workspace. A `JEV_ROOT` the caller named is left where it is.
+local fixture_root = dofile(vim.fn.fnamemodify(here, ':p:h') .. '/fixture.lua')
+local root, owned_root = fixture_root.root('JEV_ROOT', '-jev-search')
 vim.fn.mkdir(root .. '/.git', 'p')
 vim.fn.writefile({ 'def Retry(fn):', '    return backoff(fn)' }, root .. '/typed.py')
 vim.fn.writefile({ 'def retry(fn):', '    return fn()' }, root .. '/lower.py')
@@ -65,6 +69,11 @@ vim.fn.bufload(bufnr)
 say('[search] fixture : ' .. root)
 say('[search] rg       : ' .. (vim.fn.executable('rg') == 1 and vim.fn.exepath('rg') or '(not installed)'))
 say('[search] grep     : ' .. (vim.fn.executable('grep') == 1 and vim.fn.exepath('grep') or '(not installed)'))
+
+-- The two other directories this harness makes — the `PATH` a fallback runs under, and an empty
+-- one — are named here so the same cleanup takes them: every path created with `tempname()` is
+-- this harness's to remove.
+local shim, empty = nil, nil
 
 --- The matches as `basename:line`, sorted, so two runs can be compared without caring about the
 --- order either engine happened to produce them in. The basename, because macOS's `tempname()`
@@ -123,7 +132,7 @@ if vim.fn.executable('grep') ~= 1 then
 else
   -- A shim directory holding what the search needs and *not* rg. `grep` is symlinked rather than
   -- copied: the point is this machine's grep with the other engine absent.
-  local shim = vim.fn.tempname() .. '-only-grep'
+  shim = vim.fn.tempname() .. '-only-grep'
   vim.fn.mkdir(shim, 'p')
   vim.uv.fs_symlink(vim.fn.exepath('grep'), shim .. '/grep')
   local rg_visible_through_the_shim = nil
@@ -149,7 +158,7 @@ end
 -- 3. No engine at all ------------------------------------------------------------------------
 
 do
-  local empty = vim.fn.tempname() .. '-no-engine'
+  empty = vim.fn.tempname() .. '-no-engine'
   vim.fn.mkdir(empty, 'p')
   local matches, why = search_with_path(empty, function()
     return context.matches_for(QUESTION, bufnr)
@@ -187,5 +196,11 @@ end
 
 -- Report --------------------------------------------------------------------------------------
 
+-- Everything this harness created, gone on the way out — green, red, or after a skip. The root,
+-- the `PATH` shim and the empty directory: `/tmp` keeps no marker, and a caller who named a
+-- `JEV_ROOT` still has it.
+fixture_root.remove(shim, shim ~= nil)
+fixture_root.remove(empty, empty ~= nil)
+fixture_root.remove(root, owned_root)
 say(('[search] %d failure(s), %d skip(s)'):format(failures, skips))
 os.exit(failures == 0 and 0 or 1)

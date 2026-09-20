@@ -27,6 +27,10 @@
 #                     (default 8099). The answer for two suites on one machine at the same time:
 #                     give the second one `STUB_PORT=<other>`, and every harness follows, because
 #                     they read the endpoint they were handed (`JEV_BASE_URL`).
+#   JEV_WS            the `lsp_client` row's workspace (default `/tmp/jev-ws`). The default is
+#                     this run's to remove when it ends; a path named here is the caller's and is
+#                     left alone, exactly as the Lua rows treat `JEV_ROOT`.
+#   KEEP_WORKSPACE=1  keep even the default workspace, so a failing row can be read afterwards.
 #   NVIM_BINS="…"     space-separated Neovim binaries for the Lua harnesses.
 #                     Default: the 0.12.5 build plus the installed `nvim`.
 #   JEV_API_KEY_ENV   name of the variable holding the chat tiers' key (default
@@ -104,11 +108,25 @@ PY
 # default is to *refuse*, naming the holder, and taking the port is the deliberate act
 # (`TAKE_OVER=1`, for a machine with one session on it).
 
+# The `lsp_client` row's workspace, and the same rule as the Lua rows' fixture roots: a path this
+# runner created is removed when the run ends (every exit path, through the `trap` below), and a
+# `JEV_WS` the caller named — or `KEEP_WORKSPACE=1` — is left where it is. Leaving it is what makes
+# a failing row debuggable; leaving it *every* time is how `/tmp` filled up with repository markers.
+WORKSPACE="${JEV_WS:-/tmp/jev-ws}"
+workspace_is_ours=0
+if [ -z "${JEV_WS:-}" ]; then
+  workspace_is_ours=1
+fi
+
 stub_pid=""
 cleanup() {
   if [ -n "$stub_pid" ]; then
     kill "$stub_pid" 2>/dev/null
     wait "$stub_pid" 2>/dev/null
+  fi
+  # The exact directory this run used, never a parent and never a pattern.
+  if [ "$workspace_is_ours" = "1" ] && [ "${KEEP_WORKSPACE:-0}" != "1" ]; then
+    rm -rf "$WORKSPACE"
   fi
 }
 trap cleanup EXIT
@@ -286,7 +304,7 @@ if [ "${NVIM_ONLY:-0}" != "1" ]; then
   run "outcome" python3 verify/outcome_test.py
   run "plan" python3 verify/plan_test.py
   run "cli_parity" python3 verify/cli_parity.py
-  run "lsp_client" python3 verify/lsp_client.py --server "$REPO/target/release/$BIN_NAME" --workspace /tmp/jev-ws --stub-model-url "$STUB_URL"
+  run "lsp_client" python3 verify/lsp_client.py --server "$REPO/target/release/$BIN_NAME" --workspace "$WORKSPACE" --stub-model-url "$STUB_URL"
   # The test client's own defect-injection net: no server, no stub, no network. It injects each
   # defect into its own client and requires the client to catch it, so "the suite is green" is not
   # a net that cannot fail. ~25 s.

@@ -95,11 +95,10 @@ vim.opt.runtimepath:prepend(PLUGIN)
 local server_log = dofile(vim.fn.fnamemodify(here, ':p:h') .. '/harness_log.lua')
 server_log.capture()
 
-local root = os.getenv('JEV_ROOT')
-if root == nil or root == '' then
-  root = vim.fn.tempname() .. '-jev-live'
-end
-vim.fn.mkdir(root, 'p')
+-- A root this harness created is removed on the way out; a `JEV_ROOT` the caller named is the
+-- caller's and is left where it is, which is what makes a failing row debuggable.
+local fixture_root = dofile(vim.fn.fnamemodify(here, ':p:h') .. '/fixture.lua')
+local root, owned_root = fixture_root.root('JEV_ROOT', '-jev-live')
 
 local fixture = root .. '/fixture.zzz'
 vim.fn.writefile(
@@ -242,6 +241,9 @@ for _, c in ipairs(vim.lsp.get_clients({ name = 'jev' })) do
   c:stop(true)
 end
 sleep(300)
+
+-- The root this harness created, gone on the way out — green or red. `JEV_ROOT=/tmp/…` keeps it.
+fixture_root.remove(root, owned_root)
 
 if failures > 0 then server_log.dump() end
 say(('[nvim_live] %d failure(s), %d skip(s)'):format(failures, skips))

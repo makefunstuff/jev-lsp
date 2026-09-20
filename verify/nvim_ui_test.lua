@@ -138,11 +138,10 @@ vim.opt.runtimepath:prepend(PLUGIN)
 local server_log = dofile(vim.fn.fnamemodify(here, ':p:h') .. '/harness_log.lua')
 server_log.capture()
 
-local root = os.getenv('JEV_ROOT')
-if root == nil or root == '' then
-  root = vim.fn.tempname() .. '-jev-ui'
-end
-vim.fn.mkdir(root, 'p')
+-- A root this harness created is removed on the way out; a `JEV_ROOT` the caller named is the
+-- caller's and is left where it is, which is what makes a failing row debuggable.
+local fixture_root = dofile(vim.fn.fnamemodify(here, ':p:h') .. '/fixture.lua')
+local root, owned_root = fixture_root.root('JEV_ROOT', '-jev-ui')
 
 -- The fixture root is its own repository root, which every other Lua harness here already
 -- arranges (`rules_live.lua`, `dismiss_test.lua`, `result_surface.lua`, `context_search.lua` all
@@ -2013,5 +2012,7 @@ check(
 )
 
 if failures > 0 then server_log.dump() end
+-- The root this harness created, gone on the way out — green, red, or after a skip.
+fixture_root.remove(root, owned_root)
 say(('[nvim_ui] %d failure(s), %d skip(s)'):format(failures, skips))
 os.exit(failures == 0 and 0 or 1)

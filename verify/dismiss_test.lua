@@ -47,8 +47,10 @@ vim.opt.runtimepath:prepend(vim.fn.getcwd() .. '/nvim')
 local server_log = dofile(vim.fn.getcwd() .. '/verify/harness_log.lua')
 server_log.capture()
 
--- A repository root: `vim.fs.root(…, {'.git'})` is what the plugin keys dismissals on.
-local root = vim.fn.tempname()
+-- A repository root: `vim.fs.root(…, {'.git'})` is what the plugin keys dismissals on. A root this
+-- harness created is removed on the way out; a `JEV_ROOT` the caller named is left where it is.
+local fixture_root = dofile(vim.fn.getcwd() .. '/verify/fixture.lua')
+local root, owned_root = fixture_root.root('JEV_ROOT', '-jev-dismiss')
 vim.fn.mkdir(root .. '/.git', 'p')
 -- The ambient pass is the *rules* pass (PROTOCOL §9 / `jev.rules/1`), so a repository with no
 -- rule has no ambient finding to dismiss. This rule's inspection matches the `open(` the
@@ -94,6 +96,9 @@ if not found then
   skip('no finding arrived, so nothing can be dismissed (is JEV_BASE_URL set and the '
     .. 'endpoint reachable?)')
   server_log.dump()
+  -- Every exit path, including this one: a skip is not a reason to leave a repository marker in
+  -- `/tmp` for the next run to trip over.
+  fixture_root.remove(root, owned_root)
   say(('[dismiss] %d failure(s), %d skip(s)'):format(failures, skips))
   os.exit(failures == 0 and 0 or 1)
 end
@@ -149,5 +154,6 @@ check(#jev_diagnostics() == 0,
 if failures > 0 then
   server_log.dump()
 end
+fixture_root.remove(root, owned_root)
 say(('[dismiss] %d failure(s), %d skip(s)'):format(failures, skips))
 os.exit(failures == 0 and 0 or 1)

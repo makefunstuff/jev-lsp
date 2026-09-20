@@ -80,8 +80,10 @@ local server_log = dofile(vim.fn.fnamemodify(here, ':p:h') .. '/harness_log.lua'
 
 -- A repository root: the plugin keys the session record and dismissals on `.git`. No
 -- `.jev/rules/`, so `jev.inspect` needs no decision tier and answers the same way every run —
--- this harness is about where the report goes, not about what is in it.
-local root = vim.fn.tempname() .. '-jev-surface'
+-- this harness is about where the report goes, not about what is in it. A root this harness
+-- created is removed on the way out; a `JEV_ROOT` the caller named is left where it is.
+local fixture_root = dofile(vim.fn.fnamemodify(here, ':p:h') .. '/fixture.lua')
+local root, owned_root = fixture_root.root('JEV_ROOT', '-jev-surface')
 vim.fn.mkdir(root .. '/.git', 'p')
 local src = root .. '/surface.py'
 vim.fn.writefile({
@@ -741,5 +743,7 @@ end)
 if failures > 0 then
   server_log.dump()
 end
+-- The root this harness created, gone on the way out — green, red, or after a skip.
+fixture_root.remove(root, owned_root)
 say(('[surface] %d failure(s), %d skip(s)'):format(failures, skips))
 os.exit(failures == 0 and 0 or 1)

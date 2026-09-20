@@ -117,8 +117,10 @@ vim.opt.runtimepath:prepend(PLUGIN)
 -- exactly like a rules pass that found nothing from this side of the connection.
 local server_log = dofile(vim.fn.fnamemodify(here, ':p:h') .. '/harness_log.lua')
 
--- A repository root: the plugin keys the session record and dismissals on `.git`.
-local root = vim.fn.tempname()
+-- A repository root: the plugin keys the session record and dismissals on `.git`. A root this
+-- harness created is removed on the way out; a `JEV_ROOT` the caller named is left where it is.
+local fixture_root = dofile(vim.fn.fnamemodify(here, ':p:h') .. '/fixture.lua')
+local root, owned_root = fixture_root.root('JEV_ROOT', '-jev-rules')
 vim.fn.mkdir(root .. '/.git', 'p')
 vim.fn.mkdir(root .. '/.jev/rules', 'p')
 local src = root .. '/handler.rs'
@@ -664,5 +666,7 @@ end
 if failures > 0 then
   server_log.dump()
 end
+-- The root this harness created, gone on the way out — green or red.
+fixture_root.remove(root, owned_root)
 say(('[rules] %d failure(s), %d skip(s)'):format(failures, skips))
 os.exit(failures == 0 and 0 or 1)
