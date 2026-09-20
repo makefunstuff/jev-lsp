@@ -22,14 +22,16 @@
 --      rather than the report's name as one;
 --   5. `:Jev explain` — a streamed answer opens its surface in the same window *before* the
 --      answer exists, and the finished artifact lands in that same buffer;
---   6. `surfaces.layout = 'float'` — an opt-in floating window: the code stays visible behind
---      it, and dismissing closes it;
---   7. `surfaces.layout = 'split'` — the old shape, still available on request;
---   8. the same as 1 with `'hidden'` off and the buffer modified: the reason the placement asks
---      with `:hide buffer` instead of `nvim_win_set_buf` — and the unsaved buffer survives it.
+--   6. `surfaces.layout = 'float'` and `'split'` — the two opt-in layouts: the float keeps the
+--      code visible behind it and costs a window while it is open, the split is the old shape;
+--   7. the same as 1 with `'hidden'` off and the buffer modified: the reason the placement asks
+--      with `:hide buffer` instead of `nvim_win_set_buf` — and the unsaved buffer survives it;
+--   8. a command that cannot go out: a send the client refuses says why, and takes back the
+--      surface it had already opened for the answer; a server that is gone is answered the same
+--      way. Never a silent no-op leaving an empty window behind.
 --
 -- Prints ok/FAIL/SKIP per check. Exit is nonzero only on FAIL; exit 2 when JEV_LSP_BIN is
--- unset. Every wait is bounded, so a run cannot hang. Checks 4 needs a chat model: with no
+-- unset. Every wait is bounded, so a run cannot hang. Check 5 needs a chat model: with no
 -- reachable endpoint it is a SKIP with the reason, never a FAIL and never an ok.
 
 local BIN = os.getenv('JEV_LSP_BIN')
@@ -628,6 +630,96 @@ do
   vim.cmd('silent! undo')
   vim.bo[code_bufnr].modified = false
   vim.o.hidden = true
+end
+
+-- 8. A command that cannot go out --------------------------------------------------------------
+
+-- `Client:request` returns false when the send itself fails — the server stopped between
+-- `client()` and the request — and `M.command` used to answer that by doing nothing at all: no
+-- message, and with `stream = true` the surface it had just opened for the answer stayed empty and
+-- open. Two ways in, one observable outcome: the command says something, and nothing empty is left
+-- behind.
+do
+  local wins = window_count()
+  local bufs = #vim.api.nvim_list_bufs()
+
+  vim.api.nvim_set_current_buf(code_bufnr)
+
+  -- `a` — the send itself fails, provoked at the boundary `Client:request` documents by stubbing
+  -- it, the way `nvim_ui_test.lua` stubs a request that never answers. A real kill cannot stand in
+  -- for this: in the tick after one, the client has either already left `get_clients` (so the
+  -- command never gets as far as opening a surface) or still accepts the write, and the branch
+  -- under test is the client that is still there and refuses.
+  local client = vim.lsp.get_clients({ bufnr = code_bufnr, name = 'jev' })[1]
+  local real_request = client.request
+  client.request = function()
+    return false, 'the server is not taking requests'
+  end
+  local messages, levels = {}, {}
+  local real_notify = vim.notify
+  vim.notify = function(msg, level, ...)
+    messages[#messages + 1] = tostring(msg)
+    levels[#levels + 1] = level
+    return real_notify(msg, level, ...)
+  end
+  local answered = false
+  local request_id = require('jev').command('jev.status', {}, function()
+    answered = true
+  end, { stream = true })
+  client.request = real_request
+  vim.notify = real_notify
+
+  local said = table.concat(messages, ' ')
+  check(
+    said:find('was not sent', 1, true) ~= nil
+      and said:find('the server is not taking requests', 1, true) ~= nil
+      and levels[1] == vim.log.levels.WARN,
+    'a send that fails says so, with the reason it failed',
+    said == '' and 'said nothing' or said
+  )
+  check(request_id == nil, 'and asks for no request id it does not have', vim.inspect(request_id))
+  check(not answered, 'and calls back for nothing, because no answer is coming')
+  check(
+    vim.api.nvim_get_current_buf() == code_bufnr,
+    'the surface opened for the answer is taken back',
+    vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf())
+  )
+  check(window_count() == wins, 'with the window count as it was', window_count())
+  check(
+    #vim.api.nvim_list_bufs() == bufs,
+    'and no empty buffer left holding it',
+    ('%d buffer(s) -> %d'):format(bufs, #vim.api.nvim_list_bufs())
+  )
+
+  -- `b` — the server is gone for real. The client this plugin talks to is stopped, so the command
+  -- cannot open a surface for an answer nobody will fill.
+  for _, c in ipairs(vim.lsp.get_clients({ name = 'jev' })) do
+    c:stop(true)
+  end
+  vim.wait(5000, function()
+    return #vim.lsp.get_clients({ name = 'jev' }) == 0
+  end, 25)
+
+  vim.api.nvim_set_current_buf(code_bufnr)
+  local stopped_said = {}
+  local real_notify_stopped = vim.notify
+  vim.notify = function(msg, level, ...)
+    stopped_said[#stopped_said + 1] = tostring(msg)
+    return real_notify_stopped(msg, level, ...)
+  end
+  require('jev').command('jev.explain', { {} }, function() end, { stream = true })
+  vim.notify = real_notify_stopped
+
+  check(
+    #stopped_said > 0,
+    'with the server stopped, a streaming command says something instead of nothing',
+    vim.inspect(stopped_said)
+  )
+  check(
+    vim.api.nvim_get_current_buf() == code_bufnr and window_count() == wins,
+    'and leaves no surface open for an answer that cannot come',
+    ('current=%s wins=%d'):format(vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf()), window_count())
+  )
 end
 
 -- Report --------------------------------------------------------------------------------------

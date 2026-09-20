@@ -725,6 +725,50 @@ do
   }
   local expect = edited_text(edit, before, uri)
 
+  -- The keys the preview wants, bound by the *user* in their own buffer first. A buffer-local map
+  -- of the user's wins: the preview installs its key only where the key is free, and whatever it
+  -- does not install it must not delete on the way out. The fixture is deliberately not buffer 1 —
+  -- the guard used to read `m.lhs == lhs and m.buffer == 1`, and `nvim_buf_get_keymap` reports the
+  -- buffer that was asked about (`buffer = 2` in buffer 2), so the second half only ever held for
+  -- buffer 1: in any session whose file is not the first buffer, the preview overwrote these maps
+  -- and `close()` removed them.
+  check(
+    bufnr ~= 1,
+    'the fixture is not buffer 1, which is the case the map guard got wrong',
+    bufnr
+  )
+  local user_maps = {}
+  for _, lhs in ipairs({ 'q', '<CR>', '<Esc>', 'y' }) do
+    local desc = 'uitest: the user owns ' .. lhs
+    vim.keymap.set('n', vim.api.nvim_replace_termcodes(lhs, true, false, true), function() end,
+      { buffer = bufnr, desc = desc })
+    user_maps[lhs] = desc
+  end
+
+  --- The user's maps in *their* buffer, read explicitly rather than through `maparg`, which
+  --- answers for whichever buffer is current — while the preview is open that is the preview.
+  --- @return string[] the ones that are not the user's any more
+  local function lost_user_maps()
+    local present = {}
+    for _, m in ipairs(vim.api.nvim_buf_get_keymap(bufnr, 'n')) do
+      present[m.desc or m.rhs or '?'] = true
+    end
+    local lost = {}
+    for lhs, desc in pairs(user_maps) do
+      if not present[desc] then
+        lost[#lost + 1] = lhs
+      end
+    end
+    table.sort(lost)
+    return lost
+  end
+
+  check(
+    #lost_user_maps() == 0,
+    "the user's buffer-local maps are bound before the preview opens",
+    vim.inspect(lost_user_maps())
+  )
+
   local maps_before = {}
   for _, m in ipairs(vim.api.nvim_buf_get_keymap(bufnr, 'n')) do
     maps_before[m.lhs] = true
@@ -745,6 +789,20 @@ do
   end
   if preview_win ~= nil then
     local preview_bufnr = vim.api.nvim_win_get_buf(preview_win)
+    -- While the preview is open: the user's maps are still the user's, and the preview's own keys
+    -- went on its own side, where nothing was bound.
+    check(
+      #lost_user_maps() == 0,
+      "the preview does not shadow the user's buffer-local maps",
+      vim.inspect(lost_user_maps())
+    )
+    local preview_q = false
+    for _, m in ipairs(vim.api.nvim_buf_get_keymap(preview_bufnr, 'n')) do
+      if m.lhs == 'q' then
+        preview_q = true
+      end
+    end
+    check(preview_q, "and its own q is mapped on its own side, where the key was free")
     check(
       vim.deep_equal(lines(preview_bufnr), expect),
       'the preview shows the post-edit text, computed without touching the buffer'
@@ -781,6 +839,13 @@ do
       end
     end
     check(#leftover == 0, 'no keymap the preview added is left behind', vim.inspect(leftover))
+    -- The other half of the same claim, and the one the guard got wrong: what the preview left
+    -- alone is still there, still the user's.
+    check(
+      #lost_user_maps() == 0,
+      "the user's own buffer-local maps survive the dismiss",
+      vim.inspect(lost_user_maps())
+    )
   else
     fail('the preview window could be found')
   end
@@ -1722,13 +1787,25 @@ end
 -- first cached answer poisons every later question about the same lines.
 do
 
-  local function prompt_text()
-    local handle = io.popen('curl -s -m 3 http://127.0.0.1:8099/__requests')
+  --- What the stub being used by this run has recorded, read from *that* stub.
+  ---
+  --- The origin comes from `JEV_BASE_URL` — the endpoint the server was pointed at — and not
+  --- from a fixed port. A run against a stub on any other port then reads another run's traffic
+  --- (or nothing at all), and the checks below pass or fail on a subject they did not see; the
+  --- port is the caller's to choose, and `verify/stub_model.py` honours `STUB_PORT`.
+  local function stub_requests()
+    local base = os.getenv('JEV_BASE_URL') or ''
+    local origin = base:match('^(https?://[^/]+)') or 'http://127.0.0.1:8099'
+    local handle = io.popen(('curl -s -m 3 %s/__requests'):format(origin))
     local body = handle and handle:read('*a') or ''
     if handle then
       handle:close()
     end
-    local ok, decoded = pcall(vim.json.decode, body)
+    return body
+  end
+
+  local function prompt_text()
+    local ok, decoded = pcall(vim.json.decode, stub_requests())
     if not ok or type(decoded) ~= 'table' then
       return ''
     end

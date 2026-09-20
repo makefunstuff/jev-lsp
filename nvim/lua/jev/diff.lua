@@ -249,11 +249,19 @@ function M.propose(edit, opts)
   -- Map only where the key is free: a buffer-local map of the user's wins outright, a global
   -- one is shadowed for the duration and visible again once this closes. The map is looked up
   -- in the buffer it is about to be set in, not in whichever buffer happens to be current.
+  --
+  -- `m.lhs` alone is the whole buffer-local test, and it has to be: every entry
+  -- `nvim_buf_get_keymap(buffer, mode)` returns belongs to the buffer that was asked about, so
+  -- its `buffer` field *is* `buffer` (probed: in buffer 2, `buffer = 2`). An extra
+  -- `m.buffer == 1` therefore only ever held for buffer 1 — in any session whose file is not the
+  -- first buffer, the guard fell through, these maps overwrote whatever the user had bound to
+  -- `<CR>`, `y`, `q` or `<Esc>` in their own buffer, and `close()` then deleted the user's map
+  -- on the way out. The user's map is the user's.
   local ours = {}
   local function map(win, mode, lhs, fn, desc)
     local buffer = vim.api.nvim_win_get_buf(win)
     for _, m in ipairs(vim.api.nvim_buf_get_keymap(buffer, mode)) do
-      if m.lhs == lhs and m.buffer == 1 then
+      if m.lhs == lhs then
         return
       end
     end

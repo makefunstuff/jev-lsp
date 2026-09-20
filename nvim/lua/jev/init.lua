@@ -342,7 +342,27 @@ function M.command(command, arguments, cb, opts)
       M.report(command, err, result)
     end
   end, bufnr)
-  if success and request_id then
+  if not success then
+    -- The send itself failed. `Client:request` returns false when its own `pcall` raised — the
+    -- server stopped between `client()` and here, which is the one state this plugin's documents
+    -- say it never has to answer for, and it is still reachable. Nothing is coming, so: take back
+    -- the surface that was opened two lines up for an answer (`dismiss_surface`, the same door
+    -- `q` uses, so the window goes back the way the layout took it), release the token whose
+    -- report will never arrive, and say the reason. Without this the command was a total silent
+    -- no-op: no message, and an empty window left open holding it.
+    local streamed = streams[token]
+    streams[token] = nil
+    M.release_token(token)
+    if streamed ~= nil then
+      dismiss_surface(streamed)
+    end
+    vim.notify(
+      ('jev: %s was not sent: %s'):format(command, tostring(request_id)),
+      vim.log.levels.WARN
+    )
+    return
+  end
+  if request_id then
     inflight[request_id] = { client = c, token = token }
   end
   return request_id
