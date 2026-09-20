@@ -197,7 +197,10 @@ if [ "${NVIM_ONLY:-0}" != "1" ]; then
   run "rules_test" python3 verify/rules_test.py --bin "$REPO/target/release/$BIN_NAME"
   # The rules gate, over the shipped CLI and the stub: a seeded violation must exit 1, a file no
   # rule claims 0, and a gate that cannot run 2. This is what a session runs before it commits.
-  run "rules_gate" python3 verify/rules_gate_test.py
+  # The gate needs a decide endpoint, and the runner's exports below sit outside this block by
+  # design (they feed the Lua harnesses), so the row names the same stub itself rather than
+  # inheriting nothing and skipping.
+  run "rules_gate" env JEV_DECIDE_BASE_URL="$STUB_URL" JEV_DECIDE_WIRE=system_one JEV_DECIDE_MODEL=stub-model python3 verify/rules_gate_test.py
 fi
 
 # Both spellings: the pre-rename tree reads META_*, the renamed one JEV_*. Each ignores the

@@ -74,9 +74,12 @@ def main():
 
         stub = os.environ.get("JEV_DECIDE_BASE_URL", "")
         if not stub:
-            say("SKIP  JEV_DECIDE_BASE_URL is unset, so the gate has no endpoint to run against")
-            say("[rules_gate] 0 failure(s), 1 skip(s)")
-            return 0
+            # Not a pass and not a skip: without an endpoint this harness measures nothing, and a
+            # run that measured nothing must not report success. The gate's own contract is the
+            # same exit for the same reason, and the suite's row supplies the stub, so this is
+            # reached only when someone runs the harness by hand.
+            say("rules_gate: JEV_DECIDE_BASE_URL is unset, so the gate cannot be run")
+            return 2
 
         base_env = {"JEV_DECIDE_BASE_URL": stub,
                     "JEV_DECIDE_WIRE": os.environ.get("JEV_DECIDE_WIRE", "system_one"),
@@ -88,6 +91,9 @@ def main():
         check("Unwrap outside tests" in out and "(p=" in out,
               "the finding is printed as path:line  label  (p=…)", out or err)
         check("rules-gate:" in out, "the counts are printed beside it", out)
+        for line in out.splitlines():
+            if line.startswith("rules-gate:"):
+                say("      " + line)
 
         rc, out, err = gate([clean], base_env, workdir)
         check(rc == 0, "a file no rule claims exits 0", "exit %s: %s" % (rc, out or err))

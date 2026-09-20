@@ -103,6 +103,15 @@ for path in "${PATHS[@]}"; do
     *) if [ -f "$path" ]; then abs="$(cd "$(dirname "$path")" && pwd)/$(basename "$path")"; else abs="$REPO/$path"; fi ;;
   esac
   [ -f "$abs" ] || continue
+  # A path the pass cannot read is named and skipped, by the same cheap signal the engine uses
+  # (`gates::is_binary`: a NUL byte in the first 8 KiB). Counting a tarball as "did not answer"
+  # would put a build artifact in the same bucket as a dead endpoint.
+  if ! python3 -c 'import sys; sys.exit(1 if b"\x00" in open(sys.argv[1], "rb").read(8192) else 0)' "$abs"; then
+    if [ "$QUIET" != 1 ] && [ "$JSON" != 1 ]; then
+      printf 'rules-gate: skipped  %s  (binary)\n' "$abs"
+    fi
+    continue
+  fi
   # One artifact per line. The CLI's own line ends with a newline, so the closing brace is
   # appended to the captured text rather than printed after it.
   # A non-zero exit is reported by the artifact itself (transport_error), so the status is kept
@@ -121,7 +130,8 @@ import json, sys
 
 path_file, quiet, as_json = sys.argv[1], sys.argv[2] == "1", sys.argv[3] == "1"
 findings, ran, failed, considered, candidates = [], 0, 0, 0, 0
-skips = {}
+skips, failures = {}, {}
+unchecked = []
 for line in open(path_file, encoding="utf-8", errors="replace"):
     line = line.strip()
     if not line.startswith("{"):
@@ -132,8 +142,12 @@ for line in open(path_file, encoding="utf-8", errors="replace"):
         continue
     body = row.get("result") or {}
     if body.get("error"):
+        # A failure of the pass itself, kept apart from the skip codes: `no_rules` is a run that
+        # happened and found nothing to ask, and must never be reported as "did not answer".
         failed += 1
-        skips[body["error"].get("code", "error")] = skips.get(body["error"].get("code", "error"), 0) + 1
+        code = body["error"].get("code", "error")
+        failures[code] = failures.get(code, 0) + 1
+        unchecked.append((row["path"], code))
         continue
     ran += 1
     considered += body.get("considered") or 0
@@ -150,8 +164,8 @@ for line in open(path_file, encoding="utf-8", errors="replace"):
 if ran == 0:
     reason = "the decide endpoint did not answer for any path that had a candidate"
     if as_json:
-        print(json.dumps({"schema": "jev.gate/1", "ran": False, "reason": reason, "failures": skips}))
-    print("rules-gate: %s (%s)" % (reason, ", ".join("%s×%d" % (k, v) for k, v in skips.items())), file=sys.stderr)
+        print(json.dumps({"schema": "jev.gate/1", "ran": False, "reason": reason, "failures": failures}))
+    print("rules-gate: %s (%s)" % (reason, ", ".join("%s×%d" % (k, v) for k, v in failures.items())), file=sys.stderr)
     sys.exit(2)
 
 if as_json:
@@ -163,8 +177,13 @@ else:
     if not quiet:
         print("rules-gate: %d file(s), %d rule(s) considered, %d candidate(s), %d finding(s), %d skipped"
               % (ran, considered, candidates, len(findings), sum(skips.values())))
+        # A path the pass could not read is named, not counted: a file that went unchecked is
+        # the same failure as a run that never happened, one path at a time.
+        for name, code in unchecked[:10]:
+            print("rules-gate: unchecked  %s  (%s)" % (name, code))
         if failed:
-            print("rules-gate: %d path(s) did not answer (%s)" % (failed, ", ".join(skips)))
+            print("rules-gate: %d path(s) did not answer (%s)"
+                  % (failed, ", ".join("%s×%d" % (k, v) for k, v in failures.items())))
 
 sys.exit(1 if findings else 0)
 PY
