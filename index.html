@@ -183,49 +183,6 @@
   </div>
 </section>
 
-<!-- ========== COST: dark machine card ========== -->
-<section id="cost" class="sec">
-  <div class="shell">
-    <header class="sec-head">
-      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Economics</p>
-      <h2>One line costs less than a whole-file chat</h2>
-      <p class="sec-lead">Patterns decide which lines run the model. No match → <strong>no call</strong>. A match asks about that line only, so a small/local decide model is enough.</p>
-    </header>
-
-    <div class="cost-card">
-      <div class="win-chrome">
-        <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
-        <span class="win-title">cost · measured</span>
-        <span class="win-meta">2026-09-20 · this repo</span>
-      </div>
-      <div class="cost-table-wrap">
-        <table class="cost">
-          <thead>
-            <tr>
-              <th scope="col"></th>
-              <th scope="col">jev rules pass</th>
-              <th scope="col">whole-file chat review</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr class="mark">
-              <th scope="row"><code>server.rs</code> ~2.6k lines</th>
-              <td>2 findings · <strong>~$0.00022</strong><br><span class="dim">~5.3k in / 345 out</span></td>
-              <td>0 findings · <strong>~$0.00306</strong><br><span class="dim">~30.5k in / 9 out</span></td>
-            </tr>
-            <tr>
-              <th scope="row">30 Rust docs</th>
-              <td><strong>~$0.0034</strong> · 20 decide calls</td>
-              <td>—</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <p class="cost-cap"><code>jev-1.13</code> decide vs <code>gemini-2.5-flash-lite</code> chat on the same file. Measured in this repo.</p>
-    </div>
-    <p class="pull">Cheaper because most lines never call the model.</p>
-  </div>
-</section>
 
 
 <!-- ========== START: sticky-feeling install ========== -->
