@@ -88,7 +88,22 @@ of each other's leftovers, and that is how a full table can be red while a narro
 script is green: `verification (nvim-only)` skips every Python row, and those two rows are the ones
 that create the marker. Both now use `tempfile.mkdtemp`, which is the convention the rest of the
 table already followed (`plan_test.py`, `queue_test.py`, `outcome_test.py`, `latency`,
-`cli_parity`, `smoke`), and `nvim_ui_test.lua` marks its own fixture root with a `.git/`.
+`cli_parity`, `smoke`), and `nvim_ui_test.lua` marks its own fixture root with a `.git/`. A harness
+also **removes the root it created**, on every exit path, green, red or skipped, and leaves a root
+the caller named where it is, because naming one is how a failing row stays readable afterwards.
+That half of the rule lives once, in `verify/fixture.lua`: `root(env, suffix)` returns
+`(root, owned)`, and `remove(root, owned)` refuses when `owned` is false, so nothing deletes a path
+it did not create or a parent of one; `run-suite.sh` mirrors it for the `lsp_client` row's
+workspace, where `JEV_WS` keeps `/tmp/jev-ws` and `KEEP_WORKSPACE=1` keeps the default, and its
+header says so. Both halves are one rule about the shared temp directory: an unmarked root can take
+somebody else's `.git` as its workspace, and a root that is never removed leaves a repository
+marker there for the next run to take, the same hazard one run later. Measured: with the harnesses
+unfixed, one full run added **12** markers under `$TMPDIR` (six rows × two Neovim versions); with
+the fix, **zero**. One harness is deliberate: `verify/probes/language.lua` keeps
+`/tmp/jev-lang-fixtures`, because the fixture files *are* its printed evidence, they are overwritten
+rather than accumulated, and the directory holds no `.git`, so it cannot become a workspace. The
+four other probes write nothing: their fixed `/tmp/jev-probe-*` and `/tmp/jev-trace-fixture.lua`
+paths are buffer names used to build `file://` uris.
 
 ## 1. Independent LSP client
 
