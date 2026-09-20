@@ -1,0 +1,28 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "report-layout-default",
+      "title": "A report's default leaves the window alone",
+      "text": "A generated surface has a layout the user chooses, and its default leaves the window where it was: a split, a float or a takeover is something the user asks for, never what a report does to a window someone was reading.",
+      "severity": "warning",
+      "applies_to": [
+        "**/editors/**/*.js",
+        "**/nvim/**/*.lua"
+      ],
+      "inspection": {
+        "kind": "regex",
+        "pattern": "ViewColumn\\.|surfaces\\s*=\\s*\\{|layout\\s*=\\s*['\"](current|float|split)['\"]"
+      },
+      "judgement": {
+        "question": "Does this decide the default layout of a generated surface, and does that default split, move or take over the user's window rather than leaving it where it was?",
+        "criteria": {
+          "true": "the default for a generated surface splits, moves or takes over the user's window with nothing asked for",
+          "false": "the default preserves the window (`current`/`Active`), the value is the user's own configuration, or this is not a layout default at all"
+        },
+        "min_probability": 0.75
+      },
+      "verb_hint": "fix"
+    }
+  ]
+}
