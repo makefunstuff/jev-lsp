@@ -17,6 +17,11 @@ name: ci
 #   * anything with a GUI. The Cursor/VS Code extension in `editors/cursor/` is exercised at the
 #     protocol layer by the suite's own client; whether an editor paints a squiggle is not
 #     something any headless job here can see (docs/CURSOR.md weighs what is and is not verified).
+#   * the plugin's local-grep **fallback** (`grep` where `ripgrep` is missing,
+#     `nvim/lua/jev/context.lua:288`). The runner installs `ripgrep` below because the plugin
+#     prefers it and a developer's machine has it, and the fallback fails the `nvim_ui_test` row
+#     wherever `rg` is absent — a defect in the fallback, reproduced locally, not something this
+#     job covers.
 #   * the `quality_eval` row measures a review against a real model. There is no API key in CI,
 #     so the row reports `?` with its reason: never a pass, never a failure.
 #   * the suite's own `rules_gate` row runs the same gate the step below runs. This workflow
@@ -228,6 +233,18 @@ jobs:
       # on the first run of this job.
       - name: the workspace the suite's client row wants
         run: mkdir -p /tmp/jev-ws
+      # `ripgrep`, because the plugin's local grep prefers it and a developer's machine has it
+      # (nvim/lua/jev/context.lua:283, `rg` first and `grep` as the fallback). Without it the
+      # `nvim_ui_test` row fails on both Neovim versions, and the failing check is the one about
+      # the client having grepped locally — the fallback returns no context. That is a defect in
+      # the fallback, not in this job, and installing `rg` means **CI does not exercise the
+      # fallback**: reproduce it with `env PATH=<a PATH with no rg> NVIM_ONLY=1
+      # bash verify/run-suite.sh /tmp/log`, which reports `[nvim_ui] 1 failure(s)`.
+      - name: ripgrep, which the plugin's grep prefers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+          rg --version | head -1
       - name: the verification table
         run: |
           set -eu
