@@ -11,7 +11,9 @@
 
 Silent action loop across OpenCode, Neovim, and VS Code: paste an AI-slop comment, get a finding, apply the fix.
 
-[Watch (~32s)](https://makefunstuff.github.io/jev-lsp/assets/demo-slop-triptych.mp4) · embedded on the [landing page](https://makefunstuff.github.io/jev-lsp/#demo).
+[![Demo: OpenCode → Neovim → VS Code](https://makefunstuff.github.io/jev-lsp/assets/demo-slop-triptych-poster.jpg)](https://makefunstuff.github.io/jev-lsp/assets/demo-slop-triptych.mp4)
+
+[Watch (~32s)](https://makefunstuff.github.io/jev-lsp/assets/demo-slop-triptych.mp4) · [landing page](https://makefunstuff.github.io/jev-lsp/#demo)
 
 ## Loop
 
