@@ -5,8 +5,8 @@
 --   … the harness runs …
 --   fixture.remove(root, owned)
 --
--- Every harness owns a private fixture root and marks it as its own (the invariant
--- `docs/VERIFICATION.md` §2 states). That half is about *where a root looks*: the plugin resolves
+-- Every harness owns a private fixture root and marks it as its own (stated in
+-- `docs/VERIFICATION.md`'s preamble). That half is about *where a root looks*: the plugin resolves
 -- a buffer's workspace with `vim.fs.root(bufnr, {'.git'})` and the server keys its session record
 -- on `<root>/.git/jev/`, so a fixture that is not marked can make somebody else's `.git` the
 -- workspace — `/tmp/.git`, created by two Python rows that declared `/tmp` their workspace, did
