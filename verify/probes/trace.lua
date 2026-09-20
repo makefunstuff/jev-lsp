@@ -32,6 +32,9 @@ end
 
 local buf = vim.api.nvim_create_buf(true, false)
 vim.api.nvim_set_current_buf(buf)
+-- A buffer *name*, not a file: nothing is written to this path, so the probe leaves nothing
+-- in `/tmp`. The name exists because the stub needs a `file://` uri, and a fixed one keeps
+-- the probe's output reproducible.
 vim.api.nvim_buf_set_name(buf, '/tmp/jev-trace-fixture.lua')
 vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'local function parse() end' })
 vim.bo[buf].modified = false

@@ -17,6 +17,12 @@
 --
 -- Exits nonzero on any failure.
 
+-- Deliberately a fixed path, and the one probe that leaves files behind: the fixtures *are*
+-- the evidence. The table printed below says what `languageId` each of these files got, and a
+-- reader can open them and check it. Nothing here is a repository marker — no `.git`, so the
+-- directory cannot become anybody's workspace root, which is the hazard the harnesses' fixture
+-- roots are about (`verify/fixture.lua`) — and the eleven names are fixed, so a second run
+-- overwrites rather than accumulates.
 local DIR = '/tmp/jev-lang-fixtures'
 
 local failures = {}
