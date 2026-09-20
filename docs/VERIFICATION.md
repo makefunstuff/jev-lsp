@@ -63,6 +63,33 @@ leftover, waits until the port is *actually* free, starts exactly one stub for t
 checks the **pid** as well as `/health` — a process that lost the race for the port exits while
 the port keeps answering, and then the harnesses would be talking to someone else's stub.
 
+**What CI runs, and what a green there covers.** `ci.yml`'s `verification` job runs this table in
+two shapes, `full-table` and `nvim-only`, and the workflow's own header names the omissions: the
+plugin's local-grep **fallback** with no `rg` on `PATH` (the runner installs `ripgrep`, so the
+fallback is not exercised); `quality_eval`, which reports `?` with its reason because CI holds no
+API key; and anything with a GUI, `editors/cursor` included, which the suite reaches at the
+protocol layer only. `verification (nvim-only)` runs **zero cargo commands** and restores the cargo
+cache (`~/.cargo/registry`, `~/.cargo/git`, `target`), so its Lua rows run the **cached**
+`target/release/jev-lsp` rather than a build of the pushed commit, and its green is not evidence
+about that commit's Rust tree. `[INFERENCE]`: a cold cache with no build step would leave that job
+with no binary for the Lua rows at all.
+
+**Every harness owns a private fixture root and marks it as its own repository root.** The server
+writes its session record to `<root>/.git/jev/session.jsonl` (`crates/jev-lsp/src/trace.rs:16`), so
+a harness that names a shared directory as its root creates a repository marker **above** every
+other harness whose fixture lives below it. `verify/settings_race_test.py` and
+`verify/scope_containment_test.py` declared `file:///tmp` with their fixtures straight under
+`/tmp`, which left `/tmp/.git` behind; `verify/nvim_ui_test.lua` is the one Lua row that had no
+`.git` of its own, so the plugin's `vim.fs.root(bufnr, {'.git'})` (`nvim/lua/jev/attach.lua:76`)
+walked up to `/tmp`, the server read rules from `/tmp/.jev/rules` (empty), cached 0 findings, and
+six checks that need an ambient finding failed; `:Jev where` resolves its search root the same way
+(`nvim/lua/jev/context.lua:284`), so it searched all of `/tmp`. Rows are therefore not independent
+of each other's leftovers, and that is how a full table can be red while a narrow run of the same
+script is green: `verification (nvim-only)` skips every Python row, and those two rows are the ones
+that create the marker. Both now use `tempfile.mkdtemp`, which is the convention the rest of the
+table already followed (`plan_test.py`, `queue_test.py`, `outcome_test.py`, `latency`,
+`cli_parity`, `smoke`), and `nvim_ui_test.lua` marks its own fixture root with a `.git/`.
+
 ## 1. Independent LSP client
 
 `verify/lsp_client.py` — a stdio LSP client written against the specification, **sharing
