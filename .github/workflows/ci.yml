@@ -9,7 +9,11 @@ name: ci
 #     below is how it is enforced rather than hoped for.
 #   * the verification table, `verify/run-suite.sh`, under both Neovim versions it names
 #     (0.12.5 and 0.12.1, the pair its own header uses). The suite starts and supervises its own
-#     model stub, so it needs no service.
+#     model stub, so it needs no service. Every row runs a binary built from the checkout under
+#     test: the full run builds one inside the suite (its own `cargo build --release` row), and
+#     the narrow run — which runs no cargo at all — gets one from the build step above the table,
+#     because otherwise its verdict would be about whatever binary the `target` cache happened to
+#     hold, from whatever commit.
 #
 # Not covered, by name:
 #   * the `omp_lsp` row needs the `omp` harness on a runner's PATH. The suite SKIPs that row
@@ -246,6 +250,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ripgrep
           rg --version | head -1
+      # The Lua rows run `target/release/jev-lsp`, and with `NVIM_ONLY=1` the suite runs no cargo
+      # at all — so without this step they would exercise whatever binary the `target` cache
+      # restored: one built from an earlier commit, and nothing at all on a cold cache. A verdict
+      # about a stale binary is exactly the failure this repository's bar is against, so the binary
+      # is built here, from this checkout, with the same command the build-and-test job runs.
+      # Measured on a runner with the cache restored: 1m03s (the cache makes the dependencies free,
+      # not the workspace crates). `RUSTFLAGS: -D warnings` above applies, and a build that fails
+      # is a red step, never a warning.
+      #
+      # Guarded to the narrow row because that is the one place the two rows genuinely differ: the
+      # full run builds the same binary inside the suite, and a second release build there would
+      # be a minute of the same work.
+      - name: the binary the Lua rows run, built from this checkout
+        if: matrix.nvim_only == '1'
+        run: cargo build --release --locked
       - name: the verification table
         run: |
           set -eu
