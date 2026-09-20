@@ -75,11 +75,15 @@ which a headless harness cannot drive.
    is the whole of the reported symptom. Two honest exits, one line each: **change the ids** so
    the server emits its own served command names, or **narrow the rule** to what it means, a
    server id naming a client that is not the one attached. Raising the floor is not an exit.
+   The finding is a decision for the user, not a defect in the rule: the pattern matches the two
+   ids the server emits.
    A gate run reports only the paths it was given — by default the files that differ from
    `origin/main`. A green therefore means those paths were scanned and clean; it says nothing
-   about a file that was not in the set. That scope is why two reports disagreed about these two
-   lines: a run whose changed set did not include `server.rs` never scanned them and read as
-   quiet.
+   about a file that was not in the set. The counts line it prints names how many files were
+   scanned (`rules-gate: N file(s), …`), and a run that prints no counts line and exits `2` checked
+   nothing and is not a pass. That distinction is why two reports disagreed about these two lines:
+   the run that read as quiet exited `2` in a checkout with no decide key, no built binary and no
+   base to diff against, so `server.rs` was never scanned.
    Awaiting the user's call.
 4. **Ten declared settings are in the schema and read by nothing; whether to implement each or
    delete it is open** (2026-09-20). Eight settings and two override fields: `ambient.code_lens`

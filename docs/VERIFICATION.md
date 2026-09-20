@@ -253,10 +253,16 @@ settle it.
 
 A green from the repository's own rules gate (`bash verify/rules-gate.sh`) is scoped the same way:
 a gate run reports only the paths it was given — by default the files that differ from
-`origin/main`. A green therefore means those paths were scanned and clean; it says nothing about a
-file that was not in the set. The gate is a per-change instrument by decision (`STATUS.md`,
-decisions taken), run at commit time and in CI over the changed files and never over the whole
-tree, so a clean report is a claim about the changed set and not about the repository.
+`origin/main`, and `--all` for the explicit whole-tree run. A green therefore means those paths
+were scanned and clean; it says nothing about a file that was not in the set. Whether anything was
+scanned is readable from the counts line, `rules-gate: N file(s), M rule(s) considered, K
+candidate(s), F finding(s), S skipped`, which a clean run and a run with findings both print
+(`--quiet` prints findings only). A run that prints no counts line and exits `2` checked nothing,
+and it is not a pass: `2` is the gate's code for *could not do its job*, reached by an empty
+scope, a missing decide key, an unbuilt binary, or a decide endpoint that answered no path, each
+with its reason printed. The gate is a per-change instrument by decision (`STATUS.md`, decisions
+taken), run at commit time and in CI over the changed files, so a clean report is a claim about
+the changed set and not about the repository.
 
 ## 7. Real endpoints
 
