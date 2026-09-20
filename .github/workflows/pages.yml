@@ -1,0 +1,55 @@
+name: pages
+
+# The documentation site under `site/`, published to GitHub Pages.
+#
+# Why the Actions route rather than a `gh-pages` branch: the artifact that gets published *is* the
+# `site/` directory from `main`, so what is served cannot disagree with what is committed, there is
+# no second branch to keep in step, and no commit history of generated output. It also needs no
+# deploy key or write token beyond the job's own `pages: write`.
+#
+# The branch alternative, if a `gh-pages` branch is ever wanted instead: replace the last three
+# steps with `peaceiris/actions-gh-pages` (or any pusher) publishing `site/` to the `gh-pages`
+# branch, and set Settings → Pages → Build and deployment → Source to *Deploy from a branch*
+# (`gh-pages`, `/`). That route keeps a branch in sync by hand and gives the site a git history of
+# its own; it is the older of the two and it is why the first-party route exists.
+#
+# There is no build step: `site/` is static HTML and CSS, so the artifact is the directory itself.
+# If the site ever gains a build, that belongs in the site's own README and one step here.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deployment at a time, and no cancellation: a half-cancelled deploy can leave the published
+# site at neither the old nor the new revision.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy site/ to Pages
+    runs-on: ubuntu-latest
+    # Scoped to this job: it is the only one that writes anything, and it writes only Pages.
+    permissions:
+      pages: write # publish the artifact
+      id-token: write # the OIDC token `deploy-pages` exchanges for a deployment
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Reads the repository's Pages configuration for this run (the source type, the base path).
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
