@@ -97,7 +97,7 @@ settings = {
   triggers = { diagnostics = 'save',     -- 'save' | 'idle' | 'off'  (idle_ms = 1500)
                rules = { on_save = true, on_idle = true, idle_ms = 1500 } },
   ambient  = { diagnostics = true },
-  rules    = { enabled = true, max_candidates_per_rule = 8, max_files_per_pass = 8 },
+  rules    = { enabled = true, defaults = true, max_candidates_per_rule = 8, max_files_per_pass = 8 },
   noise    = { max_visible_findings = 5 },
   languages = { overrides = { markdown = { verbs = { 'review' } } }, max_file_bytes = 1048576 },
 }
@@ -146,6 +146,10 @@ settings = {
   path matches `languages.ignore`. `triggers.diagnostics = 'save'` governs the *review* pass;
   `triggers.rules.on_save` (default true) governs the rules pass, and `rules.max_files_per_pass`
   bounds how many documents one idle pass covers.
+- `rules.defaults` (default true) runs the set shipped in the binary alongside `.jev/rules/`
+  (PROTOCOL §9): a finding says which set it came from, a file of yours **shadows** the shipped
+  rule with the same `id`, and `false` runs the repository's rules alone. `jev rules init` writes
+  the shipped files out to read and edit (§4, §6).
 - Ten keys are in the schema and are **not read** by this implementation (PROTOCOL §10):
   `ambient.code_lens`, `ambient.inlay_hints`, `auto_apply.fix`, `auto_apply.fixAll`,
   `budget.timeout_ms`, `log`, `triggers.severity_floor`, `noise.suppress_after_dismissals`, and
@@ -178,6 +182,16 @@ An empty or whitespace value is ignored everywhere; an unparseable `JEV_DECIDE_T
 that parses to zero, keeps the value in force rather than lowering the ceiling to nothing.
 
 ## 4. Rules: the `jev.rules/1` document
+
+**A rule set ships in the binary, and it runs where the repository's own have nothing to say.**
+With `rules.defaults` on (the default) a pass runs both sources together, and which source a
+finding came from is on the finding: `rule_source` in the result, and the ` [builtin]` /
+` [repository]` marker `:Jev inspect` prints after each label. The shipped rules are ordinary files
+in the same format, and `jev rules init` writes them into `.jev/rules/` under `prose-…json` /
+`code-…json` so you can read and edit them; a file of yours **shadows** the shipped rule with the
+same `id` rather than running beside it, and `rules.defaults: false` runs the repository's rules
+alone. When the shipped set is what carried a pass, `:Jev inspect` says so in a skip line of its
+own (`default_rules`).
 
 The ambient pass runs the repository's rules, so the first rule you write is what turns this from
 a general reviewer into *yours*. Rules are data, in `.jev/rules/`, read in path order:
@@ -256,8 +270,10 @@ Three things that will otherwise cost you an hour:
   document applies it; `:Jev inspect --force` or `:Jev recompute` apply it now
   (`docs/UX.md` §1.1). There is no watcher on `.jev/rules/`.
 - **A pass that found nothing says so.** `:Jev inspect` lists `unchanged` (git reports the file
-  untouched), `no_rules` (nothing in `.jev/rules/` claims this file, or none loaded), and any
-  rule file that failed to load with its reason — so "no finding" never looks like "nothing ran".
+  untouched), `default_rules` (the shipped set is carrying this pass because `.jev/rules/` holds
+  nothing of this repository's own), `no_rules` (no rule from either source claims this file, or
+  the pass has nothing to run at all), and any rule file that failed to load with its reason — so
+  "no finding" never looks like "nothing ran".
 - **A broken rule file does not take the pass down.** A file that cannot be read or parsed, or
   that carries another `schema`, is skipped with a reason and the rest still load — a typo shows
   up in the skips rather than as silence.
@@ -297,6 +313,7 @@ jev review src/lib.rs                  # findings, JSON
 jev action --verb harden src/lib.rs:40-80
 jev plan --goal "make retry cancellable" src/lib.rs
 jev inspect src/lib.rs [--force]       # the repository's rules, with the counts and skips
+jev rules init [--dir <dir>] [--force] # write the shipped rule set out to read and edit
 jev status                             # budget, queue and cache
 ```
 
@@ -310,6 +327,10 @@ jev status                             # budget, queue and cache
 - `jev inspect` prints the same body the LSP command `jev.inspect` returns: `findings`,
   `considered`, `candidates` and `skipped`. It is the same code the ambient pass runs, which is
   the CLI and the server share the rules code, so they cannot disagree about a rule.
+- `jev rules init` materialises the shipped set (PROTOCOL §11) into `.jev/rules/`: one file per
+  shipped file, named by its group (`prose-lists-end-in-etc.json`), idempotent and
+  non-clobbering. A file already there that differs is **refused by name** rather than
+  overwritten; `--force` replaces it, and `--dir` writes somewhere else.
 - **The decide tier's key variable is nameable from the shell**: `api_key_env` defaults to
   `TYPESAFE_API_KEY`, and `JEV_DECIDE_API_KEY_ENV` points it at another variable
   (`JEV_DECIDE_API_KEY_ENV=OPENCODE_API_KEY OPENCODE_API_KEY=… jev inspect …`). It takes a *name*,
@@ -333,7 +354,7 @@ It shares `jev-core` with the server and no state with it. Useful for scripts, a
 | `jev: no server attached to this buffer` | No client on this buffer: it is not a file (scratch, terminal, help), or `setup()` never ran | `:checkhealth jev`. Open a real file. `:Jev ask` from a scratch buffer still works while a client is attached to any other buffer — the plugin falls back to it — but the context is the file the server holds, never the scratch buffer |
 | `warn no jev client attached (open a file; …)` in `:checkhealth jev` | Same thing, from the health check | Open a file; the attach pass covers `BufReadPost`, `BufNewFile`, `BufWinEnter` |
 | No sign ever appears | Nothing was analysed | Did you `:w`? (`triggers.diagnostics = 'save'`.) Then `:Jev status` for `enabled` and `documents`, then `:Jev log` for the analysis line and the endpoint in force |
-| No sign ever appears, and `:Jev log` says the pass had nothing to run | The ambient pass is the repository's rules, and this repository has none that claim this file | `:Jev inspect` lists the skips (`no_rules`, `unchanged`, a rule file that failed to load); write one as in §4, or set `rules.enabled = false` and use `:Jev review` |
+| No sign ever appears, and `:Jev log` says the pass had nothing to run | No rule from either source claims this file, or the shipped set is off (`rules.defaults = false`) | `:Jev inspect` lists the skips (`default_rules`, `no_rules`, `unchanged`, a rule file that failed to load); write one as in §4, or set `rules.enabled = false` and use `:Jev review` |
 | You edited a rule and the findings on screen did not change | The display slot is keyed by content, language and the cap, not by rules, and nothing watches `.jev/rules/` | `:Jev inspect --force` for this buffer, or `:Jev recompute` for every open document — or save (§4, `docs/UX.md` §1.1) |
 | `:Jev inspect` reports `unchanged` and no findings | git reports the file untouched since HEAD, so the pass skipped it | That is the point of the check; `--force` inspects it anyway |
 | The ambient pass fails with `model_error` / `contract_error` | The *decision* tier did not answer, or answered something unreadable | `:Jev log`, then check `models.decide` and `TYPESAFE_API_KEY` (`JEV_DECIDE_BASE_URL` does not come from `JEV_BASE_URL`) |
