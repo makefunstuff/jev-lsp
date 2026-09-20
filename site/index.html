@@ -12,13 +12,15 @@
 
 <header class="site-head">
   <div class="container">
-    <a class="wordmark" href="./">jev-lsp <span>· proof of concept</span></a>
+    <a class="wordmark" href="./">jev-lsp <span class="wip">WIP</span></a>
     <nav class="toc" aria-label="Sections">
       <ul>
-        <li><a href="#what">What</a></li>
-        <li><a href="#how">How</a></li>
-        <li><a href="#why">Why</a></li>
+        <li><a href="#see">See</a></li>
+        <li><a href="#not-chat">Not chat</a></li>
+        <li><a href="#loop">Loop</a></li>
+        <li><a href="#cost">Cost</a></li>
         <li><a href="#clients">Clients</a></li>
+        <li><a href="#start">Start</a></li>
         <li><a href="https://github.com/makefunstuff/jev-lsp">GitHub</a></li>
       </ul>
     </nav>
@@ -27,87 +29,208 @@
 
 <main id="main">
 
-<section class="hero">
-  <div class="container">
-    <div class="prose">
-      <p class="eyebrow">Language server · decision model</p>
+<section class="hero" id="hero">
+  <div class="container hero-grid">
+    <div class="hero-copy">
+      <p class="eyebrow">Language server · classifier</p>
       <h1>Steer code with rules, not with token maxxing.</h1>
-      <p><strong>Jev is a classifier, not a chat model.</strong>
-      A rule asks one typed question about one line. Jev answers with a value and a probability — never prose.</p>
-      <p><strong>jev-lsp</strong> runs those rules while you edit (or while a harness writes),
-      and reports through normal editor surfaces: diagnostics, code actions, code lens.</p>
+      <p class="lead"><strong>Jev is a classifier, not a chat model:</strong> one typed question about one line → a value and a probability, never prose. <strong>jev-lsp</strong> runs repo rules as ordinary LSP diagnostics, code actions, and code lens.</p>
       <p class="hero-actions">
         <a class="btn" href="https://github.com/makefunstuff/jev-lsp">GitHub</a>
-        <a class="btn btn-quiet" href="https://github.com/makefunstuff/jev-lsp#readme">README</a>
+        <a class="btn btn-quiet" href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/TUTORIAL.md">Tutorial</a>
       </p>
-      <p class="note">Heavily WIP. Interface and config may change; nothing here should be relied on yet.</p>
+    </div>
+    <div class="panel hero-panel" aria-label="Example diagnostic">
+      <div class="panel-head">
+        <span class="name">diagnostic · save</span>
+        <span>server.rs:412</span>
+      </div>
+      <pre><span class="dim"> 410 │ </span><span class="fill">fn handle_request(msg: Request) {</span>
+<span class="dim"> 411 │ </span><span class="fill">    let body = msg.payload();</span>
+<span class="row"> 412 │     let data = body.unwrap();  // p=0.91 · fail</span>
+<span class="dim"> 413 │ </span><span class="fill">    process(data);</span>
+<span class="dim"> 414 │ </span><span class="fill">}</span></pre>
     </div>
   </div>
 </section>
 
-<section id="what" class="band">
-  <div class="container prose">
-    <h2>What Jev is</h2>
-    <ul class="plain">
-      <li><strong>One question → one answer.</strong> Not a review essay. A pass/fail (or typed value) with a probability floor.</li>
-      <li><strong>Rules live in the repo.</strong> Your words + a pattern that names candidate lines, versioned like code.</li>
-      <li><strong>Semi-deterministic.</strong> Pattern is exact; judgement clears the rule’s own floor before anything publishes.</li>
-    </ul>
-  </div>
-</section>
-
-<section id="how" class="band">
+<section id="see" class="band">
   <div class="container">
     <div class="prose">
-      <h2>How the loop works</h2>
-      <ol class="steps">
-        <li><strong>Spec.</strong> Write what the code has to do.</li>
-        <li><strong>Rules.</strong> Turn that into <code>.jev/rules/*.json</code>.</li>
-        <li><strong>Steer.</strong> jev-lsp applies them on save — to you or to a harness — on the line.</li>
-        <li><strong>Stay on track.</strong> Findings are ordinary diagnostics a client already knows how to read.</li>
-      </ol>
+      <h2>Findings on the line — same surfaces your client already has</h2>
+      <p>On save, matching lines become diagnostics a harness or editor already understands. No custom <code>jev/…</code> methods.</p>
     </div>
-    <figure class="shot">
-      <img src="./assets/jev-steering.svg" alt="Harness write, then a jev finding on the generated line steering the fix" width="960" height="540" loading="lazy">
-      <figcaption>A finding on the generated line. The harness reads it like any other diagnostic.</figcaption>
+    <figure class="machine-well">
+      <div class="panel panel-wide">
+        <div class="panel-head">
+          <span class="name">steering · harness write</span>
+          <span>OMP · ordinary diagnostic</span>
+        </div>
+        <img src="./assets/jev-steering.svg" alt="Harness write, then a jev finding on the generated line steering the fix" width="960" height="540" loading="lazy">
+      </div>
+      <figcaption>Harness write → jev finding on the generated line → fix. Ordinary diagnostic.</figcaption>
     </figure>
   </div>
 </section>
 
-<section id="why" class="band">
-  <div class="container prose">
-    <h2>Why local / cheap models work here</h2>
-    <p>Well-defined rules carry the project conventions. The model does not re-read your whole style guide every turn — it answers about one candidate line.</p>
-    <p>Measured on this project (rules pass vs chat review of the same file): the decide pass is roughly an order of magnitude cheaper, and a save with no matching pattern makes <em>no</em> model call at all.</p>
-    <p>That is the point of the PoC: <strong>accuracy from steering, not from burning tokens.</strong></p>
+<section id="not-chat" class="band">
+  <div class="container">
+    <div class="prose">
+      <h2>Classifier, not chat</h2>
+    </div>
+    <div class="compare">
+      <div class="compare-card compare-chat">
+        <p class="compare-label">prose · whole file · every turn</p>
+        <p class="chat-blob">Here are several thoughts about this file… consider error handling on line 412, also naming, also whether the module boundary is right, also…</p>
+      </div>
+      <div class="panel compare-card">
+        <div class="panel-head">
+          <span class="name">Jev rule answer</span>
+          <span>typed · one line</span>
+        </div>
+        <pre>{
+  <span class="fill">"value"</span>: <span class="amb">"fail"</span>,
+  <span class="fill">"p"</span>: 0.91
+}</pre>
+        <p class="compare-foot">typed value · one line · clears rule floor</p>
+      </div>
+    </div>
+    <ul class="plain prose bullets">
+      <li><strong>One question → one answer</strong> — pass/fail or typed value + probability floor.</li>
+      <li><strong>Rules in the repo</strong> — <code>.jev/rules/*.json</code>, versioned like code.</li>
+      <li><strong>Semi-deterministic</strong> — pattern exact; judgement must clear the floor before publish.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="loop" class="band">
+  <div class="container">
+    <div class="prose">
+      <h2>The loop</h2>
+    </div>
+    <div class="loop-grid">
+      <ol class="steps">
+        <li><strong>Spec</strong> — what the code must do.</li>
+        <li><strong>Rules</strong> — <code>.jev/rules/*.json</code> (words + pattern for candidate lines).</li>
+        <li><strong>Steer</strong> — jev-lsp on save, human or harness.</li>
+        <li><strong>Stay on track</strong> — ordinary diagnostics.</li>
+      </ol>
+      <div class="panel">
+        <div class="panel-head">
+          <span class="name">.jev/rules/no-unwrap.json</span>
+          <span>minimal</span>
+        </div>
+        <pre>{
+  <span class="dim">"id"</span>: <span class="fill">"no-unwrap"</span>,
+  <span class="dim">"question"</span>: <span class="fill">"Does this line unwrap a Result/Option unsafely?"</span>,
+  <span class="dim">"pattern"</span>: <span class="fill">"\\.unwrap\\(\\)"</span>,
+  <span class="dim">"floor"</span>: <span class="fill">0.8</span>
+}</pre>
+      </div>
+    </div>
+    <p class="prose muted-line">Full schema → <a href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/GUIDE.md">docs/GUIDE.md</a>.</p>
+  </div>
+</section>
+
+<section id="cost" class="band">
+  <div class="container">
+    <div class="prose">
+      <h2>Why local / cheap models work here</h2>
+      <p>Rules carry conventions; the model answers about one candidate line. No matching pattern → <strong>no model call</strong>.</p>
+    </div>
+    <div class="table-wrap">
+      <table class="cost">
+        <caption>Measured 2026-09-20 on this repo: decide <code>jev-1.13</code> vs chat review <code>gemini-2.5-flash-lite</code>. PoC: accuracy from steering, not token maxxing.</caption>
+        <thead>
+          <tr>
+            <th scope="col"></th>
+            <th scope="col">rules pass</th>
+            <th scope="col">chat review (same file)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="mark">
+            <th scope="row"><code>server.rs</code> ~2.6k lines</th>
+            <td>~5.3k in / 345 out · 2 findings · <strong>~$0.00022</strong></td>
+            <td>~30.5k in / 9 out · 0 findings · <strong>~$0.00306</strong></td>
+          </tr>
+          <tr>
+            <th scope="row">30 Rust docs</th>
+            <td><strong>~$0.0034</strong> · 20 calls</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="pull prose">Accuracy from steering, not from burning tokens.</p>
   </div>
 </section>
 
 <section id="clients" class="band">
   <div class="container">
     <div class="prose">
-      <h2>Clients</h2>
-      <p>Standard LSP only — no custom <code>jev/…</code> methods. Neovim is the primary client; anything that can start a language server can use it (harnesses included). Cursor has an extension under <code>editors/cursor/</code>.</p>
+      <h2>Standard LSP — Neovim first</h2>
+      <p>No custom methods. Primary client Neovim (<code>nvim/</code> plugin). Anything that starts a language server works — harnesses included. Cursor: <code>editors/cursor/</code>.</p>
+      <p class="chips" aria-label="LSP surfaces">
+        <span class="chip">diagnostics</span>
+        <span class="chip">code actions</span>
+        <span class="chip">code lens</span>
+      </p>
     </div>
     <div class="shot-grid">
       <figure class="shot">
-        <img src="./assets/jev-neovim.webp" alt="Neovim with jev annotations beside the code" width="640" height="400" loading="lazy">
-        <figcaption>Neovim</figcaption>
+        <div class="panel panel-shot">
+          <div class="panel-head">
+            <span class="name">Neovim</span>
+            <span>primary client</span>
+          </div>
+          <img src="./assets/jev-neovim.webp" alt="Neovim with jev annotations beside the code, next to clangd" width="640" height="400" loading="lazy">
+        </div>
+        <figcaption>Annotations beside the code, next to clangd (or your other LS).</figcaption>
       </figure>
       <figure class="shot">
-        <img src="./assets/jev-cursor.webp" alt="Cursor showing a jev finding in hover" width="640" height="400" loading="lazy">
-        <figcaption>Cursor</figcaption>
+        <div class="panel panel-shot">
+          <div class="panel-head">
+            <span class="name">Cursor</span>
+            <span>editors/cursor/</span>
+          </div>
+          <img src="./assets/jev-cursor.webp" alt="Cursor showing a jev finding in hover with explain as code lens" width="640" height="400" loading="lazy">
+        </div>
+        <figcaption>Finding in hover / squiggle; explain as code lens.</figcaption>
       </figure>
+    </div>
+    <div class="panel config-panel">
+      <div class="panel-head">
+        <span class="name">init.lua</span>
+        <span>after symlink</span>
+      </div>
+      <pre>require(<span class="fill">'jev'</span>).setup({})</pre>
     </div>
   </div>
 </section>
 
-<section class="band band-end">
-  <div class="container prose">
-    <h2>Start</h2>
-    <p>Install notes and the first rule live in the repository. This page is the short case for using it.</p>
+<section id="start" class="band band-end">
+  <div class="container">
+    <div class="prose">
+      <h2>Start</h2>
+      <p class="muted-line">Rust ≥1.75; decision-tier endpoint + key (hosted Jev default).</p>
+    </div>
+    <div class="panel panel-install">
+      <div class="panel-head">
+        <span class="name">install</span>
+        <span>cargo · locked</span>
+      </div>
+      <pre>cargo install --git https://github.com/makefunstuff/jev-lsp --locked jev-lsp jev</pre>
+    </div>
+    <ol class="steps next-steps prose">
+      <li>Plugin: <code>ln -s /path/to/jev-lsp/nvim ~/.local/share/nvim/site/pack/jev/start/jev</code> then <code>require('jev').setup({})</code></li>
+      <li>Export <code>TYPESAFE_API_KEY</code> (or local decide — <a href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/MODEL.md">MODEL.md</a>).</li>
+      <li>Add <code>.jev/rules/*.json</code>, open a file, save → finding or <code>no_rules</code>.</li>
+    </ol>
     <p class="hero-actions">
-      <a class="btn" href="https://github.com/makefunstuff/jev-lsp">github.com/makefunstuff/jev-lsp</a>
+      <a class="btn" href="https://github.com/makefunstuff/jev-lsp">GitHub</a>
+      <a class="btn btn-quiet" href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/TUTORIAL.md">Tutorial</a>
+      <a class="btn btn-quiet" href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/GUIDE.md">Guide</a>
     </p>
   </div>
 </section>
@@ -116,7 +239,7 @@
 
 <footer class="site-foot">
   <div class="container">
-    <p>jev-lsp · MIT · <a href="https://github.com/makefunstuff/jev-lsp">source</a></p>
+    <p>jev-lsp · MIT · proof of concept — interface may change · <a href="https://github.com/makefunstuff/jev-lsp">source</a></p>
   </div>
 </footer>
 
