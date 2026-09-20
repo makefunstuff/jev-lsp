@@ -40,8 +40,13 @@ Runs, in order, and asserts at each step (docs/VERIFICATION.md §1):
      served `jev.plan` with unusable arguments answers `bad_arguments` (§6.1) — and no
      `textDocument/publishDiagnostics` arrives for a document the server has not changed
      (§9).
+ 10. The other three §3.5 paths, each in a server of its own (see the Step 10 note below):
+     a chat tier pointing at an endpoint nothing answers on, a budget of zero calls a
+     minute, and a cancellation delivered mid-model-call. Each must produce exactly one
+     `begin` and exactly one `end` under the token this client supplied, its own documented
+     failure, and a server that answers the next command afterwards.
 
-Two readings the frozen documents leave open, settled here and recorded so a reviewer can
+Three readings the frozen documents leave open, settled here and recorded so a reviewer can
 challenge them:
 
   * Step 6 direction. `workspace/applyEdit` is a server->client request (PROTOCOL §3.4);
@@ -64,6 +69,16 @@ challenge them:
     token form is what is driven here. `jev.cancel` is the §6 command for work the plugin
     did not issue; driving a cancel against a request we are concurrently awaiting would
     test `$/cancelRequest`, which docs/VERIFICATION.md does not ask this client for.
+  * Step 10's servers, and the one path it does not drive. A path whose failure *is* the
+    configuration (an unreachable tier, a budget of zero) cannot be driven through the
+    session above, which is configured once against the suite's stub; so each of the three
+    starts its own `jev-lsp` in its own temp workspace, and each answers
+    `workspace/configuration` with exactly the settings that path needs. The **panic** path
+    is deliberately not here: the only way to panic a command over the wire is a command the
+    product does not have, and a test-only command behind an environment variable is still a
+    shipped way to crash a command. It stays pinned by the unit test
+    `server::progress_tests::a_panic_between_begin_and_end_still_sends_its_end` in
+    `crates/jev-lsp/src/server.rs`, and PROTOCOL §3.5 names the gap rather than hiding it.
 
 Statuses, printed per assertion:
   ok     the assertion held
@@ -79,9 +94,10 @@ Exit codes: 0 every assertion passed; 1 at least one FAIL; 2 harness error (no s
 broken transport, bad usage).
 
 Standard library only, on purpose. The in-process stub at the bottom exists solely for
-`--selftest`, which proves the client — framing, request/response correlation, all nine
-steps, and that nine injected contract defects each turn the harness red — before the Rust
-server exists.
+`--selftest`, which proves the client — framing, request/response correlation, the nine steps
+a stub can serve, and that nine injected contract defects each turn the harness red — before
+the Rust server exists. Step 10 needs servers configured three different ways, so it is not
+reachable from the in-process stub; it reports that rather than pretending to have run.
 """
 
 import argparse
@@ -89,12 +105,14 @@ import json
 import os
 import pathlib
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import traceback
+import urllib.request
 from urllib.parse import unquote, urlparse
 
 # --------------------------------------------------------------------------- constants
@@ -318,6 +336,9 @@ class Session(object):
         self.workspace_folders = workspace_folders or []
         self.save_include_text = False  # set from the server's textDocumentSync.save
         self.stub_model_url = None
+        self.settings = None        # step 10: the exact `jev` section this session answers
+                                    # `workspace/configuration` with, when a path under test
+                                    # needs a server configured differently from the stub
         self.stub = None            # in-process stub, for --selftest teardown only
         self._process = process     # subprocess, when the client spawned a real server
         self._last_response_t = None
@@ -442,6 +463,10 @@ class Session(object):
         against: the repository's own `.jev/rules/*.json` are a separate surface with their own
         claims (`verify/rules_test.py`), and this client checks that a pull carries *a*
         conclusion, not which pass wrote it."""
+        if self.settings is not None:
+            # Step 10 only: a path whose failure is the configuration needs a server whose
+            # configuration is exactly this. Nothing else sets it.
+            return self.settings
         if not self.stub_model_url:
             return {"rules": {"enabled": False}}
         tier = {"base_url": self.stub_model_url, "model": "stub", "temperature": 0.0,
@@ -463,9 +488,13 @@ class Session(object):
     def notify(self, method, params=None):
         self._write(_rpc_message(method, params))
 
-    def request(self, method, params=None, timeout=None):
-        """Send a request; return its result. Raises ServerError / RequestTimeout /
-        TransportError. Responses are matched by id, never by arrival order."""
+    def send_request(self, method, params=None):
+        """Send a request and return `(id, entry)` without waiting for its answer.
+
+        The ordinary path is `request`. This exists for the one step that needs a request to be
+        in flight while it does something else: step 10 cancels `jev.explain` mid-model-call,
+        and `$/cancelRequest` for a request that has already been answered cancels nothing.
+        """
         if self._fatal is not None:
             raise TransportError("transport is dead: %s" % self._fatal)
         if isinstance(params, dict) and params.get("workDoneToken") is not None:
@@ -482,7 +511,10 @@ class Session(object):
             with self._cv:
                 self._pending.pop(rid, None)
             raise
-        budget = self.timeout if timeout is None else timeout
+        return rid, entry
+
+    def await_response(self, rid, entry, budget):
+        """Wait for a request sent with `send_request`; return `(result, error)`."""
         deadline = time.monotonic() + budget
         while True:
             remaining = deadline - time.monotonic()
@@ -490,16 +522,25 @@ class Session(object):
                 with self._cv:
                     self._pending.pop(rid, None)
                 raise RequestTimeout("no response to %s (id %d) within %.2fs"
-                                     % (method, rid, budget))
+                                     % (entry["method"], rid, budget))
             if entry["event"].wait(min(remaining, 0.25)):
                 break
             if self._fatal is not None and not entry["done"]:
                 with self._cv:
                     self._pending.pop(rid, None)
-                raise TransportError("transport died waiting for %s: %s" % (method, self._fatal))
-        if entry["error"] is not None:
-            raise entry["error"]
-        return entry["result"]
+                raise TransportError("transport died waiting for %s: %s"
+                                     % (entry["method"], self._fatal))
+        return entry["result"], entry["error"]
+
+    def request(self, method, params=None, timeout=None):
+        """Send a request; return its result. Raises ServerError / RequestTimeout /
+        TransportError. Responses are matched by id, never by arrival order."""
+        rid, entry = self.send_request(method, params)
+        result, error = self.await_response(
+            rid, entry, self.timeout if timeout is None else timeout)
+        if error is not None:
+            raise error
+        return result
 
     # -- observation -------------------------------------------------------
 
@@ -1095,11 +1136,305 @@ def write_fixtures(directory):
     return py_path, txt_path
 
 
+# ------------------------------------------------------------- step 10: the other §3.5 paths
+#
+# §3.5's second rule — "exactly one `end` is sent on every path the server survives" — names
+# three paths that reach a command's end without an answer, and one that never reaches it at
+# all. Step 9 drives the path that *does* have an answer. These three cannot be driven through
+# that session, because each needs a configuration the others must not have: a chat tier
+# pointing at nothing, a budget of zero calls a minute, and a model that stalls long enough to
+# be cancelled. Each therefore gets a server of its own, in its own temp workspace, and all
+# three are asked the same questions: exactly one `begin`, exactly one `end`, and a server that
+# is still serving afterwards.
+#
+# The panic path is pinned by the unit test
+# `server::progress_tests::a_panic_between_begin_and_end_still_sends_its_end` in
+# `crates/jev-lsp/src/server.rs`, not here: the only way to panic a command over the wire is a
+# command the product does not have, and a test-only command behind an environment variable is
+# a production surface — a shipped way to crash a command.
+
+PATH_TOKEN = "jev:verify-path-1"
+PATH_FIXTURE = """\
+def load(path):
+    return open(path)
+"""
+# Nothing is listening on port 9 here. The chat tier has to be pointed somewhere, and the one
+# place it must not be pointed is at something that answers: the failure under test is the
+# model call's, not an answer's.
+PATH_DEAD_ENDPOINT = "http://127.0.0.1:9/v1"
+PATH_STUB_DELAY_MS = 4000     # the stall a cancellation has to land inside
+PATH_CANCEL_END_S = 2.0       # far under that stall: an `end` arriving inside this window
+                              # cannot be the model call finishing, so it can only be the
+                              # cancellation closing the token
+
+
+def _free_port():
+    """Bind :0 and keep what the kernel gives, so this harness cannot collide with the suite's
+    own stub on 8099 or with a sibling run."""
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+def _start_stalled_stub():
+    """A `verify/stub_model.py` of our own that stalls every answer, for the cancellation path.
+
+    Not the suite's stub: a four-second stall in the process every other harness shares would
+    slow all of them down for the sake of one step.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    port = _free_port()
+    process = subprocess.Popen(
+        [sys.executable, os.path.join(here, "stub_model.py")],
+        env=dict(os.environ, STUB_PORT=str(port), STUB_DELAY_MS=str(PATH_STUB_DELAY_MS)),
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise HarnessError("the stalled stub exited before answering /health")
+        try:
+            urllib.request.urlopen("http://127.0.0.1:%d/health" % port, timeout=0.5).close()
+            return process, port
+        except Exception:                          # noqa: BLE001 — not up yet
+            time.sleep(0.05)
+    process.kill()
+    raise HarnessError("the stalled stub never became ready on port %d" % port)
+
+
+def _dead_tier_env():
+    """Every tier pointed at a port nothing answers on.
+
+    The environment override is applied after the client's settings are merged (PROTOCOL §10,
+    `AppState::merge_config`), so this wins over whatever the suite configured for it.
+    """
+    return {"JEV_BASE_URL": PATH_DEAD_ENDPOINT, "JEV_MODEL": "path-model",
+            "JEV_REVIEW_MODEL": "path-model",
+            "JEV_DECIDE_BASE_URL": PATH_DEAD_ENDPOINT, "JEV_DECIDE_MODEL": "path-model"}
+
+
+def _stub_tier_env(port):
+    """Every tier pointed at the stalled stub this step started."""
+    url = "http://127.0.0.1:%d/v1" % port
+    return {"JEV_BASE_URL": url, "JEV_MODEL": "stub-model", "JEV_REVIEW_MODEL": "stub-model",
+            "JEV_DECIDE_BASE_URL": url, "JEV_DECIDE_MODEL": "stub-model"}
+
+
+def _path_settings(**extra):
+    """What a step-10 session answers `workspace/configuration` with: `rules.enabled` off, so
+    the ambient pass is the chat review, plus whatever the path under test needs."""
+    settings = {"enabled": True, "rules": {"enabled": False}}
+    settings.update(extra)
+    return settings
+
+
+def _value_detail(value):
+    """A response, an envelope or an exception, as text for a detail line."""
+    return _describe(str(value) if isinstance(value, Exception) else value)[:170]
+
+
+def _envelope_of(out):
+    """The `{ok, error}` envelope of a command response, as `(envelope, error_body)`."""
+    envelope = out["result"] if isinstance(out["result"], dict) else {}
+    body = envelope.get("error") if isinstance(envelope.get("error"), dict) else {}
+    return envelope, body
+
+
+def _drive_path(server, timeout, env_extra, settings, prefix, cancel=False):
+    """Run one §3.5 failure path against a server of its own; return everything it produced.
+
+    `jev.explain` is the command: it is the one that streams under the token the client
+    supplied and reaches a model call, so each of these paths has a `begin` behind it and a
+    real chance to leave the token open.
+    """
+    workspace = tempfile.mkdtemp(prefix=prefix)
+    os.makedirs(os.path.join(workspace, ".git"), exist_ok=True)
+    path = os.path.join(workspace, "path.py")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(PATH_FIXTURE)
+    env = dict(os.environ)
+    env.update(env_extra)
+    process = subprocess.Popen([server], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, cwd=workspace, env=env)
+    session = Session(process.stdout, process.stdin, timeout=timeout,
+                      name=os.path.basename(server), process=process)
+    session.settings = settings
+    out = {"kinds": [], "result": None, "error": None, "response_at": None, "end_at": None,
+           "end_delay": None, "began": None, "cancelled_at": None, "alive": False,
+           "followup": None, "log": []}
+    try:
+        session.request("initialize", initialize_params(workspace), timeout=timeout)
+        session.notify("initialized", {})
+        uri = session.did_open(path, "python")
+        params = {"command": "jev.explain", "arguments": [{"uri": uri, "line": 0}],
+                  "workDoneToken": PATH_TOKEN}
+        if cancel:
+            rid, entry = session.send_request("workspace/executeCommand", params)
+            # `begin` is sent before the model call, so waiting for it is what makes the cancel
+            # land *inside* a call — an ordering, not a sleep.
+            out["began"] = session.wait_for(
+                lambda: "begin" in session.progress_kinds(PATH_TOKEN),
+                min(timeout, PROGRESS_WAIT_S), "`begin` before the cancellation")
+            out["cancelled_at"] = time.monotonic()
+            session.notify("$/cancelRequest", {"id": rid})
+            out["result"], out["error"] = session.await_response(rid, entry, timeout)
+        else:
+            try:
+                out["result"] = session.request("workspace/executeCommand", params,
+                                                timeout=timeout)
+            except ServerError as exc:
+                out["error"] = exc
+            out["response_at"] = session.last_response_time()
+        # Bounded: a token the server never closes has to be a FAIL here, not a hang.
+        session.wait_for(lambda: "end" in session.progress_kinds(PATH_TOKEN),
+                         min(timeout, PROGRESS_WAIT_S), "the token's `end`")
+        out["kinds"] = session.progress_kinds(PATH_TOKEN)
+        out["end_at"] = next((item["t"] for item in reversed(session.progress(PATH_TOKEN))
+                              if (item["value"] or {}).get("kind") == "end"), None)
+        if out["cancelled_at"] is not None and out["end_at"] is not None:
+            out["end_delay"] = out["end_at"] - out["cancelled_at"]
+        out["alive"] = process.poll() is None
+        if out["alive"]:
+            # The server survived the path it just took: a later command is answered.
+            try:
+                out["followup"] = session.request(
+                    "workspace/executeCommand", {"command": "jev.status", "arguments": [{}]},
+                    timeout=timeout)
+            except (ServerError, RequestTimeout, TransportError) as exc:
+                out["followup_error"] = exc
+        out["log"] = _server_log_lines(session)
+    finally:
+        session.shutdown()
+        session.close()
+        shutil.rmtree(workspace, ignore_errors=True)
+    return out
+
+
+def _check_path_tokens(report, label, out):
+    """The §3.5 shape: one `begin`, one `end`, and nothing under the token after that."""
+    kinds = out["kinds"]
+    report.check(10, "%s: exactly one `begin` and one `end` arrive under the supplied "
+                     "workDoneToken, in that order (§3.5)" % label,
+                 kinds.count("begin") == 1 and kinds.count("end") == 1
+                 and kinds[0] == "begin" and kinds[-1] == "end",
+                 "kinds=%s" % _describe(kinds))
+
+
+def _check_path_survives(report, label, out):
+    """The server is still serving: the path was survived, not merely outlived."""
+    report.check(10, "%s: the server survives the path and answers the next command "
+                     "(jev.status)" % label,
+                 out["alive"] and isinstance(out["followup"], dict)
+                 and out["followup"].get("ok") is True,
+                 "alive=%s, followup=%s, server log=%s"
+                 % (out["alive"],
+                    _value_detail(out["followup"] if out["followup"] is not None
+                                  else out.get("followup_error")),
+                    _describe(out["log"])[:160]))
+
+
+def _check_path_closed_before_response(report, label, out):
+    """§3.5 path 1: the token "is valid only until the response to that request is sent", so an
+    `end` that arrives after the response is a use of a token that is no longer ours."""
+    report.check(10, "%s: the `end` arrives before the response — the token is valid only "
+                     "until then (§3.5)" % label,
+                 out["end_at"] is not None and out["response_at"] is not None
+                 and out["end_at"] <= out["response_at"],
+                 "end at %s, response at %s" % (out["end_at"], out["response_at"]))
+
+
+def _path_model_error(server, timeout, report):
+    label = "model error"
+    out = _drive_path(server, timeout, env_extra=_dead_tier_env(),
+                      settings=_path_settings(), prefix="jev-path-model-")
+    _check_path_tokens(report, label, out)
+    envelope, body = _envelope_of(out)
+    report.check(10, "%s: the answer is a Result envelope — {ok: false, error: {code: "
+                     "\"model_error\"}} (§3.5, §6.1)" % label,
+                 envelope.get("ok") is False and body.get("code") == "model_error",
+                 "response=%s" % _value_detail(out["result"] if out["result"] is not None
+                                               else out["error"]))
+    _check_path_closed_before_response(report, label, out)
+    _check_path_survives(report, label, out)
+
+
+def _path_budget(server, timeout, report):
+    label = "budget refusal"
+    # `max_calls_per_min: 0` refuses every call before one is made (`budget.rs`:
+    # `minute.len() >= max_calls_per_min`, and zero satisfies it). Deliberately not
+    # `max_tokens_per_session: 0`: that cap is guarded with `> 0`, so zero there means
+    # *unlimited* and a harness built on it would pass for the wrong reason.
+    out = _drive_path(server, timeout, env_extra=_dead_tier_env(),
+                      settings=_path_settings(budget={"max_calls_per_min": 0}),
+                      prefix="jev-path-budget-")
+    _check_path_tokens(report, label, out)
+    envelope, body = _envelope_of(out)
+    report.check(10, "%s: the answer is a Result envelope — {ok: false, error: {code: "
+                     "\"over_budget\"}} (§3.5, §6.1)" % label,
+                 envelope.get("ok") is False and body.get("code") == "over_budget",
+                 "response=%s" % _value_detail(out["result"] if out["result"] is not None
+                                               else out["error"]))
+    _check_path_closed_before_response(report, label, out)
+    _check_path_survives(report, label, out)
+
+
+def _path_cancellation(server, timeout, report):
+    label = "cancellation"
+    stub, port = _start_stalled_stub()
+    try:
+        out = _drive_path(server, timeout, env_extra=_stub_tier_env(port),
+                          settings=_path_settings(), prefix="jev-path-cancel-", cancel=True)
+    finally:
+        stub.terminate()
+        try:
+            stub.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            stub.kill()
+    _check_path_tokens(report, label, out)
+    report.check(10, "%s: the client sees -32800 Canceled for the request it cancelled "
+                     "(§3.5)" % label,
+                 isinstance(out["error"], ServerError) and out["error"].code == -32800
+                 and out["result"] is None,
+                 "result=%s, error=%s" % (_value_detail(out["result"]),
+                                          _value_detail(out["error"])))
+    # §3.5 names cancellation as a path whose `end` comes from the token guard being dropped by
+    # the abort — not from the work finishing. The model is stalled for twice this window, so an
+    # `end` inside it cannot be anything else.
+    report.check(10, "%s: the `end` is the cancellation's, not the work's — it arrives within "
+                     "%.1fs of the cancel, while the model call stalls for %.1fs (§3.5)"
+                     % (label, PATH_CANCEL_END_S, PATH_STUB_DELAY_MS / 1000.0),
+                 out["end_delay"] is not None and out["end_delay"] <= PATH_CANCEL_END_S,
+                 "`begin` seen before the cancel=%s, end %.3fs after it, kinds=%s"
+                 % (out["began"], out["end_delay"] if out["end_delay"] is not None else -1.0,
+                    _describe(out["kinds"])))
+    _check_path_survives(report, label, out)
+
+
+def run_failure_paths(server, timeout, report):
+    """Step 10 (§3.5): the paths that reach a command's end without an answer, and the one that
+    does not reach it at all."""
+    report.step(10, "the three reachable §3.5 paths — one begin, one end, and a live server")
+    if not server:
+        report.info(10, "not driven: each of these needs a server configured differently, and "
+                        "the in-process stub serves one configuration — the panic path is "
+                        "pinned by the unit test in crates/jev-lsp/src/server.rs")
+        return
+    _path_model_error(server, timeout, report)
+    _path_budget(server, timeout, report)
+    _path_cancellation(server, timeout, report)
+
+
 # --------------------------------------------------------------------------- the nine steps
 
 
-def run_steps(session, workspace, timeout, report, keep_fixtures=False):
-    """docs/VERIFICATION.md §1, steps 1-9, in order, asserted one by one."""
+def run_steps(session, workspace, timeout, report, keep_fixtures=False, server=None):
+    """docs/VERIFICATION.md §1, steps 1-9, in order, asserted one by one, then step 10 (§3.5)
+    in servers of its own.
+
+    `server` is the binary step 10 starts for its three scenarios; with the in-process stub
+    (`--selftest`) there is none, and that step reports why instead of guessing.
+    """
     fixture_dir = tempfile.mkdtemp(prefix="jev-lsp-verify-", dir=workspace)
     try:
         py_path, txt_path = write_fixtures(fixture_dir)
@@ -1474,6 +1809,7 @@ def run_steps(session, workspace, timeout, report, keep_fixtures=False):
             log("fixtures kept at %s" % fixture_dir)
         else:
             shutil.rmtree(fixture_dir, ignore_errors=True)
+    run_failure_paths(server, timeout, report)
     return report
 
 
@@ -2191,7 +2527,7 @@ def main(argv=None):
                           process=process)
         session.stub_model_url = args.stub_model_url
         run_steps(session, workspace, args.timeout, report,
-                  keep_fixtures=args.keep_fixtures)
+                  keep_fixtures=args.keep_fixtures, server=server)
         session.shutdown()
     except (HarnessError, TransportError, FramingError, RequestTimeout) as exc:
         report.fail("harness", "the session ran to the end", str(exc))
