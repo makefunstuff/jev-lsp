@@ -210,6 +210,17 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
+      # The interpreter the Python rows are written for, pinned rather than inherited.
+      # `lsp_client.py` and `supersede_probe.py` write fixtures with
+      # `pathlib.Path.write_text(newline=…)`, which needs 3.10 — the suite's floor, and the only
+      # thing that decides it (checked across every Python row: no 3.11 stdlib, no 3.10+ syntax
+      # beyond that call). `ubuntu-latest` honouring 3.10 by accident of its image is not a
+      # property of anything, and a runner-image change would turn two rows into a `TypeError`
+      # before their first assertion — a red that names no defect. The floor is documented in
+      # `verify/run-suite.sh`'s header and in this harness's docstring.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
       # The two versions the suite's own default names, from the release tarballs rather than a
       # distro package: `apt`'s Neovim is older than the 0.12 the plugin requires.
       #
