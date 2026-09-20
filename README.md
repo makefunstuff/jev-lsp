@@ -7,6 +7,12 @@
 
 **Jev is a classifier, not a chat model.** A rule asks one typed question about one line; the answer is a value and a probability — never prose. **jev-lsp** runs `.jev/rules/*.json` as ordinary LSP diagnostics, code actions, and code lens while you edit or a harness writes.
 
+## Demo
+
+Silent action loop across OpenCode, Neovim, and VS Code: paste an AI-slop comment, get a finding, apply the fix.
+
+[Watch (~32s)](https://makefunstuff.github.io/jev-lsp/assets/demo-slop-triptych.mp4) · embedded on the [landing page](https://makefunstuff.github.io/jev-lsp/#demo).
+
 ## Loop
 
 1. **Spec** — what the code must do.
