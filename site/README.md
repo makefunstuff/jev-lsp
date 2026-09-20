@@ -60,6 +60,14 @@ One copy, one direction: re-syncing is `cp docs/assets/{jev-steering.svg,jev-neo
 
 Every section quotes one of these documents. When one changes, the quoting is what to check.
 
+**One place the page does not follow a document.** `README.md` still says there is no release
+page yet, and my copy of that sentence was wrong, so the install section now names the
+[v0.1.0 release](https://github.com/makefunstuff/jev-lsp/releases/tag/v0.1.0) and its assets
+instead. The release exists, is not a draft and is not a prerelease, and its assets are
+`jev-0.1.0.vsix`, three `jev-lsp-v0.1.0-<target>.tar.gz` archives and `SHA256SUMS`; that list came
+from `https://api.github.com/repos/makefunstuff/jev-lsp/releases/tags/v0.1.0`. When `README.md`
+catches up, the two can be re-synced.
+
 | Section of the page | Source |
 |---|---|
 | The opening statement, what it is not, the classifier framing | `README.md` `## What it is for` |
@@ -69,6 +77,7 @@ Every section quotes one of these documents. When one changes, the quoting is wh
 | The use-case measurements | `docs/TUTORIAL.md` §2.1–§2.4 |
 | The rule fields, the two rules of thumb, the twenty-one-rule inventory | `docs/GUIDE.md` §4 and `.jev/rules/*.json` |
 | Install for each client, the keys, the endpoints | `README.md` `## Use it`, `### Endpoints`, `## What you get`, `## Use it with another LSP client`; `docs/TUTORIAL.md` §1; `docs/CURSOR.md` |
+| The release, the repository and the licence links | `Cargo.toml` (`repository`, `license = "MIT"`, `license-file = "LICENSE"`), `README.md` `## Licence`, `STATUS.md` (the dated decision), and the release's own asset list |
 | The recorded OMP transcript and the finding id | `docs/assets/jev-steering.svg`, from the fixture in `verify/omp_lsp.sh` |
 | The verification table and the negative controls | `docs/VERIFICATION.md`, the artefact table and §8 |
 | The limitations | `docs/VERIFICATION.md` §10 and §11, `docs/MODEL.md` §8 |

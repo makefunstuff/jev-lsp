@@ -539,8 +539,9 @@
     <div class="prose">
       <p class="eyebrow">04 · Install</p>
       <h2 id="install-h">Three clients</h2>
-      <p>There is no release page yet, so the two binaries come from <code>cargo install</code>,
-      which needs a Rust toolchain (1.75 or later). <code>git clone</code> plus <code>cargo build
+      <p>The two binaries come from the <a href="https://github.com/makefunstuff/jev-lsp/releases/tag/v0.1.0">v0.1.0
+      release</a>, one archive per platform, or from <code>cargo install</code>, which needs a
+      Rust toolchain (1.75 or later). <code>git clone</code> plus <code>cargo build
       --release</code> produces the same two binaries under <code>target/release/</code>.</p>
     </div>
     <div class="panel">
@@ -554,8 +555,8 @@
     <div class="prose">
       <p>That puts <code>jev-lsp</code> (the server) and <code>jev</code> (a CLI) in
       <code>~/.cargo/bin</code>, which is on <code>PATH</code> for a normal toolchain install.
-      <code>cargo binstall</code>, a Homebrew formula and a published <code>.vsix</code> do not
-      exist yet.</p>
+      The same release carries <code>jev-0.1.0.vsix</code> for the Cursor extension and a
+      <code>SHA256SUMS</code> file; a Homebrew formula is not one of its assets.</p>
 
       <h3>Neovim, the primary client</h3>
       <p>The plugin owns the attach pass that covers files Neovim cannot identify, the keymaps
@@ -658,8 +659,8 @@ require(<span class="dim">'jev'</span>).setup({})
       <h3>Cursor</h3>
       <p>Cursor has no settings-only route for a language server, because
       <code>.cursor/mcp.json</code> configures MCP tools, a different protocol. It needs the
-      extension in <code>editors/cursor/</code>, either symlinked from a clone or installed from
-      the <code>.vsix</code> the packing script produces.</p>
+      extension in <code>editors/cursor/</code>: symlinked from a clone, packed by the script in
+      that directory, or installed from the <code>jev-0.1.0.vsix</code> asset in the release.</p>
     </div>
     <div class="panel">
       <div class="panel-head">
@@ -1224,7 +1225,12 @@ JSON
       <p class="eyebrow">08 · Read more</p>
       <h2 id="read-h">The documents behind this page</h2>
       <p>Every section above is drawn from one of these, and each one is longer and more exact
-      than a pitch. Start with the tutorial.</p>
+      than a pitch. Start with the tutorial. The source is
+      <a href="https://github.com/makefunstuff/jev-lsp">github.com/makefunstuff/jev-lsp</a>, which
+      is where the rules in <code>.jev/rules/</code>, the harnesses in <code>verify/</code> and
+      the licence live; the
+      <a href="https://github.com/makefunstuff/jev-lsp/releases/tag/v0.1.0">v0.1.0 release</a>
+      carries the archives and the editor extension.</p>
     </div>
     <div class="table-wrap">
       <table class="stack labels">
@@ -1306,12 +1312,15 @@ JSON
 <footer class="site-foot">
   <div class="container">
     <div class="prose">
-      <p>jev-lsp is a proof of concept. Every number on this page is quoted from a document in the
-      repository, and each table names its source: the measured cost tables are
-      <code>docs/MODEL.md</code> §7 with the short version on the front page of
-      <code>README.md</code>; the rule documents are <code>.jev/rules/*.json</code> and
-      <code>docs/TUTORIAL.md</code>; the harness results and the limitations are
-      <code>docs/VERIFICATION.md</code>.</p>
+      <p>jev-lsp is a proof of concept, and the source is
+      <a href="https://github.com/makefunstuff/jev-lsp">github.com/makefunstuff/jev-lsp</a>.
+      Every number on this page is quoted from a document in the repository, and each table names
+      its source: the measured cost tables are <code>docs/MODEL.md</code> §7 with the short
+      version on the front page of <code>README.md</code>; the rule documents are
+      <code>.jev/rules/*.json</code> and <code>docs/TUTORIAL.md</code>; the harness results and
+      the limitations are <code>docs/VERIFICATION.md</code>. The licence is
+      <a href="https://github.com/makefunstuff/jev-lsp/blob/main/LICENSE">MIT</a>, with the text
+      in <code>LICENSE</code> at the repository root.</p>
       <p>The three screenshots under <code>assets/</code> are copies of
       <code>docs/assets/jev-steering.svg</code>, <code>docs/assets/jev-neovim.webp</code> and
       <code>docs/assets/jev-cursor.webp</code>, because this site is published as the document
