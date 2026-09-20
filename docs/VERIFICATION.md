@@ -7,9 +7,9 @@ not for the code they touch.
 
 | Artefact | State | Last result |
 |---|---|---|
-| `verify/run-suite.sh` | built | the whole table below in one run — 24 rows `ok`, `quality_eval` reported as `?` (it needs a real model) |
+| `verify/run-suite.sh` | built | the whole table below in one run — 23 harness rows `ok`, `quality_eval` reported as `?` (it needs a real model) |
 | `verify/probes/` | built | 7 probes, all green (`verify/probes/run.sh`) |
-| `verify/lsp_client.py` | built | 32 ok, 0 FAIL, 0 skip, 0 warn against the real binary |
+| `verify/lsp_client.py` | built | 44 ok, 0 FAIL, 0 skip, 0 warn against the real binary (step 10 is the three §3.5 failure paths) |
 | `verify/smoke.py` | built | 44/44 against the real binary — and three consecutive full-table runs after the two harness defects in §8 were fixed, which is the point |
 | `verify/rules_test.py` | built | 45/45 — the rules pass end to end: inspections, gates, cache, skips |
 | `verify/lsp_framing_test.py` | built | 9/9 — the test client's own stdio framing; written for a defect the suite found in itself (§8) |
@@ -84,6 +84,12 @@ It performs, in order, and asserts at each step:
 8. `textDocument/diagnostic` → assert findings carry `data.finding_id` and `data.verb`.
 9. `workspace/executeCommand` `jev.cancel` mid-flight → assert a `$/progress` `end` was
    received for the token and no `edit` followed.
+10. The three reachable §3.5 failure paths — **model error**, **budget refusal**, **cancellation** —
+   each assert exactly one `begin` and one `end` in that order under the supplied `workDoneToken`,
+   the `Result` envelope's code (`model_error` / `over_budget` / `-32800 Canceled`), that the `end`
+   arrives **before** the response, and that the server answers a following command. The
+   cancellation case also asserts promptness: the `end` within 2 s of the cancel while the model
+   call stalls for 4 s, which is the assertion that goes red on the pre-fix behaviour.
 
 Because it is written from the spec, a disagreement between it and the server is a real
 protocol defect, not a test artifact.
@@ -176,7 +182,7 @@ suite is the actual regression net; it is run in CI *and* as part of the design 
 | Cache keyed by `(uri, version)` instead of content hash | revert-then-resolve test: same content, different version, must hit |
 | `title` derived from model output | determinism test: two cold runs must produce identical titles |
 | Budget check after the call instead of before | budget test asserting the stub sees exactly `max_calls_per_min` calls |
-| `$/progress` `end` omitted on the error path | `verify/lsp_client.py` step 9 |
+| `$/progress` `end` omitted on the error path | `verify/lsp_client.py` step 9 (the normal path) and step 10 (model error, budget refusal, cancellation) |
 | Progress sent for a token the client never supplied or created | `verify/lsp_client.py` conformance check; `verify/probes/streaming.lua` for the client side |
 | Token smuggled through `arguments` instead of `workDoneToken` | same — the server would still "work" against Neovim, which is why the check lives in the independent client |
 | `workDoneProgress: true` declared on a provider that never reports | capability audit in the independent client's `initialize` assertions |

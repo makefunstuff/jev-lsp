@@ -730,10 +730,11 @@ files** (a control run caught 4/4 — the miss is run-to-run variance); **real_m
 which is the model's anchor granularity and not a server check — nothing in `crates/` parses the
 result (`docs/VERIFICATION.md` §7, §11).
 
-Current state, measured on the checkout this document ships with: `cargo test` **283 passing**
-(49 `jev` + 188 `jev-core` + 46 `jev-lsp`), warning-free; `verify/rules_test.py` **45/45**;
+Current state, measured on the checkout this document ships with: `cargo test` **286 passing**
+(49 `jev` + 188 `jev-core` + 49 `jev-lsp`), warning-free; `verify/rules_test.py` **45/45**;
 `verify/rules_live.lua` **0 failures, 0 skips** on Neovim 0.12.5 and 0.12.1; smoke **44/44**
-(three consecutive full-table runs); the independent client **32 ok, 0 FAIL**;
+(three consecutive full-table runs); the independent client **44 ok, 0 FAIL** (step 10 is the
+three §3.5 failure paths);
 `verify/omp_lsp.sh` **0 failures**; `verify/lsp_framing_test.py` **9/9**; the plugin's own UI test
 **0 failures, 0 skips**. `STATUS.md` carries the fuller table and `docs/VERIFICATION.md` says what
 is deliberately unverified.

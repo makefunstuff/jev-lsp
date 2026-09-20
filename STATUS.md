@@ -36,7 +36,7 @@ still true (`vim.treesitter.language.add('python')` answers `No parser for langu
 was never established as the cause of those failures, and the checks that failed do not read the
 pushed context at all. The likeliest explanation is the one `docs/VERIFICATION.md` warns about:
 a stale stub process bound to the port, since a fresh stub on a free port makes every one of
-those checks pass. What is verified now: 32 ok / 0 FAIL on the independent client (including the
+those checks pass. What is verified now: 44 ok / 0 FAIL on the independent client (including the
 assertion that no draft capability is advertised), smoke 44/44, plan 35/35, parity 30/30,
 queue 5/5, config race 3/3, supersede 7/7, dismiss 0 failures, rules 45/45 and rules_live 0
 failures on both Neovim versions, nvim_live and nvim_ui_test 0/0, latency 7/7 paths. The
@@ -95,7 +95,7 @@ which a headless harness cannot drive.
 | Check | Result |
 |---|---|
 | `bash verify/run-suite.sh <out-file>` | the whole table, one run: supervised stub, every row captured, a verdict per row on stdout (`NVIM_ONLY=1`, `REFUSE_IF_BUSY=1`, `NVIM_BINS` in its header) |
-| `cargo test` | 283 passing (49 `jev` + 188 `jev-core` + 46 `jev-lsp`), 0 failed, no warnings |
+| `cargo test` | 286 passing (49 `jev` + 188 `jev-core` + 49 `jev-lsp`), 0 failed, no warnings |
 | `cargo build --release` | no warnings, no errors |
 | `verify/probes/run.sh` | 7 probes green |
 | `python3 verify/latency.py` | 7/7 paths within budget against a model made 2 s slow |
@@ -104,7 +104,7 @@ which a headless harness cannot drive.
 | `python3 verify/rules_test.py` | 45/45 — the rules pass: inspections, `applies_to`, the changed set, the cache, the skips |
 | `python3 verify/lsp_framing_test.py` | 9/9 — the client's own stdio framing; the bug it was written for is in `docs/VERIFICATION.md` §8 |
 | `python3 verify/scope_containment_test.py` | green (exit 0) — an answer may not reach outside the scope the client named |
-| `python3 verify/lsp_client.py --server … --stub-model-url …` | 32 ok, 0 FAIL, 0 skip (independent client, including the assertion that no draft capability is advertised) |
+| `python3 verify/lsp_client.py --server … --stub-model-url …` | 44 ok, 0 FAIL, 0 skip (independent client, including step 10 — one `begin`, one `end` and a live server on the model-error, budget-refusal and cancellation paths — and the assertion that no draft capability is advertised) |
 | `nvim --headless -l verify/nvim_live.lua` | 0 failures, 0 skips with a stub endpoint (1 skip without one: the resolve step has no model) |
 | `nvim --headless -l verify/rules_live.lua` | 0 failures, 0 skips on Neovim **0.12.5 and 0.12.1** — a rule's finding on the sign column after a save, `:Jev inspect` answering with the same finding, its counts and its skips, `--force` re-running an unchanged document |
 | `python3 verify/plan_test.py` | 35/35 |
