@@ -147,12 +147,12 @@ improve.
 
 The LLM requires no AST, so the absence of a parser changes *quality of scope*, never
 availability of the feature. This is the structural difference from a real language server,
-and the reason a universal server is coherent.
+and why a universal server can be coherent.
 
 ## 5. Practical gates — the only things that limit support
 
 Support is unconditional in principle; five conditions are about practicality. **Every skip
-is stated, never silent** — the lesson taken from Copilot's `Inactive` status
+is stated, never silent** — the same failure mode Copilot's `Inactive` status hides
 (`docs/research/prior-art.md` §5).
 
 | Gate | Rule | State reported |
