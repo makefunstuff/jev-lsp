@@ -248,9 +248,16 @@ end
 ---
 --- The words are the question's own, minus the ones that appear in every question. A grep that
 --- matched "where" would return the whole repository, which is worse than nothing.
+---
+--- The answer says *why* it is empty, because two different states look the same from here: a
+--- project that does not mention the word, and a search that never ran (no engine installed, a
+--- pattern the engine refused). The first is an answer, the second is a defect the user has to
+--- hear about — the model would otherwise be asked about a file it cannot see, and nothing would
+--- say so.
 --- @param question string
 --- @param bufnr integer
---- @return table[]
+--- @return table[] matches
+--- @return string? why  nil when the search ran (empty means "no match"); else why it did not
 function M.matches_for(question, bufnr)
   -- Bracketed where a word is also a Lua keyword (`and`, `for`, `do`, `in`).
   local stopwords = {
@@ -278,14 +285,39 @@ function M.matches_for(question, bufnr)
     or vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bufnr), ':h')
     or vim.fn.getcwd()
   local pattern = table.concat(vim.tbl_map(vim.pesc, words), '|')
-  local found = {}
+
+  -- Two engines, and the fallback has to return the same *kind* of answer as the first:
+  --
+  --   `-i` — every word was lowercased above, so the pattern never has an uppercase letter and
+  --     `rg --smart-case` is therefore case-insensitive. Case-sensitive `grep` answered a
+  --     different question (it missed `Retry` for the word `retry`), which on a small project
+  --     means the fallback returns nothing at all.
+  --   `-I` and `--exclude-dir=.git` — `grep -r` has no ignore rules: without these it reports
+  --     hits inside the object store and lines from files it calls binary, which do not parse
+  --     into `path:line:` and quietly count against the six kept below.
+  --
+  -- What the fallback cannot be is *equal*: `rg` reads `.gitignore` and skips what it names, and
+  -- reproducing that here would be a gitignore implementation. The difference is therefore in the
+  -- direction of more matches, from trees the user has chosen to ignore — named here rather than
+  -- papered over.
+  local engine = nil
   if vim.fn.executable('rg') == 1 then
-    found = vim.fn.systemlist({
+    engine = {
       'rg', '--line-number', '--no-heading', '--smart-case', '--max-count', '2',
       '--max-filesize', '1M', '--', pattern, root,
-    })
+    }
   elseif vim.fn.executable('grep') == 1 then
-    found = vim.fn.systemlist({ 'grep', '-rnE', '--include=*', '-m', '2', pattern, root })
+    engine = { 'grep', '-rnE', '-i', '-I', '--exclude-dir=.git', '-m', '2', pattern, root }
+  end
+  if engine == nil then
+    return {}, 'neither `rg` nor `grep` is installed'
+  end
+
+  local found = vim.fn.systemlist(engine)
+  -- Both engines: 0 has matches, 1 is "no matches", and above that is the search itself failing
+  -- (an unreadable directory, a pattern it refused). Only the last one is not an answer.
+  if vim.v.shell_error > 1 then
+    return {}, ('`%s` exited %d'):format(engine[1], vim.v.shell_error)
   end
 
   local out, seen = {}, {}

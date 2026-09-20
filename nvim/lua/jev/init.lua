@@ -906,8 +906,21 @@ function M.where(question)
     if range ~= nil then
       arg.range = range
     end
-    local ok, matches = pcall(context.matches_for, text, bufnr)
-    local provided = ok and matches or {}
+    -- The local search, and what it *could not* do. An empty context and a search that never ran
+    -- are different answers, and only the first one is about the code: a machine without `rg` and
+    -- without `grep`, or an engine that refused the pattern, used to send the question on with no
+    -- matches and no word said about it.
+    local ok, matches, why = pcall(context.matches_for, text, bufnr)
+    if not ok then
+      matches, why = {}, tostring(matches)
+    end
+    if why ~= nil then
+      vim.notify(
+        ('jev: where could not search for that: %s'):format(why),
+        vim.log.levels.WARN
+      )
+    end
+    local provided = matches or {}
     if #provided > 0 then
       arg.context = provided
     end
