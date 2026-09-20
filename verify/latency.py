@@ -105,13 +105,20 @@ def main():
 
     results = []
 
+    def model_calls():
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/__requests", timeout=5) as r:
+            return len(json.load(r)["requests"])
+
     def timed(label, call, budget=BUDGET_MS):
+        before = model_calls()
         start = time.perf_counter()
         value = call()
         ms = (time.perf_counter() - start) * 1000
-        ok = ms <= budget
+        reached = model_calls() - before
+        ok = ms <= budget and reached == 0
         results.append((ok, label, ms, budget))
-        print(f"  {'ok  ' if ok else 'SLOW'}  {label:<52} {ms:7.1f} ms  (budget {budget})")
+        note = "" if reached == 0 else f"  [reached the model: {reached} call(s)]"
+        print(f"  {'ok  ' if ok else 'SLOW'}  {label:<52} {ms:7.1f} ms  (budget {budget}){note}")
         return value
 
     try:
@@ -203,8 +210,7 @@ def main():
             ),
         )
 
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/__requests", timeout=5) as r:
-            calls = len(json.load(r)["requests"])
+        calls = model_calls()
         print(f"\n[latency] model calls during the run: {calls} (the analysis is allowed; nothing else is)")
 
         failed = [r for r in results if not r[0]]

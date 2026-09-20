@@ -271,15 +271,23 @@ B_DIR="$(mktemp -d /tmp/jev-omp-norules.XXXXXX)"
 make_fixture "$A_DIR" 1
 make_fixture "$B_DIR" 0
 
+# The helper's exit status is the verdict; `| tee` would throw it away, so it is captured with
+# PIPESTATUS at each call site. `set -o pipefail` would change every other pipeline here at once,
+# and several of them (`grep -c … || true`) are expected to be non-zero.
+check_status=0
 printf '\n----- fixture: rules present (%s)\n' "$A_DIR" | tee -a "$OUT"
 run_omp "$A_DIR" /tmp/omp-rules.jsonl /tmp/omp-rules.err
 grep -E '"tool_execution_(start|end)"' /tmp/omp-rules.jsonl >>"$OUT" || true
 check_fixture "$A_DIR" positive /tmp/omp-rules.jsonl /tmp/omp-rules.err | tee -a "$OUT"
+code=${PIPESTATUS[0]}
+[ "$code" -eq 0 ] || check_status=$code
 
 printf '\n----- fixture: no rules (negative control) (%s)\n' "$B_DIR" | tee -a "$OUT"
 run_omp "$B_DIR" /tmp/omp-norules.jsonl /tmp/omp-norules.err
 grep -E '"tool_execution_(start|end)"' /tmp/omp-norules.jsonl >>"$OUT" || true
 check_fixture "$B_DIR" negative /tmp/omp-norules.jsonl /tmp/omp-norules.err | tee -a "$OUT"
+code=${PIPESTATUS[0]}
+[ "$code" -eq 0 ] || check_status=$code
 
 rm -rf "$A_DIR" "$B_DIR"
 
@@ -287,4 +295,5 @@ FAILS=$(grep -cE '^FAIL' "$OUT" || true)
 SKIPS=$(grep -cE '^SKIP' "$OUT" || true)
 printf '\n[omp] %s failure(s), %s skip(s)\n' "$FAILS" "$SKIPS" | tee -a "$OUT"
 [ "$FAILS" -eq 0 ] || exit 1
+[ "$check_status" -eq 0 ] || exit "$check_status"
 exit 0

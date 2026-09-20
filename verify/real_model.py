@@ -238,7 +238,10 @@ def main():
 
         server.request("shutdown", None)
         server.notify("exit", None)
-        return 0 if observed.get("loop") else 1
+        # The loop completing is not the whole claim: an edit that left the file
+        # unparseable is a broken result, and that verdict was being printed and dropped.
+        # `valid` is unset when no edit was applied, and that case keeps its old verdict.
+        return 0 if observed.get("loop") and observed.get("valid", True) else 1
     finally:
         server.stop()
         if not args.keep:

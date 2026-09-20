@@ -420,6 +420,13 @@ def main():
             "This is a small metric on unambiguous defects. It is here to make a change to "
             "context or prompts measurable before it is believed, not to be a benchmark."
         )
+        # The headline is recall, and a planted defect the review never noticed is the one
+        # result this harness exists to catch. Precision and the clean-file count have no
+        # threshold written anywhere, so they stay informational rather than invented here.
+        missed = len(defective) - caught
+        if missed:
+            print(f"recall is incomplete: {missed} of {len(defective)} planted defect(s) not caught")
+            return 1
         return 0
     finally:
         server.stop()
