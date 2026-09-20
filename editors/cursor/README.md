@@ -30,6 +30,21 @@ Exactly what the server advertises, and no more (PROTOCOL.md §2):
 Three `jev.plugin.*` command ids are also registered client-side; `docs/CURSOR.md` §5 says why
 they cannot be left to the server.
 
+**The one wire divergence worth knowing before you touch the code action path.**
+`context.only` must be a *sequence*: tower-lsp 0.20 pins `lsp-types 0.94.1`, whose
+`CodeActionContext.only` is `Option<Vec<CodeActionKind>>` (`code_action.rs:338`), not the single
+kind LSP 3.17 describes. A bare string fails deserialisation of the whole request
+(`-32602 invalid type: string "quickfix", expected a sequence`), the provider throws, and the
+editor reports **No quick fixes available** for a finding that has a fix. Measured both ways
+against the built binary, and the fix is proven inside Cursor rather than in a harness: with the
+cursor on the offending line, Cursor's own accessibility tree shows
+
+```
+AXMenuItem ~ Fix: Unwrap in a request handler, quickfix.jev
+```
+
+where the same menu previously read *No quick fixes available*.
+
 ## Install
 
 From a clone, without packaging:
