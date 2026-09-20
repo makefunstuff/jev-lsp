@@ -113,6 +113,9 @@ array and `env` carries the endpoint variables:
 Other harnesses keep the same three things in their own file: a command, the extensions it
 applies to, and a root marker.
 
+![Cursor: jev's finding in the hover over the squiggled line, with jev: explain as an inlay hint](docs/assets/jev-cursor.webp)
+<sub><b>Cursor / VS Code</b>, a client that is neither Neovim nor the harness: jev's finding in the hover, the squiggle on the line, and <code>jev: explain</code> as an inlay hint.</sub>
+
 ## This repository uses it
 
 The project checks itself with jev. `~/.omp/agent/lsp.json` registers
