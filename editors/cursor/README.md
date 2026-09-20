@@ -159,6 +159,8 @@ what you were looking at with six lines you then had to close was the original c
 
 ## Licence
 
-MIT, the same as the repository, and `package.json` declares it so a `.vsix` reader sees a
-licensed extension rather than an unnamed one. `pack.sh` does not bundle the root `LICENSE` file
-into the archive it builds, so a redistribution should carry that file alongside.
+MIT, the same as the repository, declared in `package.json` and carried inside the archive
+`pack.sh` builds: at `extension/LICENSE`, which is where `vsce` puts it and where VS Code reads
+it for an installed extension, and again at the archive's `LICENSE`, which is where someone who
+unzips the file looks first. An archive is not a checkout, and the terms should not depend on
+which of the two is in hand.
