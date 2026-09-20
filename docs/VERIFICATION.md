@@ -68,11 +68,11 @@ two shapes, `full-table` and `nvim-only`, and the workflow's own header names th
 plugin's local-grep **fallback** with no `rg` on `PATH` (the runner installs `ripgrep`, so the
 fallback is not exercised); `quality_eval`, which reports `?` with its reason because CI holds no
 API key; and anything with a GUI, `editors/cursor` included, which the suite reaches at the
-protocol layer only. `verification (nvim-only)` runs **zero cargo commands** and restores the cargo
-cache (`~/.cargo/registry`, `~/.cargo/git`, `target`), so its Lua rows run the **cached**
-`target/release/jev-lsp` rather than a build of the pushed commit, and its green is not evidence
-about that commit's Rust tree. `[INFERENCE]`: a cold cache with no build step would leave that job
-with no binary for the Lua rows at all.
+protocol layer only. `verification (nvim-only)` **builds the binary it runs** (`cargo build
+--release --locked`, guarded by `if: matrix.nvim_only == '1'`), so its Lua rows exercise the pushed
+commit's tree; the step took 46 s on run `35505703708` with the cargo cache (`~/.cargo/registry`,
+`~/.cargo/git`, `target`) restored. That is that run's duration, not a budget a later runner is
+held to.
 
 **Every harness owns a private fixture root and marks it as its own repository root.** The server
 writes its session record to `<root>/.git/jev/session.jsonl` (`crates/jev-lsp/src/trace.rs:16`), so
