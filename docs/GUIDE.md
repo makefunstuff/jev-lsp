@@ -79,7 +79,7 @@ than falling back silently, so nobody believes they asked for a split and got so
 
 `status`, `review`, `recompute`, `dismiss`, `undo`, `hints`, `cancel`, `start` and `stop` are
 messages rather than buffers: they open nothing. `:Jev log` is `hide edit`, the same window as
-before. The `<C-v>` diff preview is a real split, because a side-by-side diff is what was asked
+before. The picker's diff preview is a real split, because a side-by-side diff is what was asked
 for.
 
 In Cursor the same decision is `jev.artifacts.viewColumn`, default `active`: `active` opens the

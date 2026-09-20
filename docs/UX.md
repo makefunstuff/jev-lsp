@@ -183,7 +183,7 @@ than falling back silently, so nobody believes they asked for a split and got so
 
 What did **not** change: `status`, `review`, `recompute`, `dismiss`, `undo`, `hints`, `cancel`,
 `start` and `stop` were already messages rather than buffers. `:Jev log` is `hide edit` now (the
-same window as before, and it no longer raises `E37` on an unsaved buffer). The `<C-v>` diff
+same window as before, and it no longer raises `E37` on an unsaved buffer). The picker's diff
 preview is still a real split, deliberately: a side-by-side diff is something the user asked for.
 
 ## 3. Scenarios
@@ -221,14 +221,16 @@ statusline, then a plan buffer opens:
 ```
 
 The buffer is a normal buffer: folds, marks, yank, search work. Step lines are extmarks,
-not a rendered TUI grid, so nothing fights your config. `<C-v>` (diff a step before applying
-it) is the picker's preview, not a plan-buffer key.
+not a rendered TUI grid, so nothing fights your config. Nothing is diffed before a step:
+`<CR>` applies it and `u` takes it back. A step is resolved and applied by the server
+(`jev.apply`), so the client never holds its edit to show.
 
 ### 3.3 Approval with a diff
 
-`<C-v>` on a step opens the proposal in a real split diff against the current buffer,
-computed from the returned `TextEdit` applied to a scratch copy. Nothing touches the
-buffer until `<CR>`. Approve or reject per step; `q` leaves everything untouched.
+A resolved **code action** opens as a real split diff against the current buffer —
+`require('jev.picker').action({ preview = true })`, computed from the returned `TextEdit` on a
+scratch copy. Nothing touches the buffer until approval, and `q`/rejection leaves everything
+untouched. The plugin binds no key to it.
 
 ### 3.4 Undo
 
@@ -268,7 +270,7 @@ An ambient agent fails by being ignored, so the policy is written down and enfor
 | Failure mode | You apply something wrong | Version-stamped refusal, post-apply divergence detection |
 | Interruption cost | Context switch to another pane and back | None — the affordance is on the line you are on |
 | Repeat cost | Same tokens again | Cache hit |
-| Review | Read the whole answer | Per-step diff, approve or reject individually |
+| Review | Read the whole answer | Per-step approval, apply or take back individually |
 | Undo | Manual, error-prone | One snapshot restore |
 
 The largest difference is not the quality of the model output. It is that the context
@@ -281,7 +283,7 @@ is already where the code is, and the output lands where the code is.
 - No blocking prompt on a code path the user did not invoke.
 - `q` on any generated buffer leaves buffers, windows, and files exactly as they were. That is
   literal under the default `surfaces.layout = 'current'` (§2.1), which never adds a window; the
-  `float` layout adds one for as long as the report is open, and the `<C-v>` diff preview is a
+  `float` layout adds one for as long as the report is open, and the picker's diff preview is a
   split because the user asked for one.
 - Every applied edit is reversible by one command.
 - The statusline is the only place work is advertised; no spinner text is inserted into a
