@@ -495,6 +495,12 @@ fn inspect(
     );
     let candidates = asked.len();
     let mut skipped = set.skipped.clone();
+    // The same lint the language server reports, from the same function, in the same list: a rule
+    // whose pattern does not compile is inert, and the pass it was written for is where that has
+    // to be visible. `lint` is reported and never enforced — the rule still runs.
+    for message in jev_core::rules::lint(&set) {
+        skipped.push(("lint".to_string(), message));
+    }
     // The same skip the language server reports for the same tree, from the same function: a
     // repository with no rules that claim this file has nothing to run, and says so.
     if let Some(skip) = inspections::nothing_to_run(&set, considered, &doc.path, &root) {
@@ -521,7 +527,12 @@ fn inspect(
                                 &[],
                                 0,
                                 0,
-                                &[(doc.path.clone(), "unchanged".to_string())],
+                                // `("unchanged", path)`: the code names the skip and the detail
+                                // names what it is about, exactly as the language server sends it
+                                // (`engine::inspect`) and as PROTOCOL §6 defines the pair. This had
+                                // them the other way round, so a client keying on `code` read a
+                                // filesystem path where the server reads `unchanged`.
+                                &[("unchanged".to_string(), doc.path.clone())],
                             ),
                         );
                         return Ok(body);

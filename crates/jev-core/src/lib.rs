@@ -1,6 +1,8 @@
 //! `jev-core` — everything the server knows that is not the language server protocol.
 //!
-//! Synchronous by construction: no async runtime, no LSP types, no transport. Both the LSP
+//! Synchronous by construction: no async runtime, no LSP types, no LSP transport. (`model`,
+//! `decision` and `fetch` are network clients that live here on purpose and are synchronous — the
+//! transport this crate has none of is the editor's, which is `jev-lsp`'s alone.) Both the LSP
 //! server and the command line front end are thin shells over this crate
 //! (docs/ARCHITECTURE.md §1).
 

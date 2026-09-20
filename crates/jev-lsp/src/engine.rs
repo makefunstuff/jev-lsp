@@ -129,33 +129,6 @@ impl Drop for Permit<'_> {
 /// most, each taking its own budget permit.
 const MAX_REPAIR_ATTEMPTS: usize = 2;
 
-/// Build the follow-up request for a rejected answer.
-///
-/// The original context is re-sent unchanged so the model is not asked to work from a
-/// summary, and the previous answer is quoted back with the parser's own complaint — which
-/// is far more actionable than "your JSON was wrong".
-fn repair_context(original: &context::Context, error: &str, previous: &str) -> context::Context {
-    let quoted: String = previous.chars().take(1200).collect();
-    let mut repaired = original.clone();
-    repaired.code = original.code.clone();
-    repaired.findings = original.findings.clone();
-    repaired.around = original.around.clone();
-    // Carry the retry instruction in the field the prompt renders last, so the rules and
-    // the code are still visible above it.
-    repaired.scope_name = original.scope_name.clone();
-    let mut block = String::new();
-    block.push_str("YOUR PREVIOUS ANSWER WAS REJECTED.\n");
-    block.push_str(&format!("Reason: {error}\n"));
-    block.push_str("Return the same JSON shape again, and change nothing else.\n");
-    block.push_str("Previous answer, quoted:\n");
-    block.push_str(&quoted);
-    repaired.around = Some(match original.around.clone() {
-        Some(a) => format!("{a}\n{block}"),
-        None => block,
-    });
-    repaired
-}
-
 pub struct Engine {
     pub state: Arc<AppState>,
 }
@@ -335,6 +308,17 @@ impl Engine {
         let rule_set = self.state.rule_set(std::path::Path::new(&root));
         let mut skipped = rule_set.skipped.clone();
 
+        // Everything wrong with the rules *document*, reported beside everything wrong with the
+        // pass, in the one list a caller reads (`skipped`, PROTOCOL §6). A rule whose pattern does
+        // not compile finds no candidates and would otherwise be inert in silence — the same
+        // answer a repository gets from a convention it keeps perfectly — which is the failure
+        // mode `rules::lint` exists for and the reason it is called from here rather than from
+        // nowhere.
+        let lint = jev_core::rules::lint(&rule_set);
+        for message in &lint {
+            skipped.push(("lint".to_string(), message.clone()));
+        }
+
         // Steps 2-4: the rules that claim this path, and the candidates their inspections found.
         // All of it is local work that decides nothing.
         // `applies_to` is written the way a repository names its own files, so it is matched
@@ -397,6 +381,7 @@ impl Engine {
                 started.elapsed().as_millis() as u64,
                 candidates,
                 0,
+                lint.len(),
             );
             self.state.cache.put(
                 &key,
@@ -476,6 +461,7 @@ impl Engine {
             started.elapsed().as_millis() as u64,
             candidates,
             1,
+            lint.len(),
         );
 
         Ok(InspectOutcome {
@@ -599,7 +585,7 @@ impl Engine {
                         )));
                     }
                     repairs += 1;
-                    attempt_ctx = repair_context(&ctx, &refusal, &attempt.text);
+                    attempt_ctx = verbs::repair_context(&ctx, &refusal, &attempt.text);
                 }
                 Generated::Edit(proposal)
             }
@@ -768,7 +754,7 @@ impl Engine {
 
         let mut last = first_error;
         for _ in 0..MAX_REPAIR_ATTEMPTS {
-            let repair = repair_context(ctx, &last.to_string(), &response.text);
+            let repair = verbs::repair_context(ctx, &last.to_string(), &response.text);
             let retry = self.chat_with(cfg, tier_kind, render(&repair), reborrow(&mut delta))?;
             tokens_in += retry.prompt_tokens;
             tokens_out += retry.completion_tokens;

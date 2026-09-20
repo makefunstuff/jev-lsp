@@ -263,6 +263,35 @@ pub fn follow_up(ctx: &Context, question: &str) -> PromptSpec {
     }
 }
 
+/// The context for a retry, after the parser refused an answer (docs/MODEL.md §5).
+///
+/// Prompt text, so it lives here with the rest of it: `engine` decides *when* to retry and what
+/// the complaint is, `verbs` owns the wording that asks for the second attempt (ARCHITECTURE §2).
+/// The original context is re-sent unchanged so the model is not asked to work from a summary,
+/// and the previous answer is quoted back with the parser's own complaint — which is far more
+/// actionable than "your JSON was wrong".
+pub fn repair_context(original: &Context, error: &str, previous: &str) -> Context {
+    let quoted: String = previous.chars().take(1200).collect();
+    let mut repaired = original.clone();
+    repaired.code = original.code.clone();
+    repaired.findings = original.findings.clone();
+    repaired.around = original.around.clone();
+    // Carry the retry instruction in the field the prompt renders last, so the rules and
+    // the code are still visible above it.
+    repaired.scope_name = original.scope_name.clone();
+    let mut block = String::new();
+    block.push_str("YOUR PREVIOUS ANSWER WAS REJECTED.\n");
+    block.push_str(&format!("Reason: {error}\n"));
+    block.push_str("Return the same JSON shape again, and change nothing else.\n");
+    block.push_str("Previous answer, quoted:\n");
+    block.push_str(&quoted);
+    repaired.around = Some(match original.around.clone() {
+        Some(a) => format!("{a}\n{block}"),
+        None => block,
+    });
+    repaired
+}
+
 #[cfg(test)]
 mod ask_tests {
     use super::{ask, fetch_request};

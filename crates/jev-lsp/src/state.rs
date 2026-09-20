@@ -47,6 +47,9 @@ pub struct RulesStats {
     pub last_pass_ms: u64,
     pub candidates: usize,
     pub calls: u64,
+    /// How many problems `rules::lint` found in the rules document itself, as of that pass.
+    /// Reported, never enforced: a rule that fails lint still runs (`rules::lint`).
+    pub lint: usize,
 }
 
 /// How long the answer to "which files has git seen change" is reused.
@@ -532,13 +535,22 @@ impl AppState {
     }
 
     /// Record what a pass did, so `jev.status` can report it.
-    pub fn note_rules_pass(&self, loaded: usize, hash: &str, ms: u64, candidates: usize, calls: u64) {
+    pub fn note_rules_pass(
+        &self,
+        loaded: usize,
+        hash: &str,
+        ms: u64,
+        candidates: usize,
+        calls: u64,
+        lint: usize,
+    ) {
         let mut stats = self.rules_stats.lock();
         stats.loaded = loaded;
         stats.hash = hash.to_string();
         stats.last_pass_ms = ms;
         stats.candidates = candidates;
         stats.calls += calls;
+        stats.lint = lint;
     }
 
     pub fn rules_stats(&self) -> RulesStats {
@@ -809,11 +821,13 @@ mod tests {
         let s = state();
         let before = s.rules_stats();
         assert_eq!((before.loaded, before.last_pass_ms, before.candidates, before.calls), (0, 0, 0, 0));
-        s.note_rules_pass(3, "abc", 12, 5, 1);
+        assert_eq!(before.lint, 0, "nothing is reported for rules nobody has read yet");
+        s.note_rules_pass(3, "abc", 12, 5, 1, 2);
         let after = s.rules_stats();
         assert_eq!((after.loaded, after.hash.as_str(), after.candidates), (3, "abc", 5));
         assert_eq!(after.last_pass_ms, 12);
         assert_eq!(after.calls, 1);
+        assert_eq!(after.lint, 2);
     }
 
     #[test]

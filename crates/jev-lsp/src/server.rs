@@ -2054,6 +2054,11 @@ impl JevServer {
                         "last_pass_ms": rules.last_pass_ms,
                         "candidates": rules.candidates,
                         "calls": rules.calls,
+                        // Problems with the rules *document* itself, as of that pass, and the
+                        // count of the `skipped` entries a pass reports for them. A repository
+                        // whose rules do not compile sees a number here instead of a rule that
+                        // quietly never fires.
+                        "lint": rules.lint,
                     },
                     // Whether the client's settings have arrived yet. Until they have, the
                     // endpoints below are the built-in defaults and not what the user
