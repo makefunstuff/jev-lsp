@@ -1432,7 +1432,39 @@ end
 --- *server*, so it is wrapped: ours are handled here, everything else passes through
 --- untouched.
 local lenses_wrapped = false
-local lens_teardown_installed = false
+
+--- Drop one client's lens state for one buffer, and the provider with it when it empties.
+---
+--- Neovim's own teardown does not run for the form `install_lenses` enables with:
+--- `vim.lsp._capability.is_enabled` requires the client marker *and* the buffer marker, while
+--- `enable(true, { client_id })` can only set the client half (0.12.1 asserts that `bufnr` and
+--- `client_id` are mutually exclusive), so its answer is `false` for the pair. `Client:_on_detach`
+--- skips the capability on that same check, and `vim.lsp.codelens.enable(false, { client_id })`
+--- skips it a second time — the `enable ~= is_enabled` guard in `_capability.enable` already
+--- reads equal. `Provider.active` then keeps the buffer, and the next
+--- `workspace/codeLens/refresh` walks it into `util.make_text_document_params` →
+--- `uri_from_bufnr` → `SERVER_REQUEST_HANDLER_ERROR: … Invalid buffer id`, for a buffer the
+--- user has already closed. `vim.lsp._capability` is private and version-dependent; the
+--- alternative is a crash inside the editor.
+---
+--- @param bufnr integer
+--- @param client_id integer
+local function drop_lens_state(bufnr, client_id)
+  local classes = vim.lsp._capability and vim.lsp._capability.all
+  local provider = classes and classes.codelens and classes.codelens.active[bufnr]
+  if not provider or provider.client_state[client_id] == nil then
+    return
+  end
+  -- Clears this client's lens extmarks — the buffer is still there when a client detaches — and
+  -- throws when it is not, which is why the state is dropped either way.
+  pcall(provider.on_detach, provider, client_id)
+  provider.client_state[client_id] = nil
+  if next(provider.client_state) == nil then
+    pcall(function()
+      provider:destroy()
+    end)
+  end
+end
 
 function M.install_lenses()
   -- `client_id` alone, never `bufnr` and `client_id` together: 0.12.5 accepts the pair, but
@@ -1447,17 +1479,39 @@ function M.install_lenses()
       end
     end,
   })
-  -- Stop asking for lenses for a client that has gone. Neovim's lens provider keeps the
-  -- client id per buffer and asserts that it still exists when a debounced request fires
-  -- (`runtime/lua/vim/lsp/codelens.lua:143`); `enable(false)` does not purge that state, so a
-  -- stop within the 200 ms debounce window can still trip the assertion inside the editor.
-  -- That is Neovim's, and out of reach here — what this can do is make sure no *new* request
-  -- is scheduled for a client that is no longer there.
+  -- Stop asking for lenses for a client that has gone. Neovim's lens provider keeps the client
+  -- id per buffer and asserts that it still exists when a debounced request fires
+  -- (`runtime/lua/vim/lsp/codelens.lua:143`), and `enable(false, { client_id })` cannot purge
+  -- that state (`drop_lens_state` says why) — so a stop within the 200 ms debounce window used
+  -- to leave a request scheduled for a client that was no longer there.
   vim.api.nvim_create_autocmd('LspDetach', {
     callback = function(ev)
       local client = vim.lsp.get_client_by_id(ev.data.client_id)
       if client and client.name == M.name then
-        pcall(vim.lsp.codelens.enable, false, { client_id = ev.data.client_id })
+        drop_lens_state(ev.buf, ev.data.client_id)
+      end
+    end,
+  })
+  -- And the same drop for the buffer itself going away: the provider Neovim leaves behind still
+  -- holds a buffer id that no longer exists, which is what the next
+  -- `workspace/codeLens/refresh` trips over.
+  local lenses_group = vim.api.nvim_create_augroup('jev.lenses', { clear = true })
+  vim.api.nvim_create_autocmd({ 'BufDelete', 'BufWipeout' }, {
+    group = lenses_group,
+    callback = function(ev)
+      local classes = vim.lsp._capability and vim.lsp._capability.all
+      local provider = classes and classes.codelens and classes.codelens.active[ev.buf]
+      if not provider then
+        return
+      end
+      -- Snapshotted: dropping mutates the table being walked.
+      for _, id in ipairs(vim.tbl_keys(provider.client_state)) do
+        local client = vim.lsp.get_client_by_id(id)
+        -- A client that is gone can no longer be asked for lenses either, so its state is as
+        -- dead as the buffer's.
+        if client == nil or client.name == M.name then
+          drop_lens_state(ev.buf, id)
+        end
       end
     end,
   })
