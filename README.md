@@ -6,7 +6,10 @@
 > this is PoC and heavily under slop-generating phases to proof that lsp approach actually work first
 
 ![OMP writing a Rust handler, with jev-lsp's rule finding on the generated line steering the fix](docs/assets/jev-steering.svg)
+<sub><b>OMP</b>, a third-party LSP client: the rule's finding on the generated line steers the fix.</sub>
+
 ![Neovim: jev's annotations beside the code, next to clangd's own diagnostics](docs/assets/jev-neovim.webp)
+<sub><b>Neovim</b>, the primary client: jev's annotations beside the code, next to clangd's own diagnostics.</sub>
 
 An LSP server that runs a model over the files you have open and reports through your editor's
 own surfaces: diagnostics, code actions, code lens. The ambient pass runs the rules your
