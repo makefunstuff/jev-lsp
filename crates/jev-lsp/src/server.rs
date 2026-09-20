@@ -1932,7 +1932,18 @@ impl JevServer {
                 t,
                 WorkDoneProgress::Begin(WorkDoneProgressBegin {
                     title: format!("jev {command}"),
-                    cancellable: Some(false),
+                    // `true`, unconditionally: every command body runs in a task the transport
+                    // can abort — `begin` is only ever sent from inside it — so a client that
+                    // offers a cancel affordance is not being lied to. `$/cancelRequest` is
+                    // honoured: the request answers `-32800 Canceled`, the guard closes the
+                    // token, and the answer is discarded.
+                    //
+                    // What a cancel does *not* interrupt is the model call itself: `jev-core`'s
+                    // client is synchronous and runs in a blocking worker that cannot be
+                    // cancelled, so that call finishes and its answer is dropped. That is a cost
+                    // — a permit held until the tier timeout — not a caveat about what the client
+                    // may ask for, which is what this flag states.
+                    cancellable: Some(true),
                     message: None,
                     percentage: None,
                 }),
