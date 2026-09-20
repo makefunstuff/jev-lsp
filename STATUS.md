@@ -76,6 +76,21 @@ which a headless harness cannot drive.
    the server emits its own served command names, or **narrow the rule** to what it means, a
    server id naming a client that is not the one attached. Raising the floor is not an exit.
    Awaiting the user's call.
+4. **Ten declared settings are in the schema and read by nothing; whether to implement each or
+   delete it is open** (2026-09-20). Eight settings and two override fields: `ambient.code_lens`
+   (default `true`), `ambient.inlay_hints` (`false`), `auto_apply.fix` (`false`),
+   `auto_apply.fixAll` (`false`), `budget.timeout_ms` (`30000`), `log` (`"warn"`),
+   `triggers.severity_floor` (`"information"`), `noise.suppress_after_dismissals` (`2`), and
+   `languages.overrides.<lang>.tier` / `.prompt` (`config.rs::verbs_for` reads only `.verbs`,
+   `crates/jev-core/src/config.rs:477-483`). Each appears to promise something: that the code
+   lens or the hints can be switched off, that a fix can apply itself, that a budget has a
+   per-call ceiling, that the log has a level, that a severity floor silences low findings, that
+   a dismissal count suppresses a repeat, and that a language's tier and prompt flavour can be
+   overridden per language. Setting any of them changes nothing today, which is the "advertise
+   only what is served" rule applied to configuration. `PROTOCOL.md` §10 now lists all ten;
+   `docs/LANGUAGE.md` §3 and §7, `docs/GUIDE.md` §3, `docs/MODEL.md` §2 and `docs/UX.md` §4 no
+   longer present them as working. Two exits, one line each: **implement the setting**, or
+   **delete the key with the paragraph documenting it**. Awaiting the user's call.
 
 ## Decisions taken (reversible, recorded so they are not relitigated)
 

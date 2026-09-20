@@ -253,8 +253,8 @@ An ambient agent fails by being ignored, so the policy is written down and enfor
 - **Suppression.** A *finding* stays dismissed per repository — `.git/jev/dismissed.json`,
   filtered from every pull (`filter_findings`). A verb is never suppressed: `noise.suppress_after_dismissals`
   is in the settings schema and is not read (PROTOCOL §10).
-- **Quiet by default.** `inlay_hints` ships disabled; diagnostics do not run per
-  keystroke.
+- **Quiet by default.** Hints are drawn only after the client asks (`:Jev hints on`), and
+  `ambient.inlay_hints` is not read (PROTOCOL §10); diagnostics do not run per keystroke.
 - **Cost transparency.** Every model call logs one line (model, tier, tokens, ms, trigger
   reason) at debug level, and the statusline exposes the counters. Nothing hidden.
 

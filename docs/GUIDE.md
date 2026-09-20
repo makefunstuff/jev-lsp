@@ -108,11 +108,10 @@ settings = {
              max_tokens_per_session = 500000 },
   triggers = { diagnostics = 'save',     -- 'save' | 'idle' | 'off'  (idle_ms = 1500)
                rules = { on_save = true, on_idle = true, idle_ms = 1500 } },
-  ambient  = { code_lens = true, inlay_hints = false, diagnostics = true },
+  ambient  = { diagnostics = true },
   rules    = { enabled = true, max_candidates_per_rule = 8, max_files_per_pass = 8 },
   noise    = { max_visible_findings = 5 },
   languages = { overrides = { markdown = { verbs = { 'review' } } }, max_file_bytes = 1048576 },
-  log = 'warn',
 }
 ```
 
@@ -159,8 +158,11 @@ settings = {
   path matches `languages.ignore`. `triggers.diagnostics = 'save'` governs the *review* pass;
   `triggers.rules.on_save` (default true) governs the rules pass, and `rules.max_files_per_pass`
   bounds how many documents one idle pass covers.
-- `triggers.severity_floor` and `noise.suppress_after_dismissals` exist in the schema and are
-  **not read** by this implementation (PROTOCOL §10). Setting them changes nothing.
+- Ten keys are in the schema and are **not read** by this implementation (PROTOCOL §10):
+  `ambient.code_lens`, `ambient.inlay_hints`, `auto_apply.fix`, `auto_apply.fixAll`,
+  `budget.timeout_ms`, `log`, `triggers.severity_floor`, `noise.suppress_after_dismissals`, and
+  `languages.overrides.<lang>.tier` / `.prompt`. Setting one changes nothing. They are absent
+  from the example above for that reason.
 - No state survives a restart: the cache is content-keyed and evictable, and the only durable
   things are the dismissal file and the session log, both under the repository root.
 

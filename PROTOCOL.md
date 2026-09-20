@@ -775,8 +775,6 @@ repository's rules document (§9), and no environment variables beyond the model
   "log": "warn" }
 ```
 
-Defaults are conservative: `auto_apply` off, `inlay_hints` off.
-
 **`models.decide` is not a chat tier.** It is the endpoint that answers the rules pass's
 questions, and a decision is a different protocol from a chat: the model is handed a state and
 a numbered set of questions and returns one value per question with a probability, no prose and
@@ -811,11 +809,28 @@ is the most questions one regex may put to the decision, `max_state_lines` and
 `max_state_bytes` the most of the file it is shown, and `max_files_per_pass` how many documents
 one idle pass covers. What it declines to look at is reported, never dropped quietly (§9).
 
-**Two keys are declared and not read by this implementation**: `triggers.severity_floor` and
-`noise.suppress_after_dismissals`. They are in the schema because a client that sends them must
-not be rejected, and they are named here so a reader does not configure a silence that never
-happens — the finding cap is `noise.max_visible_findings`, which *is* read, and a dismissed
-finding stays dismissed per repository (`.git/jev/dismissed.json`).
+**Ten declared settings are not read by this implementation**, and each is named here so a
+reader does not configure an effect that never happens. They are in the schema because a client
+that sends them must not be rejected; setting one changes nothing:
+
+- `ambient.code_lens` (default `true`) and `ambient.inlay_hints` (default `false`): neither
+  surface is gated by configuration — `crates/jev-lsp/src/server.rs` advertises
+  `codeLensProvider` and `inlayHintProvider` unconditionally, and whether hints are drawn is the
+  client's call (`state.rs::hints_are_wanted`, set by `:Jev hints on`).
+- `auto_apply.fix` and `auto_apply.fixAll` (default `false`): an edit is applied because the
+  user picked it; no setting applies one.
+- `budget.timeout_ms` (default `30000`): the enforced ceilings are `max_calls_per_min`,
+  `max_calls_per_hour`, `max_decisions_per_min` and `max_tokens_per_session`; a call's own
+  timeout is the tier's `models.<tier>.timeout_ms`.
+- `log` (default `"warn"`): the level and destination are not read; the record kept on disk is
+  the session log, `.git/jev/session.jsonl` (§3.6).
+- `triggers.severity_floor` (default `"information"`) and `noise.suppress_after_dismissals`
+  (default `2`): the finding cap is `noise.max_visible_findings`, which *is* read, and a
+  dismissed finding stays dismissed per repository (`.git/jev/dismissed.json`); a verb is never
+  suppressed.
+- `languages.overrides.<lang>.tier` and `.prompt`: only `.verbs` is read
+  (`config.rs::verbs_for`). The tier follows the verb and the prompt flavour follows the
+  language profile (`docs/LANGUAGE.md` §7, `jev-core/src/lang.rs`).
 
 ---
 
@@ -916,3 +931,4 @@ Recorded so the refusals are not relitigated:
 | 2026-09-20 | **A command's `begin` says it can be cancelled, because it can; and the decide tier's key variable is nameable from the shell.** §3.5's `begin` carried `cancellable: Some(false)`, which was wrong as a hint: cancellation is honoured. It is now `true` unconditionally (`7d31a80`, `crates/jev-lsp/src/server.rs`), and it can be unconditional because `begin` is only ever sent from inside the spawned command body — by the time a client can see the flag and act on it, there is a task to abort. The boundary that stays true is unchanged and now written down: a cancel stops the *command* (the request answers `-32800 Canceled`, the token is closed exactly once, the answer is discarded), not the model call, which is a synchronous client on a blocking worker that runs on to the tier timeout and holds its budget permit until it returns (`jev.status` shows `in_flight: 1`). §10 gains `JEV_DECIDE_API_KEY_ENV` (`4566305`): its value is the *name* of the variable holding the decide tier's key — never the key — assigned to `models.decide.api_key_env`; trimmed, and an empty or whitespace-only value keeps the name in force rather than clearing it (with nothing in force the `TYPESAFE_API_KEY` default survives). The chat tiers are untouched, and `JEV_API_KEY_ENV` still does not repoint the decide tier: the two variables name different tiers' keys, because the tiers can sit behind different providers. This removes the documented workaround of exporting a key as `TYPESAFE_API_KEY` because the name could not be changed. Verified: `cargo test` 289 (49 `jev` + 191 `jev-core` + 49 `jev-lsp`), 0 failed, no warnings; `verify/lsp_client.py` 44 ok / 0 FAIL / 0 skip, with step 10's twelve assertions over the three reachable §3.5 paths. Step 10 does **not** assert `cancellable` — the contract did not state the value until this row, which is why the value is a document change rather than a harness change. |
 | 2026-09-20 | **§2's advertised set was one field short, and §3.5 promised a cancellation path the pinned library cannot deliver.** A live `initialize` answers `"hoverProvider": true` while §2's block — the one that calls itself "the *complete* advertised set" — did not list it, and `hoverProvider` appeared nowhere in this file, `README.md`, `STATUS.md` or `docs/`, even though §3.2 lists `textDocument/hover` as served. The block was then read field by field against a live `initialize` response rather than against §3, and it is eight fields: `positionEncoding`, `textDocumentSync`, `codeActionProvider`, `diagnosticProvider`, `hoverProvider`, `codeLensProvider`, `inlayHintProvider`, `executeCommandProvider`. Second, §3.5 required the server to handle `window/workDoneProgress/cancel` and abort the corresponding job; no handler exists in `impl LanguageServer for JevServer`, and tower-lsp 0.20.0 does not dispatch the method at all — its own source carries `TODO: Add `work_done_progress_cancel()` here (since 3.15.0) when supported by `tower-lsp`.` (`tower-lsp-0.20.0/src/lib.rs:1329`) — so the notification produces no reply, no log and no effect. The clause now says what is true: the plugin does send it (`nvim/lua/jev/init.lua:1232`), the pinned library drops it, cancellation of a *running command* is the `$/cancelRequest` path (§3.5 path 1, pinned by step 10 of `verify/lsp_client.py`), and a tower-lsp that dispatches the notification would make the other path available. §3.5 path 2's server-initiated progress is marked specified-but-unimplemented in the same pass — nothing in `crates/` calls `window/workDoneProgress/create`, which is also why no token exists for a client to cancel. |
 | 2026-09-20 | **§3.4.1 now states what a client without the plugin gets from a lens, and §2's completeness claim is checked against a live `initialize`.** The `jev.plugin.` namespace in a lens command is deliberate (the plugin dispatches it in-process; §7 leaves the server no way to open the buffer an explanation goes in), but the consequence for a client that is not the plugin was left implicit. It is now written down and measured: such a client runs the lens through its stock path, the command reaches the server as `workspace/executeCommand`, and the answer is `{"ok": false, "error": {"code": "not_implemented", "message": "jev.plugin.pick is not implemented in this version"}}` — an inert lens with a structured refusal, not silence. Recorded because a reader who finds `jev.plugin.*` in the server's source deserves the reason and the cost. A rule in `.jev/rules/` (`no-client-namespace-in-a-server-id`) fires on this line; whether the ids change or the rule is narrowed is an open item (`STATUS.md`, open questions), and this row records the fact rather than the choice. |
+| 2026-09-20 | **§10 overstated what it implements: ten declared settings have no reader.** §10 named two unread keys (`triggers.severity_floor`, `noise.suppress_after_dismissals`); a sweep of `crates/` finds eight settings and two override fields that no code reads — `ambient.code_lens`, `ambient.inlay_hints`, `auto_apply.fix`, `auto_apply.fixAll`, `budget.timeout_ms`, `log`, `triggers.severity_floor`, `noise.suppress_after_dismissals`, and `languages.overrides.<lang>.tier` / `.prompt` (`config.rs::verbs_for` reads only `.verbs`, `crates/jev-core/src/config.rs:477-483`). Each is in the schema only so a payload naming it deserialises. §10 now lists all ten with their defaults and what each appears to promise; `docs/LANGUAGE.md` §7 stops showing `tier` and `prompt` as working settings, `docs/GUIDE.md` §3 stops presenting the unread keys as settings a user turns, and `docs/MODEL.md` §2 and `docs/UX.md` §4 stop claiming they act. Whether to implement each setting or delete the key with its paragraph is an open item (`STATUS.md`, open questions). |

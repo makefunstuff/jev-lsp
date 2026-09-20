@@ -96,8 +96,9 @@ says `no_rules` (PROTOCOL §12). The generative tiers are what only they can do:
 explanations. Their findings are labelled `review` where the rules pass's are `rules`
 (PROTOCOL §9).
 
-**Language is a second dimension.** The resolved language may select a
-prompt flavour and (via `languages.overrides`) a different tier — but when the language is
+**Language is a second dimension.** The resolved language selects a prompt flavour from its
+profile (`jev-core/src/lang.rs`); `languages.overrides` may narrow the verbs offered for a
+language, and its `tier` and `prompt` fields are not read (PROTOCOL §10). When the language is
 `unknown`, or has no override, the row above still applies with the `generic_text` prompt.
 Routing can refine; it can never decline. This is N10 in `PROTOCOL.md` §1: no language,
 filetype, or parser may decide *whether* something is served, only *how*.

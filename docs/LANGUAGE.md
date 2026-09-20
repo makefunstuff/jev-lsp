@@ -99,13 +99,15 @@ not send a useful `languageId`, and `''` is a normal value, not an error.
 
 ## 3. What language actually changes
 
-Three things. If a language is unknown, all three fall back and nothing is refused.
+Two things. If a language is unknown, both fall back and nothing is refused.
 
 | Aspect | Known language | Unknown |
 |---|---|---|
 | **Scope** (§4) | treesitter node kinds for that language | structural fallback → whole file |
 | **Prompt flavour** | per-language template (idioms, stdlib, error conventions) | `generic_text` template |
-| **Model tier** | config may override per language | default tiers |
+
+The model tier is not one of them: it comes from the verb (`PROTOCOL.md` §4.1), the same tier in
+every language.
 
 In the action `data` and in artifacts, `language` is carried as metadata
 (`PROTOCOL.md` §4, §7) so a user can see what the model was told, and so a bad result can
@@ -185,9 +187,8 @@ classification.
 ```jsonc
 "languages": {
   "overrides": {                      // per resolved language, not per filetype
-    "rust":  { "tier": "reason", "prompt": "rust", "verbs": ["harden", "types", "test"] },
-    "python": { "prompt": "python" },
-    "markdown": { "verbs": ["review"], "tier": "review" }
+    "rust":  { "verbs": ["harden", "types", "test"] },
+    "markdown": { "verbs": ["review"] }
   },
   "max_file_bytes": 1048576,          // above this a buffer is skipped, and says so
   "max_scope_lines": 400,             // a declaration longer than this gets no lens
@@ -196,14 +197,14 @@ classification.
 ```
 
 There is no per-filetype or "generic" key: an override is keyed by the language the buffer
-*resolves* to (`unknown` included), and the persona for a language with no override comes from
-`prompt`'s default for that language (`jev-core/src/lang.rs`). `tier` picks which endpoint
-serves it — `reason` or `review`.
+*resolves* to (`unknown` included). An override may narrow the verb set for a language (Markdown
+has no meaningful "add types"); absence of an override means the full set. `tier` and `prompt`
+are in the schema and are not read (`PROTOCOL.md` §10 lists them with the other
+declared-but-unread keys). The tier follows the verb, and the persona comes from the language's
+profile (`jev-core/src/lang.rs`).
 
-An override may narrow the verb set for a language (Markdown has no meaningful "add types");
-absence of an override means the full set. Nothing here can *disable* a language — only
-change how it is served. Disabling is `enabled = false` at the top level, which stops the
-whole server.
+Nothing here can *disable* a language — only change how it is served. Disabling is
+`enabled = false` at the top level, which stops the whole server.
 
 ## 8. Refused
 
