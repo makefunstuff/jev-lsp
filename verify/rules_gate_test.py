@@ -75,6 +75,12 @@ def main():
         os.makedirs(os.path.join(workdir, ".git"))
         shutil.copytree(os.path.join(REPO, ".jev", "rules"), os.path.join(workdir, ".jev", "rules"))
         seeded = os.path.join(workdir, "crates", "demo", "src", "handler.rs")
+        # The negative control. It means **"nothing fires on this file"**, not "nothing applies
+        # to it": a `.rs` file *is* claimed by this repository's own rules, and by any shipped
+        # rule that claims `**/*.rs`. It is clean because no rule's pattern matches its text.
+        # The gate has no settings channel — it runs the CLI, and the CLI reads no settings — so
+        # a shipped rule that ever matches this fixture breaks the control rather than the
+        # mechanism: this file is then what needs changing, to text no shipped pattern matches.
         clean = os.path.join(workdir, "crates", "demo", "src", "clean.rs")
         os.makedirs(os.path.dirname(seeded))
         with open(seeded, "w") as fh:

@@ -17,7 +17,11 @@
 #     followed it, the `.unwrap()` line, and the finding id;
 #   * negative control: the same fixture with no `.jev/rules/` produces no jev diagnostic, and
 #     its `jev.inspect` says nothing was run (`no_rules`) — so a green run cannot be an artifact
-#     of the harness finding something else.
+#     of the harness finding something else. This control means **"nothing applies to this
+#     file"**, and it relies on the *shipped* defaults not claiming `**/*.rs` (they claim
+#     `**/*.py`, `**/*.java` and `**/*.md` as of 2026-09-20; PROTOCOL §9). A shipped rule about
+#     Rust turns this into "the shipped rules found nothing on this file" rather than
+#     `no_rules`, and the check has to be rewritten with it.
 #
 # The decision tier is the stub (`JEV_DECIDE_BASE_URL`/`JEV_DECIDE_MODEL`), so nothing reaches
 # the network and no API key is required. `omp` unavailable, no model, or an agent that never
