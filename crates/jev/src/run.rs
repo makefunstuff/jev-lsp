@@ -520,7 +520,20 @@ fn inspect(
     // One process, one command: the cache is always cold here, so a hit can only come from
     // something this invocation already did. Kept anyway, because the key is what a *rule edit*
     // invalidates and having the shape right is what stops the CLI and the server drifting.
-    let key = cache::rules_key(&doc.hash, &set.hash, &doc.path, config);
+    //
+    // `jev inspect` has no client and is sent no declarations, so its window is the
+    // neighbourhood one and its key carries the digest of the **empty** set — a value, not a
+    // missing input. That is what keeps the two front ends honest: the same inputs (no
+    // definitions, same bytes, same rules) still produce the same findings, and the server's
+    // declarations produce a conclusion under a key of their own.
+    let no_defs: &[LineRange] = &[];
+    let key = cache::rules_key(
+        &doc.hash,
+        &set.hash,
+        &doc.path,
+        &cache::definitions_digest(no_defs),
+        config,
+    );
     let built = match deps.cache.get(&key) {
         Some(hit) => findings::FindingBuild {
             findings: hit.findings.clone(),
@@ -565,7 +578,8 @@ fn inspect(
                         return Err(Failure::Budget(refusal.reason().to_string()))
                     }
                 };
-                let request = inspections::request(&doc.path, &doc.text, &asked, &config.rules);
+                let request =
+                    inspections::request(&doc.path, &doc.text, &asked, &config.rules, no_defs);
                 let started = Instant::now();
                 let response = deps
                     .decision

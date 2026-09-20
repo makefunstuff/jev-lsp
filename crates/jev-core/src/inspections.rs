@@ -12,8 +12,12 @@
 //!
 //! [`select`], [`request`] and [`resolve`] are the whole pass, and they live here rather than in
 //! a front end because both front ends run it: the language server's ambient pass and
-//! `jev inspect` must produce the same findings from the same rules, and the only way to
-//! guarantee that is for there to be one implementation of it.
+//! `jev inspect` must produce the same findings from the same inputs, and the only way to
+//! guarantee that is for there to be one implementation of it. The definitions the *client*
+//! sent (PROTOCOL §3.4.3) are one of those inputs: [`request`] is shown the declaration a
+//! candidate is inside when the client knows it, and `jev inspect`, which has no client, is
+//! shown the neighbourhood instead. Two different states, so `cache::rules_key` takes the
+//! definitions' own digest and neither conclusion answers for the other.
 
 use crate::config::RulesConfig;
 use crate::contract::{RawAnchor, RawFinding, RawFindings};
@@ -22,6 +26,7 @@ use crate::findings::{self, FindingBuild};
 use crate::gates;
 use crate::lang::Profile;
 use crate::rules::{self, Inspection, Rule, RuleSet};
+use crate::types::LineRange;
 use serde_json::Value;
 
 /// A place a rule is about: a 0-based line and the text that locates it.
@@ -208,9 +213,21 @@ pub fn pass_notes(
 }
 
 /// The request the whole candidate set is asked in. One call, one document.
-pub fn request(path: &str, text: &str, asked: &[Asked], cfg: &RulesConfig) -> DecisionRequest {
+///
+/// `defs` is what the client sent for this document version (PROTOCOL §3.4.3), or empty when
+/// nothing did — `jev inspect` has no client, and a client whose parser has none for the
+/// language sends nothing. It decides the shape of each window in the state and nothing else,
+/// which is why it is an argument here rather than a read of a global: a pass with no
+/// definitions must be reproducible from the files alone.
+pub fn request(
+    path: &str,
+    text: &str,
+    asked: &[Asked],
+    cfg: &RulesConfig,
+    defs: &[LineRange],
+) -> DecisionRequest {
     DecisionRequest {
-        state: state(path, text, asked, cfg),
+        state: state(path, text, asked, cfg, defs),
         questions: asked
             .iter()
             .map(|a| DecisionQuestion {
@@ -292,23 +309,332 @@ pub fn resolve(
     findings::build(text, &raw, profile, max_findings)
 }
 
-/// What the decision is shown for one document.
+/// The lines a candidate is shown with when no declaration covers it: a few tens either side,
+/// snapped out to the enclosing blank-line-separated block when that block is small enough to
+/// be the statement's own, which is what a reader would have looked at.
 ///
-/// Three parts, in the order they are read: the file head, numbered from zero so the numbers
-/// match the candidate ids; the candidates, each naming the rule and the line it came from; and
-/// the rules themselves, so the judgement has its own prose and its criteria in front of it
-/// rather than a paraphrase of them.
-fn state(doc_path: &str, text: &str, asked: &[Asked], cfg: &RulesConfig) -> String {
-    let mut out = String::new();
-    out.push_str(&format!("FILE {doc_path}\n"));
-    out.push_str("line numbers below are 0-based, as in the candidate list\n");
-    for (i, line) in text.lines().take(cfg.max_state_lines).enumerate() {
-        out.push_str(&format!("{i}: {line}\n"));
+/// Not `max_state_lines`: this is one candidate's neighbourhood, and it is the *budget* that
+/// decides how many of these the state can hold.
+const WINDOW_CONTEXT: usize = 20;
+
+/// The most lines one window may span before it stops being a window and becomes the head
+/// again. A declaration the client sent can cover half the file; showing the half the candidate
+/// is in, and the head of the declaration when the candidate sits near it, is the point.
+const MAX_WINDOW_LINES: usize = 80;
+
+/// One place the state shows, and the candidates it is shown for.
+///
+/// A window is the unit the state is built from: windows that overlap are merged into one, each
+/// is measured against the budget on its own, and a window the budget cannot hold is trimmed —
+/// or, when its candidates are too far apart for one window, split between them. The candidate
+/// lines are the floor of every one of those operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Window {
+    /// 0-based, inclusive, into `text.split('\n')` — the same indices the candidate ids use.
+    start: usize,
+    end: usize,
+    /// The candidate lines inside it, ascending. Never dropped, by trimming or by splitting.
+    keep: Vec<usize>,
+}
+
+impl Window {
+    fn lines(&self) -> usize {
+        self.end - self.start + 1
     }
 
-    out.push_str("\nCANDIDATES\n");
+    /// How many bytes this window adds to the state, without building it. Must stay equal to
+    /// [`Window::render`]'s length, which `a_window_measures_what_it_renders` pins.
+    fn bytes(&self, lines: &[&str]) -> usize {
+        let mut n = 10 + digits(self.start) + digits(self.end);
+        for i in self.start..=self.end {
+            n += digits(i) + 2 + lines[i].len() + 1;
+        }
+        n
+    }
+
+    /// The window as the state writes it. The marker is what makes a gap between windows
+    /// readable: without it the numbers jump and the file reads as if it were edited.
+    fn render(&self, lines: &[&str]) -> String {
+        let mut out = format!("[lines {}-{}]\n", self.start, self.end);
+        for i in self.start..=self.end {
+            out.push_str(&format!("{i}: {}\n", lines[i]));
+        }
+        out
+    }
+
+    /// Whether a line can be dropped from an end without dropping a candidate.
+    fn can_trim(&self) -> bool {
+        let last = *self.keep.last().expect("a window holds a candidate");
+        self.start < self.keep[0] || self.end > last
+    }
+
+    /// Drop one line from whichever end is farther from the candidates, so what is left stays
+    /// centred on them.
+    fn trim_one(&mut self) {
+        if !self.can_trim() {
+            return;
+        }
+        let left = self.keep[0] - self.start;
+        let right = self.end - *self.keep.last().expect("a window holds a candidate");
+        if left >= right && left > 0 {
+            self.start += 1;
+        } else {
+            self.end -= 1;
+        }
+    }
+
+    /// Cut at the widest gap between the candidates this window holds, so each side can be
+    /// trimmed on its own. `None` when there is only one candidate to keep.
+    ///
+    /// This is the alternative to sending no neighbourhood at all: a window whose candidates
+    /// are 100 lines apart is two neighbourhoods, and two neighbourhoods fit a budget one
+    /// window cannot.
+    fn split_widest(&self) -> Option<(Window, Window)> {
+        if self.keep.len() < 2 {
+            return None;
+        }
+        let (mut at, mut widest) = (1usize, 0usize);
+        for i in 1..self.keep.len() {
+            let gap = self.keep[i] - self.keep[i - 1];
+            if gap > widest {
+                widest = gap;
+                at = i;
+            }
+        }
+        let cut = (self.keep[at - 1] + self.keep[at]) / 2;
+        Some((
+            Window {
+                start: self.start,
+                end: cut,
+                keep: self.keep[..at].to_vec(),
+            },
+            Window {
+                start: cut + 1,
+                end: self.end,
+                keep: self.keep[at..].to_vec(),
+            },
+        ))
+    }
+}
+
+/// Decimal digits, without the `String` `format!` would build to count them.
+fn digits(mut n: usize) -> usize {
+    let mut d = 1;
+    while n >= 10 {
+        n /= 10;
+        d += 1;
+    }
+    d
+}
+
+/// Which budget a [`fit`] pass is spending.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Metric {
+    Lines,
+    Bytes,
+}
+
+fn measure(w: &Window, lines: &[&str], metric: Metric) -> usize {
+    match metric {
+        Metric::Lines => w.lines(),
+        Metric::Bytes => w.bytes(lines),
+    }
+}
+
+/// Trim and split the windows until they fit `budget`.
+///
+/// Water-filling, then splitting: a window over its share of the budget loses a line, always
+/// from the end farther from its candidates; a window that cannot lose a line without losing a
+/// candidate, while the total is still over, is split at the widest gap between the candidates
+/// it holds. The loop stops when the total fits, or when every window is down to the candidate
+/// lines it exists to show — a budget too small for those is not met by showing less than the
+/// thing being judged, and `truncate_state` is the bound of last resort.
+fn fit(windows: &mut Vec<Window>, lines: &[&str], budget: usize, metric: Metric) {
+    loop {
+        let total: usize = windows.iter().map(|w| measure(w, lines, metric)).sum();
+        if total <= budget || windows.is_empty() {
+            return;
+        }
+        let share = budget / windows.len();
+        let over = windows
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| w.can_trim() && measure(w, lines, metric) > share)
+            .max_by_key(|(_, w)| measure(w, lines, metric))
+            .map(|(i, _)| i);
+        if let Some(i) = over {
+            windows[i].trim_one();
+            continue;
+        }
+        let splittable = windows
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| w.keep.len() > 1)
+            .max_by_key(|(_, w)| measure(w, lines, metric))
+            .map(|(i, _)| i);
+        match splittable.and_then(|i| windows[i].split_widest().map(|(a, b)| (i, a, b))) {
+            Some((i, a, b)) => {
+                windows[i] = a;
+                windows.insert(i + 1, b);
+            }
+            None => return,
+        }
+    }
+}
+
+/// The smallest declaration the client sent that contains `line`, by span and then by the
+/// later start (the innermost of two identical spans).
+fn enclosing(defs: &[LineRange], line: u32) -> Option<LineRange> {
+    defs.iter()
+        .filter(|d| d.start_line <= line && line <= d.end_line)
+        .min_by_key(|d| {
+            (
+                d.end_line.saturating_sub(d.start_line),
+                std::cmp::Reverse(d.start_line),
+            )
+        })
+        .copied()
+}
+
+/// The lines `line` is shown with: the declaration the client sent when it sent one that
+/// contains it, otherwise [`neighbourhood`].
+///
+/// A declaration longer than [`MAX_WINDOW_LINES`] is shown around the candidate — its head when
+/// the candidate is near the head, which is where the signature that names the thing is, and a
+/// centred span otherwise. Showing the whole of a 600-line declaration is the head problem
+/// wearing a different hat: the budget would cut it, and the cut would land wherever the bytes
+/// ran out rather than where the question is.
+fn window_for(lines: &[&str], line: usize, defs: &[LineRange]) -> (usize, usize) {
+    let last = lines.len().saturating_sub(1);
+    if let Some(d) = enclosing(defs, line as u32) {
+        let start = d.start_line as usize;
+        let end = (d.end_line as usize).min(last);
+        if start <= line && line <= end {
+            if end - start + 1 <= MAX_WINDOW_LINES {
+                return (start, end);
+            }
+            let mut from = if line < start + MAX_WINDOW_LINES {
+                start
+            } else {
+                line.saturating_sub(MAX_WINDOW_LINES / 2)
+            };
+            from = from.max(start).min(end + 1 - MAX_WINDOW_LINES);
+            return (from, (from + MAX_WINDOW_LINES - 1).min(end));
+        }
+    }
+    neighbourhood(lines, line)
+}
+
+/// A few tens of lines either side of `line`, snapped out to the blank-line-separated block it
+/// sits in when that block is at most the size of the window itself — a statement is read with
+/// the block it belongs to, and a block that big is one.
+fn neighbourhood(lines: &[&str], line: usize) -> (usize, usize) {
+    let last = lines.len().saturating_sub(1);
+    let lo = line.saturating_sub(WINDOW_CONTEXT);
+    let hi = (line + WINDOW_CONTEXT).min(last);
+    let (bs, be) = block_bounds(lines, line);
+    if be - bs + 1 <= 2 * WINDOW_CONTEXT + 1 {
+        (lo.min(bs), hi.max(be))
+    } else {
+        (lo, hi)
+    }
+}
+
+/// The maximal run of non-blank lines containing `line`. A blank line is its own block, which
+/// the union in [`neighbourhood`] then pads out.
+fn block_bounds(lines: &[&str], line: usize) -> (usize, usize) {
+    if lines.get(line).is_none_or(|l| l.trim().is_empty()) {
+        return (line, line);
+    }
+    let mut start = line;
+    while start > 0 && !lines[start - 1].trim().is_empty() {
+        start -= 1;
+    }
+    let mut end = line;
+    while end + 1 < lines.len() && !lines[end + 1].trim().is_empty() {
+        end += 1;
+    }
+    (start, end)
+}
+
+/// One window per candidate, merged where they overlap.
+///
+/// The merge is what stops a document with thirteen candidates in one region from sending that
+/// region thirteen times, with thirteen copies of the marker around it; the line numbers are
+/// absolute, so the merged window still says exactly where each candidate is.
+fn windows_for(lines: &[&str], asked: &[Asked], defs: &[LineRange]) -> Vec<Window> {
+    let mut places: Vec<(usize, usize, usize)> = Vec::new();
     for a in asked {
-        out.push_str(&format!(
+        let line = a.candidate.line as usize;
+        if line >= lines.len() {
+            // A candidate cannot name a line the document does not have; if one ever does, the
+            // state is not the place to find out.
+            continue;
+        }
+        let (start, end) = window_for(lines, line, defs);
+        places.push((start, end, line));
+    }
+    places.sort_unstable();
+
+    let mut windows: Vec<Window> = Vec::new();
+    for (start, end, line) in places {
+        match windows.last_mut() {
+            Some(w) if start <= w.end + 1 => {
+                w.end = w.end.max(end);
+                if !w.keep.contains(&line) {
+                    w.keep.push(line);
+                    w.keep.sort_unstable();
+                }
+            }
+            _ => windows.push(Window {
+                start,
+                end,
+                keep: vec![line],
+            }),
+        }
+    }
+    windows
+}
+
+/// What the decision is shown for one document.
+///
+/// Three parts, in the order they are read: the lines around each candidate, numbered from zero
+/// and absolute so the numbers match the candidate ids; the candidates, each naming the rule and
+/// the line it came from; and the rules themselves, so the judgement has its own prose and its
+/// criteria in front of it rather than a paraphrase of them.
+///
+/// **Around each candidate, not from the top.** The state used to be the file head — the first
+/// `max_state_lines` lines — while candidates are found anywhere in the document, so a candidate
+/// at line 2,000 of a 2,800-line file was asked about with 200 lines of a file it was not in:
+/// thirteen of this repository's own thirteen candidates on `crates/jev-lsp/src/server.rs` lay
+/// outside the window they were shown in, and every floor measured on that state was measured
+/// with the line invisible. It is also the reason a whole class of rules cannot be written here:
+/// "an abstraction with one use site", "a hand-rolled JSON parser" — each needs a fact that is
+/// not on the candidate's line and was not in the head either, and how many call sites a
+/// declaration has is a property of the *declaration*, which is the thing the client already
+/// knows and already sends (§3.4.3).
+fn state(
+    doc_path: &str,
+    text: &str,
+    asked: &[Asked],
+    cfg: &RulesConfig,
+    defs: &[LineRange],
+) -> String {
+    // The same split the candidate lines were counted with, so the state's numbers and the
+    // candidate ids can never drift apart.
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut windows = windows_for(&lines, asked, defs);
+
+    let mut out = String::new();
+    out.push_str(&format!("FILE {doc_path}\n"));
+    out.push_str(
+        "line numbers below are 0-based and absolute, as in the candidate list; \
+         only the lines around each candidate are shown\n",
+    );
+
+    let mut tail = String::from("\nCANDIDATES\n");
+    for a in asked {
+        tail.push_str(&format!(
             "{} {} line {}: {}\n",
             a.id(),
             a.rule.id,
@@ -317,19 +643,45 @@ fn state(doc_path: &str, text: &str, asked: &[Asked], cfg: &RulesConfig) -> Stri
         ));
     }
 
-    out.push_str("\nRULES\n");
+    tail.push_str("\nRULES\n");
     let mut seen: Vec<&str> = Vec::new();
     for a in asked {
         if seen.contains(&a.rule.id.as_str()) {
             continue;
         }
         seen.push(&a.rule.id);
-        out.push_str(&format!("[{}] {}\n", a.rule.id, a.rule.text));
-        out.push_str(&format!("  question: {}\n", a.rule.judgement.question));
+        tail.push_str(&format!("[{}] {}\n", a.rule.id, a.rule.text));
+        tail.push_str(&format!("  question: {}\n", a.rule.judgement.question));
         if let Some(criteria) = &a.rule.judgement.criteria {
-            out.push_str(&format!("  criteria: {criteria}\n"));
+            tail.push_str(&format!("  criteria: {criteria}\n"));
         }
     }
+
+    // The budget is spent on the windows, never on the tail. The tail is what the judgement
+    // reads the windows *against* — the rule's question and criteria, and the list that ties
+    // each window to a question id — so cutting it would leave answers with nothing to answer;
+    // and cutting the windows at the end, as a single tail cut does, would drop the code for
+    // whichever candidates happened to be last. Both budgets therefore shrink the windows
+    // around the candidates until they fit, and `truncate_state` stays as the bound for the one
+    // case that cannot be met that way: a budget smaller than the candidate lines themselves.
+    //
+    // `max_state_bytes == 0` keeps its long-standing meaning here — no truncation at all —
+    // rather than becoming "no room for anything". `max_state_lines == 0` is the floor, not an
+    // empty state: it shows the candidate lines and nothing around them. Under the head, zero
+    // showed nothing at all *and* the candidates were still asked about.
+    let fixed = out.len() + tail.len();
+    fit(&mut windows, &lines, cfg.max_state_lines, Metric::Lines);
+    let room = if cfg.max_state_bytes == 0 {
+        usize::MAX
+    } else {
+        cfg.max_state_bytes.saturating_sub(fixed)
+    };
+    fit(&mut windows, &lines, room, Metric::Bytes);
+
+    for w in &windows {
+        out.push_str(&w.render(&lines));
+    }
+    out.push_str(&tail);
     truncate_state(&out, cfg.max_state_bytes)
 }
 
@@ -338,6 +690,10 @@ fn state(doc_path: &str, text: &str, asked: &[Asked], cfg: &RulesConfig) -> Stri
 /// Half a line is worse than no line: a model shown `x.unwr` may read a violation that is not
 /// there. The note matters too — a state that stops mid-file without a word reads like a whole
 /// file that happens to end early.
+///
+/// This is the bound of last resort now, not the mechanism: the windows are fitted to both
+/// budgets before they are written, so reaching this means the candidate lines and the rules'
+/// own prose did not fit on their own. It cuts the rules, at the end, in that case.
 fn truncate_state(state: &str, max: usize) -> String {
     if max == 0 || state.len() <= max {
         return state.to_string();
@@ -599,7 +955,7 @@ mod tests {
             .iter()
             .any(|(c, _)| c == "default_rules"));
 
-        let request = request("/w/src/a.rs", SRC, &asked, &cfg.rules);
+        let request = request("/w/src/a.rs", SRC, &asked, &cfg.rules, &[]);
         assert_eq!(request.questions.len(), 2, "one question per candidate");
         let response = crate::decision::DecisionResponse {
             answers: ["shipped#1", "shipped#2"]
@@ -642,6 +998,368 @@ mod tests {
             vec!["no_rules"]
         );
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    // ---- what the decision is shown -----------------------------------------
+    //
+    // The state used to be the file head. Every test below fails on some way of going back to
+    // that, or on a window rule that loses the thing a window is for.
+
+    /// A document whose candidate lines read `x.unwrap(); // {n}` and whose every other line
+    /// reads `let v{n} = {n};`, so a state can be searched for a line by number.
+    fn padded(at: &[usize], total: usize) -> String {
+        let mut out = String::new();
+        for i in 0..total {
+            if at.contains(&i) {
+                out.push_str(&format!("    x.unwrap(); // {i}\n"));
+            } else {
+                out.push_str(&format!("let v{i} = {i};\n"));
+            }
+        }
+        out
+    }
+
+    /// The state's numbered source lines, counted the way the state writes them: `<n>: <line>`.
+    /// A candidate's row (`id rule line N: needle`) and the rules' prose (`  question: …`) do
+    /// not count, which is what makes this a count of the *code* the decision was shown.
+    fn numbered(state: &str) -> Vec<&str> {
+        state
+            .lines()
+            .filter(|l| {
+                l.split_once(": ")
+                    .is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+            })
+            .collect()
+    }
+
+    /// The assertion the whole change is for: a candidate the pass asks about is a line the
+    /// state shows, at the number its id names.
+    fn assert_every_candidate_is_shown(state: &str, asked: &[Asked], lines: &[&str]) {
+        let shown: Vec<&str> = state.lines().collect();
+        for a in asked {
+            let line = a.candidate.line as usize;
+            let want = format!("{line}: {}", lines[line]);
+            assert!(
+                shown.contains(&want.as_str()),
+                "candidate {} was asked about a line the state does not show\n{state}",
+                a.id()
+            );
+        }
+    }
+
+    #[test]
+    fn a_candidate_near_the_head_and_one_at_line_2000_are_both_in_the_state() {
+        let text = padded(&[2, 2000], 2400);
+        let lines: Vec<&str> = text.split('\n').collect();
+        let rule = regex(r"\.unwrap\(\)", None);
+        let (_, asked) = select(std::slice::from_ref(&rule), "/w/a.rs", &text, 8);
+        assert_eq!(asked.len(), 2);
+        let cfg = RulesConfig::default();
+
+        let req = request("/w/a.rs", &text, &asked, &cfg, &[]);
+        assert_every_candidate_is_shown(&req.state, &asked, &lines);
+        // And it is not the head: line 1,200 is nowhere near either candidate, in a file whose
+        // head would have carried it. This is the assertion that fails if the window rule is ever the head again.
+        assert!(
+            !req.state.contains("1200: let v1200 = 1200;"),
+            "the state is showing the head again:\n{}",
+            req.state
+        );
+        assert!(
+            numbered(&req.state).len() <= cfg.max_state_lines,
+            "{} lines of code, budget {}",
+            numbered(&req.state).len(),
+            cfg.max_state_lines
+        );
+    }
+
+    #[test]
+    fn the_real_document_the_review_measured_shows_every_candidate() {
+        // `crates/jev-lsp/src/server.rs` — 2,805 lines and thirteen candidates from this
+        // repository's own rules, from line 243 to line 2518. Under the head, none of the
+        // thirteen was inside the state it was asked about; this asserts the pair the review
+        // used, not a fixture that copies its shape.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let Ok(text) = std::fs::read_to_string(root.join("crates/jev-lsp/src/server.rs")) else {
+            // A packaged crate has no `crates/jev-lsp` beside it. The workspace is what this is
+            // about.
+            return;
+        };
+        let lines: Vec<&str> = text.split('\n').collect();
+        let cfg = crate::config::Config::default();
+        let set = rules::load(&root, true, crate::rules::builtin_files());
+        let (_, asked) = select(
+            &set.rules,
+            "crates/jev-lsp/src/server.rs",
+            &text,
+            cfg.rules.max_candidates_per_rule,
+        );
+        assert!(
+            asked.len() >= 5,
+            "this test is about a document its own rules have things to say about: {}",
+            asked.len()
+        );
+        let req = request(
+            "crates/jev-lsp/src/server.rs",
+            &text,
+            &asked,
+            &cfg.rules,
+            &[],
+        );
+        assert_every_candidate_is_shown(&req.state, &asked, &lines);
+        // The point of the measurement: at least one candidate is past the line the head would
+        // have stopped at, so a head-shaped state could not have shown them all.
+        assert!(
+            asked
+                .iter()
+                .any(|a| a.candidate.line >= cfg.rules.max_state_lines as u32),
+            "every candidate is inside the head — this document no longer demonstrates anything"
+        );
+    }
+
+    #[test]
+    fn a_declaration_the_client_sent_is_the_window_the_candidate_is_read_in() {
+        let text = padded(&[10], 40);
+        let lines: Vec<&str> = text.split('\n').collect();
+        let rule = regex(r"\.unwrap\(\)", None);
+        let (_, asked) = select(std::slice::from_ref(&rule), "/w/a.rs", &text, 8);
+        let cfg = RulesConfig::default();
+        let defs = [LineRange {
+            start_line: 6,
+            end_line: 14,
+        }];
+
+        let with = request("/w/a.rs", &text, &asked, &cfg, &defs);
+        assert!(
+            with.state.contains("[lines 6-14]"),
+            "the declaration is the window:\n{}",
+            with.state
+        );
+        assert_every_candidate_is_shown(&with.state, &asked, &lines);
+        assert!(
+            !with.state.contains("5: let v5 = 5;") && !with.state.contains("0: let v0 = 0;"),
+            "nothing outside the declaration is shown:\n{}",
+            with.state
+        );
+
+        // The client sent nothing — `jev inspect`, or a client with no parser for the language.
+        // Then the window is the neighbourhood, which reaches wider than the declaration did.
+        let without = request("/w/a.rs", &text, &asked, &cfg, &[]);
+        assert!(without.state.contains("0: let v0 = 0;"), "{}", without.state);
+        assert_every_candidate_is_shown(&without.state, &asked, &lines);
+        assert_ne!(
+            with.state, without.state,
+            "the definitions are an input to the state, which is why they are in the key"
+        );
+
+        // The *smallest* enclosing declaration wins when the client sent several.
+        let nested = [
+            LineRange {
+                start_line: 0,
+                end_line: 39,
+            },
+            LineRange {
+                start_line: 6,
+                end_line: 14,
+            },
+        ];
+        let inner = request("/w/a.rs", &text, &asked, &cfg, &nested);
+        assert_eq!(inner.state, with.state, "the innermost declaration is the window");
+    }
+
+    #[test]
+    fn candidates_that_share_context_send_it_once() {
+        let text = padded(&[100, 103, 106], 300);
+        let rule = regex(r"\.unwrap\(\)", None);
+        let (_, asked) = select(std::slice::from_ref(&rule), "/w/a.rs", &text, 8);
+        let req = request("/w/a.rs", &text, &asked, &RulesConfig::default(), &[]);
+        assert_eq!(
+            req.state.matches("101: let v101 = 101;").count(),
+            1,
+            "shared context, sent once:\n{}",
+            req.state
+        );
+        assert_eq!(
+            req.state.matches("[lines ").count(),
+            1,
+            "three candidates inside one region are one window:\n{}",
+            req.state
+        );
+    }
+
+    #[test]
+    fn line_numbers_stay_absolute_across_the_gap_between_windows() {
+        let text = padded(&[10, 900], 1200);
+        let lines: Vec<&str> = text.split('\n').collect();
+        let rule = regex(r"\.unwrap\(\)", None);
+        let (_, asked) = select(std::slice::from_ref(&rule), "/w/a.rs", &text, 8);
+        let req = request("/w/a.rs", &text, &asked, &RulesConfig::default(), &[]);
+        assert!(
+            req.state.contains("[lines 880-920]"),
+            "the second window names its own place in the file:\n{}",
+            req.state
+        );
+        assert!(
+            req.state.contains(&format!("900: {}", lines[900])),
+            "and counts from the file's zero, not from its own:\n{}",
+            req.state
+        );
+        // The block after the gap starts at its own number: a state that renumbered each window
+        // from zero would open the second one at `0:`, and searching the whole state for a
+        // string like `0: let v880` is not the question — `880: let v880 = 880;` contains it.
+        let after = req
+            .state
+            .split("[lines 880-920]\n")
+            .nth(1)
+            .expect("the second window is in the state");
+        assert!(
+            after.starts_with("880: "),
+            "the numbering restarted at the second window:\n{after}"
+        );
+    }
+
+    #[test]
+    fn the_line_budget_bounds_what_is_shown_when_the_windows_exceed_it() {
+        let at: Vec<usize> = (0..8).map(|i| 100 + i * 60).collect();
+        let text = padded(&at, 1200);
+        let rule = regex(r"\.unwrap\(\)", None);
+        let (_, asked) = select(std::slice::from_ref(&rule), "/w/a.rs", &text, 8);
+        assert_eq!(asked.len(), 8);
+        let lines: Vec<&str> = text.split('\n').collect();
+
+        let cfg = RulesConfig::default();
+        let req = request("/w/a.rs", &text, &asked, &cfg, &[]);
+        assert!(
+            numbered(&req.state).len() <= cfg.max_state_lines,
+            "{} lines of code against a budget of {}:\n{}",
+            numbered(&req.state).len(),
+            cfg.max_state_lines,
+            req.state
+        );
+        // The budget is met by showing less *around* each candidate, never by dropping one.
+        assert_every_candidate_is_shown(&req.state, &asked, &lines);
+    }
+
+    #[test]
+    fn the_byte_budget_bounds_a_merged_set_without_dropping_a_candidate() {
+        // Eight neighbourhoods are more than 2,000 bytes of a document this size, and two of
+        // them are close enough to merge. Both budgets shrink the windows; neither drops a
+        // candidate.
+        let at = [100usize, 134];
+        let text = padded(&at, 400);
+        let lines: Vec<&str> = text.split('\n').collect();
+        let rule = regex(r"\.unwrap\(\)", None);
+        let (_, asked) = select(std::slice::from_ref(&rule), "/w/a.rs", &text, 8);
+        assert_eq!(asked.len(), 2, "two candidates, 34 lines apart");
+
+        let cfg = RulesConfig {
+            max_state_bytes: 900,
+            ..RulesConfig::default()
+        };
+        let req = request("/w/a.rs", &text, &asked, &cfg, &[]);
+        assert!(
+            req.state.len() <= cfg.max_state_bytes,
+            "{} bytes against a budget of {}:\n{}",
+            req.state.len(),
+            cfg.max_state_bytes,
+            req.state
+        );
+        assert_every_candidate_is_shown(&req.state, &asked, &lines);
+        // The two candidates are one window when there is room and two when there is not: the
+        // widest gap between them is where it is cut, so each keeps its own neighbourhood.
+        assert!(
+            req.state.matches("[lines ").count() >= 2,
+            "a merged window too large to fit was not split:\n{}",
+            req.state
+        );
+
+        // Room for it, and the merge stands.
+        let roomy = RulesConfig::default();
+        let merged = request("/w/a.rs", &text, &asked, &roomy, &[]);
+        assert_eq!(
+            merged.state.matches("[lines ").count(),
+            1,
+            "with room, the shared context is sent once:\n{}",
+            merged.state
+        );
+    }
+
+    #[test]
+    fn a_window_measures_exactly_what_it_renders() {
+        let text = padded(&[3, 9], 40);
+        let lines: Vec<&str> = text.split('\n').collect();
+        for w in [
+            Window {
+                start: 0,
+                end: 0,
+                keep: vec![0],
+            },
+            Window {
+                start: 2,
+                end: 12,
+                keep: vec![3, 9],
+            },
+            Window {
+                start: 38,
+                end: 39,
+                keep: vec![39],
+            },
+        ] {
+            assert_eq!(w.bytes(&lines), w.render(&lines).len(), "{w:?}");
+        }
+        // The digit arithmetic has to hold across a decade boundary, which is where a
+        // hand-counted marker length goes wrong.
+        let big = padded(&[1000], 1100);
+        let big_lines: Vec<&str> = big.split('\n').collect();
+        let w = Window {
+            start: 995,
+            end: 1005,
+            keep: vec![1000],
+        };
+        assert_eq!(w.bytes(&big_lines), w.render(&big_lines).len());
+    }
+
+    #[test]
+    fn a_window_covers_its_candidate_and_grows_outward_not_inward() {
+        let lines: Vec<&str> = (0..100).map(|_| "x").collect();
+        let mut w = Window {
+            start: 40,
+            end: 60,
+            keep: vec![50],
+        };
+        assert_eq!(w.lines(), 21);
+        w.trim_one();
+        assert_eq!((w.start, w.end), (41, 60), "the longer side gives way first");
+        w.trim_one();
+        assert_eq!((w.start, w.end), (41, 59));
+        // Down to the candidate itself and no further: a window's floor is the line the
+        // question is about.
+        while w.can_trim() {
+            w.trim_one();
+        }
+        assert_eq!((w.start, w.end), (50, 50));
+        assert_eq!(w.render(&lines), "[lines 50-50]\n50: x\n");
+    }
+
+    #[test]
+    fn a_split_keeps_every_candidate_and_orders_the_gap_between_them() {
+        let w = Window {
+            start: 80,
+            end: 160,
+            keep: vec![100, 140],
+        };
+        let (left, right) = w.split_widest().expect("two candidates, one gap");
+        assert_eq!((left.start, left.end), (80, 120));
+        assert_eq!((right.start, right.end), (121, 160));
+        assert_eq!(left.keep, vec![100]);
+        assert_eq!(right.keep, vec![140]);
+        assert!(Window {
+            start: 0,
+            end: 10,
+            keep: vec![5]
+        }
+        .split_widest()
+        .is_none());
     }
 
     #[test]

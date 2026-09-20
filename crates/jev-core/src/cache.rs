@@ -5,8 +5,9 @@
 //! for changed content simply never hits — invalidation is free.
 
 use crate::config::Config;
-use crate::types::{Finding, Proposal};
+use crate::types::{Finding, LineRange, Proposal};
 use parking_lot::Mutex;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
@@ -144,14 +145,31 @@ pub fn findings_key(content_hash: &str, language: &str, max_findings: usize) -> 
 /// symptom is the one this key exists to prevent: widen `noise.max_visible_findings` and the pass
 /// answers from the cache with the old cap's findings, so the setting looks like it does nothing.
 ///
+/// **The definitions are the fifth, and they are the newer half of the same defect.**
+/// `inspections::state` is a window around each candidate, and the window is the enclosing
+/// declaration when the client sent one (PROTOCOL §3.4.3, `inspections::window_for`). Same
+/// bytes, same rules, same path, same bounds — and a client that sent declarations asks a
+/// different question from one that sent none, and from one that sent different declarations
+/// (the plugin re-parses on edit; a client whose parser disagrees resolves a different
+/// declaration). Without [`definitions_digest`] in the key, the second session's conclusion
+/// answers the first's question, and the whole window rule becomes a source of wrong findings
+/// rather than better ones. `&[]` — no client, as `jev inspect` has none — is a value, not an
+/// absence: it is the digest of the empty set and it keys the neighbourhood window.
+///
 /// `rules.enabled` and `max_files_per_pass` are deliberately absent: the first is not an input to
 /// an answer that was produced (a disabled pass produces none, and re-enabling asks the same
 /// question again), and the second bounds a *pass*, not a document.
-pub fn rules_key(content_hash: &str, rule_hash: &str, path: &str, cfg: &Config) -> String {
+pub fn rules_key(
+    content_hash: &str,
+    rule_hash: &str,
+    path: &str,
+    defs_digest: &str,
+    cfg: &Config,
+) -> String {
     let decide = &cfg.models.decide;
     let bounds = &cfg.rules;
     format!(
-        "rules|{content_hash}|{rule_hash}|{path}|{:?}|{}|{}|{}|{}|{}|{}",
+        "rules|{content_hash}|{rule_hash}|{path}|{defs_digest}|{:?}|{}|{}|{}|{}|{}|{}",
         decide.wire,
         decide.base_url,
         decide.model,
@@ -160,6 +178,28 @@ pub fn rules_key(content_hash: &str, rule_hash: &str, path: &str, cfg: &Config) 
         bounds.max_state_bytes,
         cfg.noise.max_visible_findings
     )
+}
+
+/// What the client's definitions do to the question, for [`rules_key`].
+///
+/// `inspections::window_for` reads a set of line ranges and nothing else about them — the name a
+/// client attaches is never read — so the digest is taken over `(start, end)` pairs in sorted
+/// order, which is the canonical form of that set and not of the wire message. Two clients whose
+/// declarations differ only in the order treesitter happened to emit share a key, because they
+/// ask the same question; two whose declarations differ in any range do not, because they do
+/// not.
+pub fn definitions_digest(defs: &[LineRange]) -> String {
+    if defs.is_empty() {
+        return String::new();
+    }
+    let mut ranges: Vec<(u32, u32)> = defs.iter().map(|d| (d.start_line, d.end_line)).collect();
+    ranges.sort_unstable();
+    let mut h = Sha256::new();
+    for (start, end) in ranges {
+        h.update(start.to_le_bytes());
+        h.update(end.to_le_bytes());
+    }
+    format!("{:x}", h.finalize())
 }
 
 /// A generated edit or artifact, keyed by **every** input the answer is a function of.
@@ -269,19 +309,19 @@ mod tests {
     #[test]
     fn the_rules_key_separates_content_rules_and_path() {
         let cfg = Config::default();
-        let base = rules_key("h", "r", "/w/a.rs", &cfg);
-        assert_eq!(base, rules_key("h", "r", "/w/a.rs", &cfg));
-        assert_ne!(base, rules_key("h2", "r", "/w/a.rs", &cfg), "content");
+        let base = rules_key("h", "r", "/w/a.rs", "", &cfg);
+        assert_eq!(base, rules_key("h", "r", "/w/a.rs", "", &cfg));
+        assert_ne!(base, rules_key("h2", "r", "/w/a.rs", "", &cfg), "content");
         assert_ne!(
             base,
-            rules_key("h", "r2", "/w/a.rs", &cfg),
+            rules_key("h", "r2", "/w/a.rs", "", &cfg),
             "a rule edit must not serve the old conclusion"
         );
         // Two files with the same bytes but different names are asked different questions: a
         // rule's `applies_to` is matched against the path.
         assert_ne!(
             base,
-            rules_key("h", "r", "/w/a.py", &cfg),
+            rules_key("h", "r", "/w/a.py", "", &cfg),
             "`applies_to` makes the answer depend on the path"
         );
     }
@@ -289,7 +329,7 @@ mod tests {
     #[test]
     fn the_rules_key_names_the_classifier_and_the_bounds() {
         let cfg = Config::default();
-        let key = |cfg: &Config| rules_key("h", "r", "/w/a.rs", cfg);
+        let key = |cfg: &Config| rules_key("h", "r", "/w/a.rs", "", cfg);
         assert_eq!(key(&cfg), key(&cfg), "the same inputs are the same key");
 
         // The tier that answered. A different model, endpoint or wire asked the same words of a
@@ -364,15 +404,15 @@ mod tests {
 
         let cache = Cache::new(4);
         cache.put(
-            &rules_key("h", &one.hash, path, &cfg),
+            &rules_key("h", &one.hash, path, "", &cfg),
             conclusion("from the shipped set"),
         );
         assert!(
-            cache.get(&rules_key("h", &same.hash, path, &cfg)).is_some(),
+            cache.get(&rules_key("h", &same.hash, path, "", &cfg)).is_some(),
             "the same document under the same shipped set still hits"
         );
         assert!(
-            cache.get(&rules_key("h", &changed.hash, path, &cfg)).is_none(),
+            cache.get(&rules_key("h", &changed.hash, path, "", &cfg)).is_none(),
             "a conclusion taken before the shipped rule changed must not answer for it"
         );
 
@@ -380,7 +420,7 @@ mod tests {
         // set, so `rules.defaults` is an input without needing an entry of its own.
         let off = crate::rules::load(&root, false, &[("code/a.json", SHIPPED_A)]);
         assert!(
-            cache.get(&rules_key("h", &off.hash, path, &cfg)).is_none(),
+            cache.get(&rules_key("h", &off.hash, path, "", &cfg)).is_none(),
             "the shipped rules the hash is taken over are absent, so this is another set"
         );
         std::fs::remove_dir_all(&root).ok();
@@ -394,24 +434,76 @@ mod tests {
         let cache = Cache::new(8);
         let path = "/w/a.rs";
         let mut cfg = Config::default();
-        cache.put(&rules_key("h", "r", path, &cfg), conclusion("from the first tier"));
+        cache.put(&rules_key("h", "r", path, "", &cfg), conclusion("from the first tier"));
         assert!(
-            cache.get(&rules_key("h", "r", path, &cfg)).is_some(),
+            cache.get(&rules_key("h", "r", path, "", &cfg)).is_some(),
             "the same question hits"
         );
 
         cfg.models.decide.model = "another-model".into();
         assert!(
-            cache.get(&rules_key("h", "r", path, &cfg)).is_none(),
+            cache.get(&rules_key("h", "r", path, "", &cfg)).is_none(),
             "the stored answer came from a different model"
         );
 
         cfg.models.decide.model = Config::default().models.decide.model;
         cfg.rules.max_state_lines += 1;
         assert!(
-            cache.get(&rules_key("h", "r", path, &cfg)).is_none(),
+            cache.get(&rules_key("h", "r", path, "", &cfg)).is_none(),
             "and it was given a different view of the file"
         );
+    }
+
+    #[test]
+    fn the_rules_key_names_the_definitions_the_window_was_built_from() {
+        let cfg = Config::default();
+        let a = LineRange {
+            start_line: 1,
+            end_line: 2,
+        };
+        let b = LineRange {
+            start_line: 9,
+            end_line: 10,
+        };
+        let none = definitions_digest(&[]);
+        let one = definitions_digest(&[a]);
+        let moved = definitions_digest(&[LineRange {
+            start_line: 1,
+            end_line: 3,
+        }]);
+
+        assert_eq!(none, "", "no client is a value, not a missing input");
+        assert_ne!(none, one, "a declaration the client sent changes the window");
+        assert_ne!(
+            one, moved,
+            "a declaration that ends one line later is another window"
+        );
+        // `inspections::window_for` reads a set — the smallest enclosing range — so the order
+        // treesitter happened to emit them in is not part of the question.
+        assert_eq!(
+            definitions_digest(&[a, b]),
+            definitions_digest(&[b, a]),
+            "the same set in another order is the same question"
+        );
+
+        // And through the key, which is the whole point: same bytes, same rules, same path,
+        // same bounds, different definitions — a different question, and the second must not be
+        // answered from the first's conclusion.
+        let base = rules_key("h", "r", "/w/a.rs", &none, &cfg);
+        assert_ne!(base, rules_key("h", "r", "/w/a.rs", &one, &cfg));
+        assert_ne!(base, rules_key("h", "r", "/w/a.rs", &moved, &cfg));
+
+        let cache = Cache::new(4);
+        cache.put(&base, conclusion("no client, the neighbourhood window"));
+        assert!(
+            cache
+                .get(&rules_key("h", "r", "/w/a.rs", &one, &cfg))
+                .is_none(),
+            "a session whose client sent a declaration was asked about a different state"
+        );
+        assert!(cache
+            .get(&rules_key("h", "r", "/w/a.rs", &definitions_digest(&[]), &cfg))
+            .is_some());
     }
 
     #[test]

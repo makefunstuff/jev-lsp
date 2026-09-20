@@ -515,7 +515,11 @@ string to keep in step. Editing a shipped rule, adding one, or turning the whole
 shipped rule the repository shadows is not in the hash, because it is not in the set that ran.
 The key also carries `noise.max_visible_findings`: the stored findings are the *capped* set
 (`findings::build`), so widening the cap is a different question and was, until 2026-09-20, a
-cache hit that answered it with the old cap's findings.
+cache hit that answered it with the old cap's findings. **And it carries a digest of the
+declarations the client sent** (§9): the state is a window around each candidate and the window
+is the enclosing declaration when the client sent one, so two sessions over identical bytes can
+be asking different questions — the same shape of defect as the cap, added with the window rule
+and named here so the next input is checked against this list rather than remembered.
 
 ---
 
@@ -789,9 +793,46 @@ wire unchanged; a `true` that clears `min_probability` (default 0.5 — a coin f
 finding) becomes a finding through `findings::build`, the same function the review's findings
 pass through, so ids, ordering, dismissal and the noise cap behave identically everywhere.
 
-A rule file that cannot be read, cannot be parsed, or does not carry
-`"schema": "jev.rules/1"` is skipped **with a stated reason** and the rest still load; so is a
-candidate whose anchor is not uniquely locatable. A repository that has written no rules of its
+**The state is a window around each candidate, not the file head.** What the decision is shown
+for one document is three parts — the lines around each candidate, the candidate list, and the
+rules' own prose and criteria — and the first of those was, until 2026-09-20, the **first
+`max_state_lines` lines of the document**. Candidates are found anywhere in a file, so the two
+were unrelated: on this repository's own `crates/jev-lsp/src/server.rs` (2,805 lines, thirteen
+candidates from line 243 to line 2518) not one of the thirteen was inside the 200-line head it
+was asked about, and every floor measured against that state was measured with the line
+invisible. The rule now, in order of preference:
+
+- **the enclosing declaration, when the client sent one.** `jev.document` (§3.4.3) already
+  carries the client's parser's ranges, version-stamped; the smallest declaration containing the
+  candidate's line is the window. It is the *smallest*, so a candidate inside a function inside
+  a module is shown the function.
+- **otherwise a bounded neighbourhood** — a few tens of lines either side, snapped out to the
+  enclosing blank-line-separated block when that block is no bigger than the window itself.
+- **merged** where they overlap or touch, so a region with several candidates is sent once
+  rather than once per candidate.
+- **numbered absolutely**, from zero, exactly as the candidate ids are: the numbers in the state
+  and the numbers in the candidate list are the same numbers, or the answer cannot be mapped
+  back to a line. A gap between two windows is marked and the numbering continues across it.
+
+**The budgets bound the windows.** `max_state_lines` is the most *code* the state may hold and
+`max_state_bytes` the most bytes, and both are spent by trimming each window around its
+candidates — never by cutting the state at a byte offset, which would drop the rules a judgement
+is read against, and never by dropping a candidate: a window whose candidates cannot be held is
+split between them, and a candidate's own line is the floor of every operation. `truncate_state`
+survives as the bound for the one case that cannot be met this way — a budget smaller than the
+candidate lines themselves.
+
+**The definitions are an input to the cache key, and were added with this.** Two sessions over
+the same bytes, the same rules and the same path ask different questions when one sent
+declarations and the other did not, so `cache::rules_key` carries a digest of them
+(`cache::definitions_digest`); `jev inspect` has no client and passes the digest of the empty
+set, and a client with no parser for the language sends nothing and lands under the same key.
+This is the same class of defect §5 records twice — a key that names one input too few — and it
+was not optional: without it the second session's conclusion would answer the first's question.
+
+A rule file that cannot be read, cannot be parsed, or does not carry `"schema": "jev.rules/1"`
+is skipped **with a stated reason** and the rest still load; so is a candidate whose anchor is
+not uniquely locatable. A repository that has written no rules of its
 own is inspected with the shipped set and is *told so* (`default_rules`, §6, `jev.inspect`); with
 the shipped set switched off as well it gets no ambient findings and hears `no_rules`. Neither
 of those is silence, and neither is a generative fallback — see §12.
@@ -860,8 +901,9 @@ shipped inside the binary to the repository's own, with `.jev/rules/<id>.json` s
 shipped rule of the same id (§9); `false` is the behaviour that predates the shipped set
 exactly. The keys bound the work: `max_candidates_per_rule`
 is the most questions one regex may put to the decision, `max_state_lines` and
-`max_state_bytes` the most of the file it is shown, and `max_files_per_pass` how many documents
-one idle pass covers. What it declines to look at is reported, never dropped quietly (§9), and
+`max_state_bytes` the most of the file it is shown — the most *code* it holds, spent on the
+windows around the candidates and no longer on the head (§9) — and `max_files_per_pass` how many
+documents one idle pass covers. What it declines to look at is reported, never dropped quietly (§9), and
 so is the fact that the shipped set is carrying a pass (`default_rules`, §6).
 
 **Ten declared settings are not read by this implementation**, and each is named here so a
@@ -1014,3 +1056,4 @@ Recorded so the refusals are not relitigated:
 | 2026-09-20 | **§10 overstated what it implements: ten declared settings have no reader.** §10 named two unread keys (`triggers.severity_floor`, `noise.suppress_after_dismissals`); a sweep of `crates/` finds eight settings and two override fields that no code reads — `ambient.code_lens`, `ambient.inlay_hints`, `auto_apply.fix`, `auto_apply.fixAll`, `budget.timeout_ms`, `log`, `triggers.severity_floor`, `noise.suppress_after_dismissals`, and `languages.overrides.<lang>.tier` / `.prompt` (`config.rs::verbs_for` reads only `.verbs`, `crates/jev-core/src/config.rs:477-483`). Each is in the schema only so a payload naming it deserialises. §10 now lists all ten with their defaults and what each appears to promise; `docs/LANGUAGE.md` §7 stops showing `tier` and `prompt` as working settings, `docs/GUIDE.md` §3 stops presenting the unread keys as settings a user turns, and `docs/MODEL.md` §2 and `docs/UX.md` §4 stop claiming they act. Whether to implement each setting or delete the key with its paragraph is an open item (`STATUS.md`, open questions). |
 | 2026-09-20 | **§3.5's "the `end` arrives before the response" was the transport's ordering, and the row that asserted it was a coin flip.** That parenthetical was `verify/lsp_client.py`'s own reading of "valid only until the response to that request is sent" (`[R12]`): the command keeps the lifetime in the order it controls — the `end` is awaited into the transport before the command body returns — but `tower-lsp` writes the two through two arms of one `futures::stream::select` (`transport.rs`), polled round-robin, so which of the server's own two messages is written first is the scheduler's. Measured on one unchanged binary: `jev.status` inverted in 4/50 runs (−36.1 µs … +29.9 µs), with the CI red at −21 µs and a green run the same day at +29 µs, and step 10's paths sat 5 µs from flipping. §3.5 now states what step 9 and step 10 assert — one `begin`, one `end`, and nothing under the token after it, read after a settle window — and that the order of those two is not the command's to fix; `--selftest` gained the `progress_after_end` defect so the replacement can fail. |
 | 2026-09-20 | **The rules have a shipped source, and missing rule files are no longer silence.** A repository with no `.jev/rules/` produced no ambient findings at all — `no_rules` was the whole answer — so a fresh install and a broken one were indistinguishable, and this project's own conventions published nothing on the repository they were written for. §9 now names **two sources**: the repository's files and a set embedded in the binary from `crates/jev-core/default_rules/<group>/*.json` (globbed by `build.rs`; an empty tree builds and behaves exactly as before). The repository's file **shadows** the shipped rule with the same `id`, and within one source duplicate ids are still kept and still linted. `rules.defaults` (default `true`, §10) turns the shipped set off. `jev rules init [--dir <dir>] [--force]` (§11) writes it into `.jev/rules/` so a rule can be read before it is believed — each file named for its group (`prose-lists-end-in-etc.json`), so two groups authored in parallel cannot collide, and idempotent, non-clobbering, exit `2` when it refuses to overwrite a file the user edited. Every finding now carries `rule_source` (`repository` | `builtin` | `null`, §6), because a finding you cannot trace to a file you can open is one you cannot turn off; `:Jev inspect` and `jev inspect` print it, and a pass carried by the shipped set says so (`default_rules`). §5's key is taken over the merged set, so the shipped rules are an input to every rules conclusion — and `noise.max_visible_findings`, which was missing from it, is in it now. §12 keeps its refusal: no generative fallback, and the defaults are hand-written data an editor can open. |
+| 2026-09-20 | **The state is a window around each candidate, not the file head — and the client's declarations are a new input to the cache key.** §9 said the decision is handed a state; what the state *was* is the first `max_state_lines` lines, and candidates live anywhere. On this repository's own `crates/jev-lsp/src/server.rs` (2,805 lines, thirteen candidates from line 243 to line 2518) none of the thirteen was inside the 200-line head, so every floor measured on it was measured with the line invisible, and a class of rules — how many call sites, how many implementations, whether a dependency ships it — could not be authored at all. §9 now states the rule: the smallest enclosing declaration the client sent (`jev.document`, §3.4.3), else a bounded neighbourhood around the candidate, merged where windows overlap, numbered absolutely so the state's numbers and the candidate ids stay the same numbers; the two budgets are spent trimming windows around their candidates and never drop one, with `truncate_state` the bound of last resort. Because the window now reads what the client sent, `cache::rules_key` carries a digest of it (`cache::definitions_digest`) — the same defect class §5 records for `noise.max_visible_findings` — and §5 says so. Measured on `server.rs`: 13/13 candidates in the state against 0/13, 15,389 bytes against 14,017, both inside the unchanged 16,000-byte and 200-line budgets; on a 126-line file with six candidates, 7,355 → 3,615 bytes. Tests in `crates/jev-core/src/inspections.rs` (including one over that real document) and `crates/jev-core/src/cache.rs`. |

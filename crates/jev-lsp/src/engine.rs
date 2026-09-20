@@ -16,7 +16,7 @@ use jev_core::gates;
 use jev_core::inspections;
 use jev_core::model::{ChatRequest, ChatResponse};
 use jev_core::scope::{self, Resolved};
-use jev_core::types::{Finding, Proposal, Tier, Usage, Verb, PROMPT_VERSION};
+use jev_core::types::{Finding, LineRange, Proposal, Tier, Usage, Verb, PROMPT_VERSION};
 use jev_core::verbs;
 
 /// Where generated text goes while it is being generated.
@@ -336,9 +336,32 @@ impl Engine {
         let notes = inspections::pass_notes(&rule_set, considered, &doc.path, &root);
         skipped.extend(notes.iter().cloned());
 
+        // What the client's parser found for *this* version of the document, if it sent
+        // anything. It shapes the window each candidate is shown in (`inspections::state`),
+        // which makes it part of the question: it goes into the cache key beside the content
+        // hash, so a session with declarations and a session without never answer for each
+        // other (PROTOCOL §5). The version guard is the same one the codeLens and inlayHint
+        // surfaces use — a set describing an older document is not used here either.
+        let defs: Vec<LineRange> = self
+            .state
+            .definitions(&doc.uri, doc.version)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|d| LineRange {
+                start_line: d.start_line,
+                end_line: d.end_line,
+            })
+            .collect();
+
         // Step 5: the cache is consulted once the candidate count is known, so a hit can still
         // answer with the numbers this pass would have reported.
-        let key = cache::rules_key(&doc.hash, &rule_set.hash, &doc.path, &cfg);
+        let key = cache::rules_key(
+            &doc.hash,
+            &rule_set.hash,
+            &doc.path,
+            &cache::definitions_digest(&defs),
+            &cfg,
+        );
         if let Some(hit) = self.state.cache.get(&key) {
             return Ok(InspectOutcome {
                 findings: hit.findings.clone(),
@@ -411,7 +434,7 @@ impl Engine {
         };
 
         // Step 8: one call for the whole document.
-        let request = inspections::request(&doc.path, &doc.text, &asked, &cfg.rules);
+        let request = inspections::request(&doc.path, &doc.text, &asked, &cfg.rules, &defs);
         let response = match self.state.decision.decide(cfg.decision(), &request) {
             Ok(response) => response,
             Err(e) => {
@@ -1569,6 +1592,64 @@ mod tests {
         let third = e.inspect(&d, true).unwrap();
         assert_eq!(decision.calls(), 2, "a rule edit must invalidate the conclusion");
         assert_eq!(third.candidates, 2);
+    }
+
+    #[test]
+    fn the_definitions_the_client_sent_are_the_window_and_are_part_of_the_key() {
+        // The window rule reads the client's declarations, so a pass with them and a pass
+        // without are two questions over the same bytes. Both halves are asserted here: the
+        // state the decision is shown, and that the second pass is not answered from the
+        // first's conclusion — the defect this key exists to prevent, in its newest shape.
+        let rules = Rules::new("window");
+        rules.file("a.json", &rules.rule("no-unwrap", r"\.unwrap\(\)", "**/*.rs", 0.75));
+        let decision = ScriptedDecision::with(&[("no-unwrap#3", 0.9), ("no-unwrap#3", 0.9)]);
+        let e = inspector(&rules, decision.clone());
+
+        // A candidate at line 3 with 60 lines of file around it, so the two states are told
+        // apart by what they contain and not only by their size.
+        let mut text = String::new();
+        for i in 0..60 {
+            if i == 3 {
+                text.push_str("    x.unwrap();\n");
+            } else {
+                text.push_str(&format!("let v{i} = {i};\n"));
+            }
+        }
+        let d = doc(&text);
+
+        // Nothing from the client: the neighbourhood window.
+        e.inspect(&d, true).unwrap();
+        let without = decision.seen.lock()[0].state.clone();
+        assert!(without.contains("[lines 0-23]"), "{without}");
+        assert!(without.contains("0: let v0 = 0;"), "{without}");
+
+        // The plugin pushes the declaration the candidate is inside, for the version it
+        // describes (PROTOCOL §3.4.3).
+        e.state.put_known(
+            "file:///tmp/a.rs",
+            crate::state::KnownDocument {
+                version: 1,
+                definitions: vec![crate::state::ClientDefinition {
+                    start_line: 2,
+                    end_line: 8,
+                    name: None,
+                }],
+                context: Vec::new(),
+            },
+        );
+        e.inspect(&d, true).unwrap();
+        assert_eq!(
+            decision.calls(),
+            2,
+            "the same bytes with a declaration is a different question, not a cache hit"
+        );
+        let seen = decision.seen.lock();
+        let with = seen[1].state.clone();
+        assert!(with.contains("[lines 2-8]"), "{with}");
+        assert!(
+            !with.contains("0: let v0 = 0;"),
+            "the declaration, not the neighbourhood, is the window:\n{with}"
+        );
     }
 
     #[test]
