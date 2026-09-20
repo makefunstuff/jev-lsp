@@ -139,31 +139,40 @@ which a headless harness cannot drive.
 
 | Check | Result |
 |---|---|
-| `bash verify/run-suite.sh <out-file>` | the whole table, one run: supervised stub, every row captured, a verdict per row on stdout (`NVIM_ONLY=1`, `REFUSE_IF_BUSY=1`, `NVIM_BINS` in its header) |
-| `cargo test` | 289 passing (49 `jev` + 191 `jev-core` + 49 `jev-lsp`), 0 failed, no warnings |
+| `bash verify/run-suite.sh <out-file>` | the whole table, one run: one supervised stub for the run, every row's output and `EXIT=` captured into the file, a verdict per row to stdout, and the exit code aggregated from those `EXIT=` values rather than from a text grep. Its first row is the runner's own `stub health` (`/health` answered and the pid alive), and the six Lua rows below run once per binary in `NVIM_BINS`. Knobs in its header: `NVIM_ONLY=1`, `TAKE_OVER=1` (`REFUSE_IF_BUSY=1` is the older spelling of the same opt-in), `STUB_PORT`, `NVIM_BINS`, `JEV_WS`, `KEEP_WORKSPACE=1` |
+| `cargo test` | 291 passing (49 `jev` + 193 `jev-core` + 49 `jev-lsp`), 0 failed, no warnings |
 | `cargo build --release` | no warnings, no errors |
-| `verify/probes/run.sh` | 7 probes green |
-| `python3 verify/latency.py` | 7/7 paths within budget against a model made 2 s slow |
-| `python3 verify/queue_test.py` / `config_race_test.py` / `supersede_probe.py` | 5/5, 3/3, 7 ok 0 FAIL |
-| `python3 verify/smoke.py` | 44/44 against the real binary, three consecutive full-table runs since the two harness defects in `docs/VERIFICATION.md` §8 were fixed |
-| `python3 verify/rules_test.py` | 45/45 — the rules pass: inspections, `applies_to`, the changed set, the cache, the skips |
-| `python3 verify/lsp_framing_test.py` | 9/9 — the client's own stdio framing; the bug it was written for is in `docs/VERIFICATION.md` §8 |
-| `python3 verify/scope_containment_test.py` | green (exit 0) — an answer may not reach outside the scope the client named |
-| `python3 verify/lsp_client.py --server … --stub-model-url …` | 44 ok, 0 FAIL, 0 skip (independent client, including step 10 — one `begin`, one `end` and a live server on the model-error, budget-refusal and cancellation paths — and the assertion that no draft capability is advertised) |
-| `nvim --headless -l verify/nvim_live.lua` | 0 failures, 0 skips with a stub endpoint (1 skip without one: the resolve step has no model) |
-| `nvim --headless -l verify/rules_live.lua` | 0 failures, 0 skips on Neovim **0.12.5 and 0.12.1** — a rule's finding on the sign column after a save, `:Jev inspect` answering with the same finding, its counts and its skips, `--force` re-running an unchanged document |
-| `nvim --headless -l verify/result_surface.lua` | 0 failures, 0 skips on **both** Neovim versions — a report never changes the window count, `q` puts the buffer the user was in back on screen, and an unsaved buffer is still modified afterwards |
-| `python3 verify/plan_test.py` | 35/35 |
-| `python3 verify/cli_parity.py` | 30/30 — the CLI and the LSP agree exactly, `jev inspect` included; five of the checks are the nested-file case that pins the CLI's rules root |
-| `bash verify/omp_lsp.sh` | 0 failures, 0 skips — OMP, a client that shares no code with this repository, receives a rule's finding over `textDocument/diagnostic` and reaches `workspace/executeCommand jev.inspect`; a no-rules control finds nothing |
-| `python3 verify/outcome_test.py` | 18/18 — the `jev.outcome` record and the `jev.usage` counts |
-| `python3 verify/quality_eval.py --base-url https://openrouter.ai/api/v1 --model google/gemini-2.5-flash-lite` | **recall 3/4, precision 3/3, 0 findings on both clean files**, 6 calls / 2950 tokens billed, 4.5 s, exit 0 — the miss (`swallowed_error.py`) is run-to-run variance on a cheap model (a control run with the same model caught 4/4). Runnable whenever an endpoint and a key are given (`JEV_API_KEY_ENV` names the chat tiers' key variable); the suite reports the row as `?` when none is |
-| `python3 verify/repo_bench.py --repo . --limit 40` | 40 files, 33 analysed, 62 findings, **3.21 per 1000 lines** (three runs: 3.21 / 3.48 / 3.71; 7 files per run outran the 60 s per-file bound and are reported as such). Measured 2026-09-18, before the inline-completion removal, which touches no findings path |
-| `nvim --headless -l verify/nvim_ui_test.lua` | 0 failures, 0 skips — three consecutive runs with a fresh stub (`--stub-model-url`-style endpoints matter: a stale stub on the port is what VERIFICATION.md §"red run" warns about) |
+| `verify/probes/run.sh` | 7 probes, `0 probe(s) failed` |
+| `python3 verify/latency.py` | `[latency] 7 path(s) within budget`, against a model made 2 s slow |
+| `python3 verify/queue_test.py` | `[queue] 5/5 checks passed` |
+| `python3 verify/config_race_test.py` | `[config-race] 3/3 checks passed` |
+| `python3 verify/settings_race_test.py --bin …` | exit 0 — the first model call of a session used the endpoint the client configured, not the built-in default (`SETTINGS_RACE_OK`) |
+| `python3 verify/scope_containment_test.py --bin …` | exit 0 — an answer may not reach outside the scope the client named, and the refusal names the scope |
+| `python3 verify/supersede_probe.py` | `7 ok, 0 FAIL, 0 skip, 0 warn` |
+| `python3 verify/smoke.py` | `[smoke] 44/44 checks passed` against the real binary, three consecutive full-table runs since the two harness defects in `docs/VERIFICATION.md` §8 were fixed |
+| `python3 verify/outcome_test.py` | 18 checks, `every check passed` — the `jev.outcome` record and the `jev.usage` counts |
+| `python3 verify/plan_test.py` | `[plan] 35/35 checks passed` |
+| `python3 verify/cli_parity.py` | `[parity] 34/34 checks passed` — the CLI and the LSP agree exactly, `jev inspect` included; five of the checks are the nested-file case that pins the CLI's rules root |
+| `python3 verify/lsp_client.py --server … --workspace … --stub-model-url …` | `44 ok, 0 FAIL, 0 skip, 0 warn` — the independent, spec-derived client. Step 10 covers one `begin`, one `end` and a live server on the model-error, budget-refusal and cancellation paths; step 9 records the `end`/response interleaving instead of asserting it and asserts what the command controls, nothing under the token after its `end`, read after a settle window; the row also asserts that no draft capability is advertised |
+| `python3 verify/lsp_client.py --selftest` | `32 ok, 0 FAIL, 0 skip, 0 warn` — the client's own defect-injection net: no server, no stub, no network, each injected defect required to turn its step red |
+| `python3 verify/lsp_framing_test.py` | `[framing] 9/9 checks passed` — the client's own stdio framing; the bug it was written for is in `docs/VERIFICATION.md` §8 |
+| `python3 verify/rules_test.py --bin …` | `[rules] 55/55 checks passed` — the rules pass: inspections, `applies_to`, the changed set, the cache, the skips |
+| `python3 verify/rules_gate_test.py` (the runner hands it the stub) | `[rules_gate] 0 failure(s), 0 skip(s)` — the gate's own three codes: a seeded violation exits 1, a file no rule claims 0, a gate that cannot run 2 |
+| `nvim --headless -l verify/nvim_live.lua` | 11 ok, 0 failures, 0 skips with a stub endpoint (1 skip without one: the resolve step has no model) |
+| `nvim --headless -l verify/dismiss_test.lua` | 7 ok, 0 failures, 0 skips — a finding is dismissed, recorded per repository, and does not resurface |
+| `nvim --headless -l verify/nvim_ui_test.lua` | 116 ok, 0 failures, 0 skips — the plugin's own surfaces with a fresh stub; it reads the stub's control plane from `JEV_BASE_URL`, and it gives its fixture root back unless the caller names one |
+| `nvim --headless -l verify/rules_live.lua` | 39 ok, 0 failures, 0 skips on Neovim **0.12.5 and 0.12.1** — a rule's finding on the sign column after a save, `:Jev inspect` answering with the same finding, its counts and its skips, `--force` re-running an unchanged document |
+| `nvim --headless -l verify/result_surface.lua` | 110 ok, 0 failures, 0 skips on **both** Neovim versions — a report never changes the window count across the command, `q` puts the buffer the user was in back on screen, an unsaved buffer is still modified, the diff preview leaves the user's buffer-local maps alone, and a send that fails says so and takes its surface back |
+| `nvim --headless -l verify/context_search.lua` | 7 ok, 0 failures, 0 skips — the plugin's own local search: `rg` and the `grep` fallback cite the same files and lines, and with neither engine installed the refusal names both |
+| `bash verify/omp_lsp.sh` | `[omp] 0 failure(s), 1 skip(s)` in CI — OMP, a client that shares no code with this repository, receives a rule's finding over `textDocument/diagnostic` and reaches `workspace/executeCommand jev.inspect`, a no-rules control finding nothing. The skip reads `omp is not on PATH, so a non-Neovim client cannot be driven`; on a machine with `omp`, the row reports 0 skips |
+| `python3 verify/quality_eval.py --base-url https://openrouter.ai/api/v1 --model google/gemini-2.5-flash-lite` | **recall 3/4, precision 3/3, 0 findings on both clean files**, 6 calls / 2950 tokens billed, 4.5 s, exit 0 — the miss (`swallowed_error.py`) is run-to-run variance on a cheap model (a control run with the same model caught 4/4). Runnable whenever an endpoint and a key are given (`JEV_API_KEY_ENV` names the chat tiers' key variable); the suite reports the row as `?` with the reason when none is, which is what it does in CI (`JEV_API_KEY_ENV names OPENROUTER_API_KEY, which is unset or empty`) |
+| `python3 verify/repo_bench.py --repo . --limit 40` | **not a suite row**: nothing in `verify/run-suite.sh` invokes it. Run by hand: 40 files, 33 analysed, 62 findings, **3.21 per 1000 lines** (three runs: 3.21 / 3.48 / 3.71; 7 files per run outran the 60 s per-file bound and are reported as such). Measured 2026-09-18, before the inline-completion removal, which touches no findings path |
 
-Every row above was re-run on **2026-09-20** as one supervised pass (`verify/run-suite.sh`, one
-stub for the whole run, `NVIM_BINS` covering 0.12.5 and 0.12.1): all green, and `quality_eval` the
-single row that could not run (`?` — no endpoint key in the environment that day).
+The table mirrors `verify/run-suite.sh`'s row list in the runner's order. The numbers are the
+suite's verdict at `bce3d8e` (run `35509988121`, `verification (full-table)`): 33 rows, every one
+`ok` except `quality_eval` (`?`, no key) and `omp_lsp` (1 SKIP, `omp` not on the runner's `PATH`).
+`stub health` is the runner's own first row rather than a harness of its own, and `repo_bench` is
+the one row in this table that no runner invokes: it is a measurement taken by hand.
 
 **What the table still cannot say** (2026-09-20). Three limiters, recorded rather than left
 implied:
