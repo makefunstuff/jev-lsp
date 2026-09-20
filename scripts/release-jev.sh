@@ -31,6 +31,13 @@
 # repository root; `--out` may name anywhere, and CI names `target/dist` for the same reason.
 # The artifacts are never committed: a release asset belongs on the release.
 #
+# A future release should also carry `LICENSE` as an asset. The tarballs hold the two binaries and
+# nothing else, and the `.vsix` bundles the licence only from the build after `pack.sh` learned to
+# copy it, so a reader of the release page has no copy of the text unless one is uploaded beside
+# the archives. This is written down rather than added to the asset list today: `v0.1.0` is
+# published, its `SHA256SUMS` has been checked against the downloaded files, and adding a file to
+# that release would invalidate a chain somebody may already hold.
+#
 # The version. `[workspace.package] version` in `Cargo.toml` owns it: that is the string the
 # binaries print (`jev-lsp --version`) and the string the asset names carry.
 # `editors/cursor/package.json` carries the extension's own version, which the editor requires

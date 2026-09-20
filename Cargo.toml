@@ -9,6 +9,13 @@ rust-version = "1.75"
 # Read by `cargo binstall` (it looks the releases up under the repository linked here) and by
 # anyone deciding where a downloaded crate came from. The released crates inherit it.
 repository = "https://github.com/makefunstuff/jev-lsp"
+# The licence of the whole workspace, named once: the crates inherit it, `LICENSE` at the
+# repository root is the text, and `cargo package`/crates.io/`cargo binstall` read this field.
+license = "MIT"
+# The text itself, so `cargo package` puts it *inside* the crate archive: cargo only auto-includes
+# a licence file found in the package root, and this one is at the workspace root, which is why
+# `cargo package --list -p jev-lsp` listed no `LICENSE` before this line existed.
+license-file = "LICENSE"
 
 [workspace.dependencies]
 anyhow = "1"
