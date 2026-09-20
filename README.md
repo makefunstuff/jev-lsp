@@ -14,7 +14,7 @@
 3. **Steer** — jev-lsp on save (human or harness).
 4. **Stay on track** — findings are ordinary diagnostics.
 
-Semi-deterministic: pattern is exact; judgement must clear the rule’s floor before publish. No rules → `no_rules`, no ambient findings. Not a correctness oracle.
+Semi-deterministic: pattern is exact; judgement must clear the rule’s floor before publish. Not a correctness oracle. A repository with no `.jev/rules/` of its own is inspected by the rule set shipped in the binary.
 
 ## Cost
 
@@ -47,13 +47,15 @@ ln -s /path/to/jev-lsp/nvim ~/.local/share/nvim/site/pack/jev/start/jev
 require('jev').setup({})
 ```
 
-Then: export a decide key, add a rule, open a file, save.
+Then: export a decide key, open a file, save.
 
 ```sh
 export TYPESAFE_API_KEY=…   # hosted Jev default (api.typesafe.ai)
 ```
 
-- First rule: [`docs/TUTORIAL.md`](docs/TUTORIAL.md) §3 · schema: [`docs/GUIDE.md`](docs/GUIDE.md) §4
+A repository with no `.jev/rules/` is inspected all the same: the rule set the binary ships runs on it, those findings carry `rule_source: "builtin"`, and `:Jev inspect` prints ` [builtin]` or ` [repository]` after each label. `jev rules init` writes the shipped set into `.jev/rules/` as `prose-…json` / `code-…json` to read and edit; a file you edit **shadows** the shipped rule of the same `id`, and `rules.defaults: false` turns the shipped set off.
+
+- First rule of your own: [`docs/TUTORIAL.md`](docs/TUTORIAL.md) §3 · schema: [`docs/GUIDE.md`](docs/GUIDE.md) §4
 - Without the plugin (Neovim ≥ 0.12):
 
 ```lua

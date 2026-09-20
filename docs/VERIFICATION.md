@@ -105,6 +105,21 @@ rather than accumulated, and the directory holds no `.git`, so it cannot become 
 four other probes write nothing: their fixed `/tmp/jev-probe-*` and `/tmp/jev-trace-fixture.lua`
 paths are buffer names used to build `file://` uris.
 
+**A harness cannot assert a count that includes a set the binary ships.** The rule set that ships
+in the binary is part of every pass now, and two fixtures had to say so. The CLI parity check for
+a file *no* rule claims used `notes.md`, which the shipped prose rules claim (`**/*.md`): the
+fixture had four rules considering it, `considered` was 4 rather than 0, and three checks read as
+failures while both front ends agreed exactly (`cli=4/0, lsp=4/0`). It uses `notes.zzz` now, an
+extension nothing ships a rule for. `verify/rules_test.py` sets `rules: {defaults: False}`,
+because every count in that file ("considered == 2", "loaded == 3") is about the rules the fixture
+*writes*, and a shipped rule claiming `**/*.rs` would make all of them wrong while nothing was
+broken; what the shipped set does where a repository has written nothing is asserted in the crate
+tests
+(`jev-lsp::engine::tests::a_repository_with_no_rules_of_its_own_is_inspected_by_the_shipped_set`),
+where the shipped input is a fixture of the test's own. The rule for the next fixture: a premise
+of "nothing applies" needs an extension nothing claims, and a count over both sources is a count
+of the build rather than of the fixture.
+
 ## 1. Independent LSP client
 
 `verify/lsp_client.py` — a stdio LSP client written against the specification, **sharing

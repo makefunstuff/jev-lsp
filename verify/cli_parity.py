@@ -240,11 +240,16 @@ def main():
         # claims must be reported as *skipped* by both front ends, with the same words. Asserting
         # only that both are non-empty would have passed while the CLI reported nothing at all.
         print("[parity] inspect, nothing to run")
-        # `.zzz`, deliberately: this check is about a file *no* rule claims, and since the
-        # shipped defaults exist (`rules.defaults`, PROTOCOL §9) a `.md` fixture is claimed by
-        # the prose rules shipped with the binary — a harness that cannot know their content
-        # cannot use a real document type here. An extension nothing ships a rule for keeps the
-        # check's meaning: both front ends must report the same skip, word for word.
+        # This fixture means **"nothing applies to this file"**, and `.zzz` is deliberate: the
+        # shipped defaults (`rules.defaults`, PROTOCOL §9) claim real document types — `.md` from
+        # the prose group, `.py` and `.java` from the code group — so a fixture in a language
+        # anything ships rules for is *claimed*, `considered` is not 0, and this check reads as a
+        # failure while both front ends agree exactly. A harness cannot know what the binary
+        # ships, so the only durable form of "nothing applies" is an extension nothing ships a
+        # rule for. The other form — "only my rules ran" — is pinned with
+        # `rules: {defaults: False}`, which this harness cannot do: the CLI reads no settings
+        # (there is no client to send them), so pinning one side would break the comparison.
+        # Every fixture in this file therefore uses a type no shipped rule claims.
         notes = os.path.join(workdir, "notes.zzz")
         with open(notes, "w") as fh:
             fh.write("# notes\n")
@@ -295,9 +300,16 @@ def main():
         # `no_rules` reads like "you have no rules" — and both are only visible with a nested
         # fixture in a repository.
         print("[parity] inspect, a nested file and a relative applies_to")
+        # `.zzz`, for the reason the "nothing to run" fixture above carries: this check asserts
+        # `considered == candidates == findings == 1` — **a count this fixture's own rule wrote**
+        # — and it cannot pin `rules.defaults: false`, because the CLI side has no settings
+        # channel to pin. The code group's shipped rules claim `**/*.py`, so a `.py` fixture
+        # counts 3 here and the check reads as a failure while both front ends agree exactly
+        # (`cli=3, lsp=3`). The fixture's point — a repository-relative `applies_to` matched
+        # against a *nested* path, through both front ends — is unaffected by the extension.
         nested_dir = os.path.join(workdir, "nested", "deep")
         os.makedirs(nested_dir)
-        nested = os.path.join(nested_dir, "mod.py")
+        nested = os.path.join(nested_dir, "mod.zzz")
         with open(nested, "w") as fh:
             fh.write("def load(path):\n    return open(path)\n")
         with open(os.path.join(rules_dir, "a.json"), "w") as fh:
@@ -306,7 +318,7 @@ def main():
                 "title": "Unclosed file handle",
                 "text": "A file opened here is never closed.",
                 "severity": "warning",
-                "applies_to": ["nested/**/*.py"],
+                "applies_to": ["nested/**/*.zzz"],
                 "inspection": {"kind": "regex", "pattern": r"open\("},
                 "judgement": {"question": "Is this handle left open?",
                               "criteria": {"true": "nothing closes it", "false": "it is closed"},

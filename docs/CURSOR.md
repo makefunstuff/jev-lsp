@@ -286,6 +286,12 @@ Not verified, and why:
 
 - **That a human click renders and applies.** Nothing scriptable can click Cursor's lens; the
   bridge is proven up to the boundary the editor owns. This is the gap the capture is for.
+- **`rule_source` on an inspect finding.** The extension renders `jev.inspect` through its
+  summary path: one line in *Output → Jev*, carrying the counts and the number of findings. That
+  line does not print which rule set a finding came from, so the ` [builtin]` / ` [repository]`
+  marker the Neovim surface shows after each label has no equivalent here, and a reader cannot
+  tell a shipped rule's finding from one this repository wrote. A known gap rather than a design
+  choice; the code change is routed separately.
 - **Multi-root workspaces, remote/SSH and dev containers.** One server process per window, rooted
   at the first workspace folder.
 - **Streaming into a buffer.** `$/progress` messages reach the status bar; the partial markdown

@@ -179,13 +179,24 @@ def main():
     # The harness makes many decision calls in a few seconds; the shipped per-minute ceiling is
     # sized for a person typing, and a refusal here would be the harness measuring itself.
     #
-    # `rules.defaults` is off for these fixtures on purpose: every count below ("considered == 2",
-    # "loaded == 3") is about the rules *this* fixture wrote, and the shipped set is a second
-    # source whose contents this file cannot know — a shipped rule that claims `**/*.rs` would
-    # make every one of those counts wrong without anything being broken. What the shipped set
-    # does when a repository has written nothing is asserted in the crate tests
+    # `rules.defaults` is off for these fixtures on purpose. Every fixture in this file means
+    # **"only my rules ran"**: the counts below ("considered == 2", "loaded == 3") and the
+    # "nothing to run" case (check 10) are about the rules *this* fixture wrote, and the shipped
+    # set is a second source whose contents this file cannot know — a shipped rule claiming
+    # `**/*.rs` or `**/*.md` makes every one of those wrong without anything being broken (that
+    # is measured: three instances across this file and `cli_parity.py`, in the run that landed
+    # the code group's `**/*.py` rules). Pinning is the durable form here because this harness is
+    # LSP-only, so the setting can be sent to the one side there is.
+    #
+    # A fixture that means **"nothing applies to this file"** instead needs an extension nothing
+    # ships a rule for — `cli_parity.py`'s `notes.zzz` and `nested/deep/mod.zzz` — because a
+    # harness comparing the CLI against the LSP cannot pin one side and not the other: the CLI
+    # reads no settings at all.
+    #
+    # What the shipped set does when a repository has written nothing is asserted in the crate
+    # tests, over both a fixture set and the real embedded one
     # (`jev-lsp::engine::tests::a_repository_with_no_rules_of_its_own_is_inspected_by_the_shipped_set`,
-    # `jev::run::tests::...`), where the shipped input is a fixture of the test's own.
+    # `jev::run::tests::a_repository_with_no_rules_is_inspected_by_the_shipped_set_this_binary_carries`).
     server.settings = {
         "budget": {"max_calls_per_min": 500, "max_calls_per_hour": 2000},
         "rules": {"defaults": False},
