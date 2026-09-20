@@ -19,7 +19,7 @@
           "true": "the document's own sentence calls something seamless, powerful, blazing, cutting-edge, effortless, enterprise-grade or the like, and nothing measurable stands behind the word",
           "false": "the word is quoted or named in order to ban it, sits in a code span, identifier or path, is a term of art (a `robust` z-score, a token `unlock`, a `blazing` product name), or is another project's own description cited here (a catalogue entry, a vendored library's README, a paper, sample model output)"
         },
-        "min_probability": 0.9
+        "min_probability": 0.87
       },
       "verb_hint": "docs"
     }

@@ -19,7 +19,7 @@
           "true": "the line opens as a model answering one question (`as an AI`, `I hope this helps`, `I'd be happy to`, `let me know if you need`, `Certainly!`) inside a document",
           "false": "the line quotes the phrasing in order to forbid it, shows it as sample model output or a transcript, is ordinary human support prose, or is a code span or an identifier"
         },
-        "min_probability": 0.9
+        "min_probability": 0.5
       },
       "verb_hint": "docs"
     }
