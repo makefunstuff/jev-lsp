@@ -5,6 +5,9 @@
 > configuration keys may change without notice; nothing here should be relied on yet.
 > this is PoC and heavily under slop-generating phases to proof that lsp approach actually work first
 
+The documents in this repository are published as a page at
+https://makefunstuff.github.io/jev-lsp/ — the same content, rendered for reading.
+
 ![OMP writing a Rust handler, with jev-lsp's rule finding on the generated line steering the fix](docs/assets/jev-steering.svg)
 <sub><b>OMP</b>, a third-party LSP client: the rule's finding on the generated line steers the fix.</sub>
 
