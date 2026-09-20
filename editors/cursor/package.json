@@ -4,6 +4,7 @@
   "description": "Starts jev-lsp --stdio and wires its diagnostics, code actions, code lenses, hover and commands into Cursor.",
   "version": "0.1.0",
   "publisher": "makefunstuff",
+  "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
   },

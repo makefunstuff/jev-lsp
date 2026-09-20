@@ -156,3 +156,9 @@ what you were looking at with six lines you then had to close was the original c
   partial markdown in `data` is not written into a buffer as it arrives.
 - **The gutter mark is one mark.** PROTOCOL §9 permits only `warning` and `information`, so there
   is no severity to distinguish.
+
+## Licence
+
+MIT, the same as the repository, and `package.json` declares it so a `.vsix` reader sees a
+licensed extension rather than an unnamed one. `pack.sh` does not bundle the root `LICENSE` file
+into the archive it builds, so a redistribution should carry that file alongside.
