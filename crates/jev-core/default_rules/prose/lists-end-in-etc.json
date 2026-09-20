@@ -4,22 +4,22 @@
     {
       "id": "lists-end-in-etc",
       "title": "A list that ends in etc.",
-      "text": "An enumeration that closes with `etc.`, `and so on` or `and more` tells the reader the list was never finished: either the items matter and belong there, or they do not and the list should end where it ends. Name the last item, or name what the rest have in common.",
+      "text": "An enumeration that closes with `etc.`, `and so on` or `and more` tells the reader the list was never finished: either the items matter and belong there, or they do not and the list should end where it ends. Name the last item, or name what the rest have in common. A point of style, not of ownership: a copied file in the tree is read the same way, since whether a file belongs to another project cannot be settled from the line and the head.",
       "severity": "warning",
       "applies_to": [
         "**/*.md"
       ],
       "inspection": {
         "kind": "regex",
-        "pattern": "(?mi)^[^\\n]*,[^\\n]*\\betc\\.|\\band so on[ \\t]*[.!?]?[ \\t]*$|\\band more[ \\t]*[.!?]?[ \\t]*$"
+        "pattern": "(?mi)^[^\\n]*,[^\\n]*[^`\\n]\\betc\\.|\\band so on[ \\t]*[.!?]?[ \\t]*$|\\band more[ \\t]*[.!?]?[ \\t]*$"
       },
       "judgement": {
         "question": "Does this line close an enumeration with `etc.`, `and so on` or `and more`?",
         "criteria": {
           "true": "the line ends a list of examples with `etc.`, `and so on` or `and more`, leaving the reader to guess what the list did not name",
-          "false": "`etc.` sits inside a path, filename or code span; `more` modifies a noun rather than closing a list (more history); or the line quotes another project's own text"
+          "false": "`etc.` sits inside a path, filename or code span; `more` modifies a noun rather than closing a list (more history); or the line names the terminator in order to ban it, or quotes another project's own copy (a tool catalogue's entry, a tagline, sample model output)"
         },
-        "min_probability": 0.9
+        "min_probability": 0.25
       },
       "verb_hint": "docs"
     }

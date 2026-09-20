@@ -19,7 +19,7 @@
           "true": "the line hedges or appeals to shared knowledge (`it is worth noting`, `of course`, `obviously`, `needless to say`) in place of the fact or the measurement",
           "false": "the phrase is quoted or named in order to ban it, or the word is doing factual work (a test that is not obviously broken, a step the reader can in fact skip)"
         },
-        "min_probability": 0.9
+        "min_probability": 0.75
       },
       "verb_hint": "docs"
     }
