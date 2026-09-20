@@ -222,6 +222,13 @@ for nvim_bin in $NVIM_BINS; do
   run "dismiss[$nvim_tag]" "$nvim_bin" --headless -u NONE -l verify/dismiss_test.lua
   run "nvim_ui_test[$nvim_tag]" "$nvim_bin" --headless -u NONE -l verify/nvim_ui_test.lua
   run "rules_live[$nvim_tag]" "$nvim_bin" --headless -u NONE -l verify/rules_live.lua
+  # Where a result goes: the report takes the buffer in the window the user is already in, and
+  # the window count does not change *across* the command rather than merely before and after it
+  # (a split that closed itself would pass that weaker check). No knob of its own: it needs
+  # JEV_LSP_BIN, and for its one streamed check a chat endpoint, which is the stub this runner
+  # has already started and JEV_BASE_URL already points at. A model endpoint that does not answer
+  # is a SKIP for that check and never a pass.
+  run "result_surface[$nvim_tag]" "$nvim_bin" --headless -u NONE -l verify/result_surface.lua
 done
 
 if [ "${NVIM_ONLY:-0}" != "1" ]; then
