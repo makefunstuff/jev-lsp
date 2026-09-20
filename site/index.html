@@ -1,0 +1,1325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jev-lsp — the rules your repository states, checked on the line</title>
+<meta name="description" content="jev-lsp is a language server that runs the rules your repository states in .jev/rules/*.json over the files you have open, and reports through your editor's own surfaces. A classifier answers one typed question per candidate line. Proof of concept, with measured costs.">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-head">
+  <div class="container">
+    <a class="wordmark" href="./">jev-lsp <span>· proof of concept</span></a>
+    <nav class="toc" aria-label="Sections">
+      <ul>
+        <li><a href="#loop">The loop</a></li>
+        <li><a href="#cases">Use cases</a></li>
+        <li><a href="#cost">Cost</a></li>
+        <li><a href="#install">Install</a></li>
+        <li><a href="#rules">Rules</a></li>
+        <li><a href="#evidence">Evidence</a></li>
+        <li><a href="#limits">Limitations</a></li>
+        <li><a href="#read">Read more</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="container">
+    <div class="prose">
+      <p class="eyebrow">Documentation, and the case for using it</p>
+      <h1>A language server that checks your code against rules your repository states.</h1>
+      <p><strong>Jev is a classifier, not a chat model.</strong> A rule asks one typed question
+      about one line, and Jev answers with a value and a probability, never prose. The rule is
+      your own words plus a deterministic pattern that names the exact lines, so the pattern is
+      exact and the judgement is a probability that has to clear the rule's own floor before
+      anything is published. That is what makes a rule semi-deterministic.</p>
+      <p>Jev-lsp runs that pass over the files you have open and reports through your editor's
+      own surfaces: diagnostics, code actions, code lens. The ambient pass is the rules in
+      <code>.jev/rules/*.json</code>, applied on save, in whatever client you work in. Standard
+      LSP surfaces only, so any client that can start a language server can use it. Neovim is the
+      primary client.</p>
+
+      <div class="note">
+        <span class="label">Proof of concept</span>
+        <p>The interface, the contract and the configuration keys may change without notice, and
+        nothing here should be relied on yet. The repository's front page says the same thing,
+        about itself:</p>
+        <blockquote>
+          <p>Heavily work in progress. The interface, the contract and the configuration keys may
+          change without notice; nothing here should be relied on yet.</p>
+        </blockquote>
+      </div>
+
+      <dl class="facts">
+        <div>
+          <dt>Shape</dt>
+          <dd>One server, standard surfaces: <code>textDocument/diagnostic</code>,
+          <code>codeAction</code>, <code>codeLens</code>, <code>workspace/executeCommand</code>.
+          No custom <code>jev/…</code> methods.</dd>
+        </div>
+        <div>
+          <dt>Ambient pass</dt>
+          <dd>The repository's rules. With no rule files the pass publishes nothing and reports
+          <code>no_rules</code>.</dd>
+        </div>
+        <div>
+          <dt>Decision tier</dt>
+          <dd>One question per candidate line, answered with a value and a probability. The chat
+          tiers behind actions, plans and explanations are separate and on demand.</dd>
+        </div>
+        <div>
+          <dt>Measured cost</dt>
+          <dd>$0.00022 for the rules pass over <code>crates/jev-lsp/src/server.rs</code> (2.6k
+          lines), against $0.00306 for a chat review of the same file.</dd>
+        </div>
+      </dl>
+
+      <p>What it is not. It does not know your spec unless a rule carries it. It answers the
+      question in the rule and nothing else. It is not a correctness oracle, and
+      <code>state = "ready"</code> means the contract passed rather than the file still compiles.
+      A document with text is its unit, so a file has to exist: greenfield work with no file to
+      point at is served by the shell, not by an editor.</p>
+    </div>
+
+    <figure>
+      <div class="panel">
+        <div class="panel-head">
+          <span class="name">handler.rs</span>
+          <span>OMP · verify/omp_lsp.sh</span>
+        </div>
+<pre><code><span class="dim">●</span> <span class="fill">write</span>   <span class="fill">handler.rs</span>   <span class="dim">(+6 lines)</span>
+  <span class="fill">pub fn handle(path: &amp;str) -&gt; String {</span>
+  <span class="fill">    let body = fs::read_to_string(path).unwrap();</span>
+  <span class="fill">    body</span>
+  <span class="fill">}</span>
+
+<span class="dim">●</span> <span class="fill">lsp</span>     <span class="dim">action=request  file=handler.rs  query=workspace/executeCommand</span>
+  <span class="dim">jev-lsp ← workspace/executeCommand:</span>
+  <span class="fill">{ "candidates": 1, "considered": 1, "ok": true, "skipped": [],</span>
+  <span class="fill">  "schema": "jev.result/1",</span>
+  <span class="fill">  "findings": [ { "id": "83f83e989c25", "line": 3, "start_col": 4,</span>
+  <span class="fill">                  "severity": "warning", "verb": "fix" } ] }</span>
+
+<span class="dim">●</span> <span class="fill">lsp</span>     <span class="dim">action=diagnostics  file=handler.rs</span>
+  <span class="fill">1 warning(s):</span>
+  <span class="dim"># handler.rs</span>
+<span class="row">4:5 [warning] [jev] Unwrap in a request handler — A handler must not unwrap;</span>
+<span class="row">return the error instead. — reachable (p=0.90) (83f83e989c25)</span>
+</code></pre>
+      </div>
+      <figcaption>Recorded from the fixture in <code>verify/omp_lsp.sh</code>: the
+      <code>lsp</code> call, the <code>jev.inspect</code> body, the diagnostic text and the
+      finding id <code>83f83e989c25</code>. The agent here is <b>OMP</b>, a client nobody in this
+      repository wrote. The file write above is illustrative; the screenshot in
+      <a href="#loop">The loop</a> is the same run.</figcaption>
+    </figure>
+  </div>
+</section>
+<section id="loop" aria-labelledby="loop-h">
+  <div class="container">
+    <div class="prose">
+      <p class="eyebrow">01 · The loop</p>
+      <h2 id="loop-h">Spec, rules, steering</h2>
+      <p>The workflow the rules carry, quoted from the front page of the repository:</p>
+      <ol>
+        <li><strong>Plan or spec.</strong> You, with coworkers or an LLM, write down what the code
+        has to do.</li>
+        <li><strong>Rules.</strong> Turn that spec into <code>.jev/rules/*.json</code>: in the
+        repository, under version control, reviewed like code.</li>
+        <li><strong>Steering.</strong> Jev-lsp applies the rules while you edit by hand, or while
+        a harness generates code, so the findings arrive where the code is: on the line, in the
+        client you already use.</li>
+        <li><strong>On track.</strong> The codebase keeps matching the requirements, and a
+        harness that reads diagnostics picks the steering up.</li>
+      </ol>
+      <p>A person or an agent can do that review by hand. Jev-lsp moves it into the loop: every
+      save, every file, in whatever client you work in. The finding arrives as a diagnostic the
+      client pulls, with the code action and the code lens beside it. No popup, no sound.</p>
+    </div>
+
+    <figure>
+      <img src="./assets/jev-steering.svg" width="1200" height="700" alt="A terminal window running OMP: the user asks for a handler, the agent writes handler.rs with fs::read_to_string(path).unwrap() on line 4, then calls the lsp tool for jev.inspect, which answers candidates 1 and one warning on line 4. The agent edits the line and re-pulls diagnostics, which answer OK. A second pane shows the repository rule that fired.">
+      <figcaption><b>OMP</b>, a third-party LSP client: the rule's finding on the generated line
+      steers the fix. The recorded lines are the <code>lsp</code> calls and their arguments, the
+      <code>jev.inspect</code> body, the diagnostic text and the finding id; a replay of
+      <code>verify/omp_lsp.sh</code> reproduced them byte for byte. Source:
+      <code>docs/assets/jev-steering.svg</code>.</figcaption>
+    </figure>
+
+    <figure>
+      <img src="./assets/jev-neovim.webp" width="1568" height="818" loading="lazy" decoding="async" alt="A Neovim window with Rust code. jev's annotations sit beside the code, next to clangd's own diagnostics.">
+      <figcaption><b>Neovim</b>, the primary client: jev's annotations beside the code, next to
+      clangd's own diagnostics. Source: <code>docs/assets/jev-neovim.webp</code>.</figcaption>
+    </figure>
+
+    <div class="prose">
+      <h3>A rule is a pattern, a question and a floor</h3>
+      <p>The pattern names candidate lines and decides nothing. The question is what the decision
+      tier is asked about each candidate. <code>min_probability</code> is the floor a
+      <code>true</code> answer must clear before anything is published, and a <code>false</code>
+      answer stays invisible. The finding that reaches the editor carries the rule's title, its
+      prose and the reason the judgement gave:</p>
+      <div class="panel">
+        <div class="panel-head">
+          <span class="name">.jev/rules/no-unwrap-outside-tests.json</span>
+          <span>three fields of the rule</span>
+        </div>
+<pre><code><span class="fill">"inspection"</span>: { <span class="fill">"kind"</span>: <span class="dim">"regex"</span>, <span class="fill">"pattern"</span>: <span class="dim">"\\.unwrap\\(\\)"</span> },
+<span class="fill">"judgement"</span>:  { <span class="fill">"question"</span>: <span class="dim">"Is this unwrap on a path that ships…"</span>,
+                <span class="fill">"min_probability"</span>: <span class="dim">0.85</span> }
+</code></pre>
+      </div>
+      <p>The pattern is why the cost does not grow with the file. It names the lines worth asking
+      about, so a 2.6k-line document costs 5,341 tokens in rather than the 30,562 a review of the
+      same file cost. <a href="#cost">The measured tables are below.</a></p>
+      <p>With no rules there are no ambient findings, and the pass reports <code>no_rules</code>
+      rather than a clean file. The chat review does not step in to cover the gap; that is a
+      decision recorded in <code>PROTOCOL.md</code> §12, not an omission. A save where no rule's
+      pattern matches makes no model call at all.</p>
+    </div>
+  </div>
+</section>
+<section id="cases" aria-labelledby="cases-h">
+  <div class="container">
+    <div class="prose">
+      <p class="eyebrow">02 · Use cases</p>
+      <h2 id="cases-h">Six rules, and what they answered</h2>
+      <p>Three of the twenty-one rules this repository states about itself, then three rules from
+      <code>docs/TUTORIAL.md</code> with the answers the decision tier gave them. The rule
+      documents are quoted as they are stored.</p>
+    </div>
+
+    <div class="prose">
+      <h3>The check is the repository's own prose</h3>
+      <p><code>docs/STYLE.md</code> states the register for every document here and ships the
+      audit that enforces it. The rule below is that audit as data: the same regex, and one
+      question that decides whether a hit is a quotation, a banned example or a hedge. The files
+      it claims are this repository's own prose.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="name">.jev/rules/words-must-carry-a-fact.json</span>
+        <span>verbatim</span>
+      </div>
+<pre><code>{ <span class="fill">"schema"</span>: <span class="dim">"jev.rules/1"</span>,
+  <span class="fill">"rules"</span>: [
+    { <span class="fill">"id"</span>: <span class="dim">"words-must-carry-a-fact"</span>,
+      <span class="fill">"title"</span>: <span class="dim">"A word must carry a fact, not a temperature"</span>,
+      <span class="fill">"text"</span>: <span class="dim">"The register bans the words that cannot be checked \u2014 powerful, seamless, robust, simple, easy, effortless, just, very, mostly \u2014 because a reader can neither verify nor act on them; a sentence that needs one has not said what it means."</span>,
+      <span class="fill">"severity"</span>: <span class="dim">"warning"</span>,
+      <span class="fill">"applies_to"</span>: [
+        <span class="dim">"**/README.md"</span>,
+        <span class="dim">"**/STATUS.md"</span>,
+        <span class="dim">"**/PROTOCOL.md"</span>,
+        <span class="dim">"**/docs/**/*.md"</span>
+      ],
+      <span class="fill">"inspection"</span>: {
+        <span class="fill">"kind"</span>: <span class="dim">"regex"</span>,
+        <span class="fill">"pattern"</span>: <span class="dim">"(?i)\\b(powerful|<wbr>simple|<wbr>simply|<wbr>seamless|<wbr>robust|<wbr>delightful|<wbr>easy|<wbr>easily|<wbr>effortless|<wbr>just|<wbr>mostly|<wbr>quite|<wbr>very)\\b"</span>
+      },
+      <span class="fill">"judgement"</span>: {
+        <span class="fill">"question"</span>: <span class="dim">"Does this line use a banned word in its own voice, rather than quoting it as an example or using it for a specific fact?"</span>,
+        <span class="fill">"criteria"</span>: {
+          <span class="fill">"true"</span>: <span class="dim">"the document itself uses the word as a hedge or a temperature"</span>,
+          <span class="fill">"false"</span>: <span class="dim">"it is quoted as a banned example, or it names a measurement, or it means only (`just` the cursor's line)"</span>
+        },
+        <span class="fill">"min_probability"</span>: <span class="dim">0.8</span>
+      },
+      <span class="fill">"verb_hint"</span>: <span class="dim">"docs"</span>
+    }
+  ]
+}
+</code></pre>
+    </div>
+    <div class="prose">
+      <p>The <code>criteria</code> pair is where the work happens. The paragraph in
+      <code>docs/STYLE.md</code> that bans those words contains most of them, and a pattern on
+      its own would report it. The <code>false</code> side is what a regex cannot state: a quoted
+      example, a named measurement, and <code>just</code> used to mean <em>only</em>.</p>
+    </div>
+
+    <div class="prose">
+      <h3>A convention, with the answer measured</h3>
+      <p>The pattern finds every <code>.unwrap()</code> in the file and cannot tell a test helper
+      from a handler. The question is what separates them, and the answers were measured against
+      hosted Jev (<code>typesafe/jev-1.13</code>): an unwrap on a request-reachable path answered
+      <b>0.85–0.91</b> across runs, and the same call inside <code>#[cfg(test)]</code> answered
+      <b>0.05</b> on 15 of 15 runs. The <code>criteria</code> states the same split in the rule,
+      and the criterion is what carries the decision.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="name">.jev/rules/no-unwrap-outside-tests.json</span>
+        <span>verbatim</span>
+      </div>
+<pre><code>{ <span class="fill">"schema"</span>: <span class="dim">"jev.rules/1"</span>,
+  <span class="fill">"rules"</span>: [
+    { <span class="fill">"id"</span>: <span class="dim">"no-unwrap-outside-tests"</span>,
+      <span class="fill">"title"</span>: <span class="dim">"Unwrap outside tests"</span>,
+      <span class="fill">"text"</span>: <span class="dim">"A `.unwrap()` outside test code is a defect: the value was not checked, and a failed check takes the process down instead of the request \u2014 handle the error, or say in a comment why it cannot fail."</span>,
+      <span class="fill">"severity"</span>: <span class="dim">"warning"</span>,
+      <span class="fill">"applies_to"</span>: [
+        <span class="dim">"**/crates/**/*.rs"</span>
+      ],
+      <span class="fill">"inspection"</span>: {
+        <span class="fill">"kind"</span>: <span class="dim">"regex"</span>,
+        <span class="fill">"pattern"</span>: <span class="dim">"\\.unwrap\\(\\)"</span>
+      },
+      <span class="fill">"judgement"</span>: {
+        <span class="fill">"question"</span>: <span class="dim">"Is this unwrap on a path that ships and can reach a value it did not check, rather than inside a test module, a doc comment, or behind an invariant the surrounding code states?"</span>,
+        <span class="fill">"criteria"</span>: {
+          <span class="fill">"true"</span>: <span class="dim">"code that ships can reach it and the value is not guaranteed"</span>,
+          <span class="fill">"false"</span>: <span class="dim">"it is in a test module, quoted in a doc comment, or behind an invariant the surrounding lines state"</span>
+        },
+        <span class="fill">"min_probability"</span>: <span class="dim">0.85</span>
+      },
+      <span class="fill">"verb_hint"</span>: <span class="dim">"fix"</span>
+    }
+  ]
+}
+</code></pre>
+    </div>
+    <div class="prose">
+      <p>The floor is not a free parameter. At the 0.75 that this rule first shipped with, 4 of
+      15 runs published one of its two lines and not the other, from answers sitting in a
+      0.75–0.79 band. It ships <b>0.85</b> now, where none of 15 runs published either line, and
+      the fixture that must fire answered <b>0.97–0.98</b> on 15 of 15 runs at both floors. Over
+      this repository's own <code>crates/**/*.rs</code>, this rule accounted for both findings of
+      the sweep: one line of <code>crates/jev-lsp/src/server.rs</code>. Sources:
+      <code>docs/GUIDE.md</code> §4 and <code>docs/VERIFICATION.md</code> §8.</p>
+    </div>
+
+    <div class="prose">
+      <h3>One rule, four kinds of harness file</h3>
+      <p><code>|| true</code> and an empty <code>except</code> turn a broken run into a green one,
+      and the log reader cannot tell the two apart. The pattern names that shape in Python, in
+      shell and in the workflow files, so one rule covers the harnesses a result has to be
+      trusted from. The floor is 0.7 because the question has to separate a discarded failure
+      from cleanup whose failure cannot change the result.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="name">.jev/rules/no-swallowed-failures.json</span>
+        <span>verbatim, <code>text</code> and <code>criteria</code> trimmed to their first
+        sentence</span>
+      </div>
+<pre><code>{ <span class="fill">"schema"</span>: <span class="dim">"jev.rules/1"</span>,
+  <span class="fill">"rules"</span>: [
+    { <span class="fill">"id"</span>: <span class="dim">"no-swallowed-failures"</span>,
+      <span class="fill">"title"</span>: <span class="dim">"A failure the caller needed is not swallowed"</span>,
+      <span class="fill">"severity"</span>: <span class="dim">"warning"</span>,
+      <span class="fill">"applies_to"</span>: [
+        <span class="dim">"**/verify/**/*.py"</span>,
+        <span class="dim">"**/verify/**/*.sh"</span>,
+        <span class="dim">"**/verify/**/*.lua"</span>,
+        <span class="dim">"**/scripts/**/*.sh"</span>,
+        <span class="dim">"**/.github/workflows/*.yml"</span>
+      ],
+      <span class="fill">"inspection"</span>: {
+        <span class="fill">"kind"</span>: <span class="dim">"regex"</span>,
+        <span class="fill">"pattern"</span>: <span class="dim">"\\|\\|\\s*true\\b|<wbr>except[^:]*:\\s*(pass|<wbr>break|<wbr>continue)\\b"</span>
+      },
+      <span class="fill">"judgement"</span>: {
+        <span class="fill">"question"</span>: <span class="dim">"Does this hide a failure the caller or the log needed to see, rather than a best-effort step whose failure cannot matter?"</span>,
+        <span class="fill">"min_probability"</span>: <span class="dim">0.7</span>
+      },
+      <span class="fill">"verb_hint"</span>: <span class="dim">"fix"</span>
+    }
+  ]
+}
+</code></pre>
+    </div>
+    <div class="prose">
+      <p>The full document carries a <code>criteria</code> pair and a <code>text</code> that
+      states why: <q>a best-effort step that may fail says so where it fails</q>. It is the only
+      rule of the twenty-one that spans languages, because the shape it names appears in all of
+      them.</p>
+    </div>
+
+    <div class="prose">
+      <h3>A sentence from the spec becomes one question</h3>
+      <p>Take a line from the spec, <em>every public function documents the errors and empty
+      values a caller must handle</em>, and turn it into a pattern plus one question. Measured on
+      three public functions, the answers were <b>0.80</b>, <b>0.78</b> and <b>0.78</b>, and all
+      three published.</p>
+      <p>The question has to state the violation, because a <code>true</code> answer is what
+      publishes. Phrased as the property you want, <code>does this function document its
+      returns?</code>, the same rule answered <code>false</code> for all three functions at every
+      floor, <code>0.6</code> and <code>0.0</code> alike, and published nothing. Rephrased as the
+      defect, <code>does this function leave a caller unable to know what it can return?</code>,
+      it answered as above. A <code>false</code> answer is invisible through
+      <code>:Jev inspect</code>, which publishes only what clears the floor, so a backwards
+      question looks exactly like a rule that never fires.</p>
+    </div>
+
+    <div class="prose">
+      <h3>Code a model wrote, and the honest reading of a coarse question</h3>
+      <p>A comment that narrates the next line is the shape of machine-written slop, and the rule
+      that fires on it is the argument for putting the review in the loop. Measured on three
+      comments, it answered <b>0.65</b> (<code># Increment the counter for each frame.</code>, a
+      narration), <b>0.67</b> (<code># The upstream API returns 429 with no Retry-After, so back
+      off by hand.</code>, which explains why and is a false positive at this floor) and
+      <b>0.64</b> (<code># Return the parsed body.</code>, a narration). All three sit inside a
+      0.03 band, so no floor separates the narration from the explanation. The pattern is right
+      and the question is too coarse, which is a rule to sharpen rather than a floor to move.</p>
+      <p>That measurement is kept rather than replaced by a conclusion. A rule whose answers
+      straddle the floor is visible here as exactly that.</p>
+    </div>
+
+    <div class="prose">
+      <h3>A harness that reads diagnostics</h3>
+      <p>An agent that generates code reads diagnostics, so the same rule steers the generation
+      as it steers an edit. <code>verify/omp_lsp.sh</code> drives jev-lsp from OMP, a client
+      nobody here wrote, and asserts three things: that the finding reaches the agent's own
+      diagnostics carrying the rule's title, the judgement that followed the rule's prose, the
+      line, the finding id and the rule's severity; that <code>jev.inspect</code> answers through
+      OMP's tool surface with the same finding, its counts and its skips; and that the same
+      fixture with no <code>.jev/rules/</code> produces no jev diagnostic and an
+      <code>inspect</code> that says <code>no_rules</code>, so a green run cannot be the harness
+      finding something else. An unavailable client is a skip with the reason, never a false
+      pass.</p>
+    </div>
+  </div>
+</section>
+<section id="cost" aria-labelledby="cost-h">
+  <div class="container">
+    <div class="prose">
+      <p class="eyebrow">03 · Cost</p>
+      <h2 id="cost-h">What a pass costs</h2>
+      <p>A review re-reads the file. A decision answers about the lines a pattern named, so the
+      cost of the pass follows the candidates rather than the file. Everything below was measured
+      on 2026-09-20: the rules pass with <code>jev inspect --force</code> against the hosted
+      decide tier (<code>https://opencode.ai/zen/v1</code>, wire <code>system_one</code>, model
+      <code>jev-1.13</code>), and the review with <code>jev review</code> against a real chat
+      tier (<code>google/gemini-2.5-flash-lite</code> through OpenRouter).</p>
+    </div>
+
+    <div class="table-wrap">
+      <table class="wide">
+        <caption>The same file both ways. Source: <code>docs/MODEL.md</code> §7, with the short
+        version on the front page of <code>README.md</code>.</caption>
+        <thead>
+          <tr>
+            <th scope="col">document</th>
+            <th scope="col">rules pass (decide)</th>
+            <th scope="col">chat review</th>
+            <th scope="col" class="num">ratio</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="mark">
+            <th scope="row"><code>crates/jev-lsp/src/server.rs</code><br>2.6k lines</th>
+            <td>5,341 in / 345 out, 13 candidates, <b>2 findings</b>, 852 ms<br><b>$0.00022</b></td>
+            <td>30,562 in / 9 out, 0 findings, 3,637 ms<br><b>$0.00306</b></td>
+            <td class="num">5.7× tokens<br>13.6× dollars</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>crates/jev-core/src/config.rs</code><br>840 lines</th>
+            <td>3,151 in / 58 out, 2 candidates, 0 findings<br><b>$0.00013</b></td>
+            <td>10,617 in / 9 out, 0 findings, 927 ms<br><b>$0.00107</b></td>
+            <td class="num">3.4× tokens<br>8.4× dollars</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="table-wrap">
+      <table class="stack labels">
+        <caption>The rules pass over this repository: one <code>jev inspect --force</code> per
+        file, <code>crates/**/*.rs</code>. Source: <code>docs/MODEL.md</code> §7.</caption>
+        <tbody>
+          <tr>
+            <th scope="row">documents</th>
+            <td class="num">30</td>
+          </tr>
+          <tr>
+            <th scope="row">documents that made a decision call</th>
+            <td class="num">20</td>
+          </tr>
+          <tr>
+            <th scope="row">candidates / rules considered / findings</th>
+            <td class="num">140 / 362 / 2</td>
+          </tr>
+          <tr>
+            <th scope="row">tokens</th>
+            <td class="num">82,478 in, 3,831 out</td>
+          </tr>
+          <tr>
+            <th scope="row">wall time</th>
+            <td class="num">24.8 s</td>
+          </tr>
+          <tr class="mark">
+            <th scope="row">cost</th>
+            <td class="num">$0.0034</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="prose">
+      <p>The other ten documents had no candidate and cost nothing, because a save where no
+      rule's pattern matches makes no call at all. That works out at $0.00011 per document and
+      $0.00017 per document that called, 4,124 tokens in and 192 out per calling document. The
+      scale is the candidate count: the largest calling document (21 candidates) cost 6,859 in /
+      571 out, and a 6-line fixture with one candidate costs 482 in / 29 out.</p>
+
+      <h3>Where the rates come from</h3>
+      <p>The decide tier's price is the OpenRouter decisions route's own <code>usage.cost</code>,
+      measured at $0.000013776 for 349 tokens, which is <b>$0.0395 per million</b>; an earlier
+      measurement of $0.00002121 for 532 tokens agrees at $0.0399. The Zen route carries
+      <code>usage</code> but no price field, which is why the rate comes from the other route.
+      The chat tier's own <code>cost_details</code> gave <b>$0.10 per million in and $0.40 per
+      million out</b>.</p>
+      <p>A local decide tier costs nothing per call: measured on this machine over 18 decisions,
+      <b>p50 583 ms and $0.000000 per decision</b>, against $0.000015 per decision for
+      <code>typesafe/jev-1.13</code> through OpenRouter at p50 591 ms. The latency is comparable;
+      the price is not.</p>
+
+      <h3>What the numbers do not include</h3>
+      <ul>
+        <li>The generation itself. The code your harness writes is untouched; what changes is what
+        steering and review cost.</li>
+        <li>The chat tiers, which answer actions, plans and explanations, stay the expensive path
+        and are on demand.</li>
+        <li><b>No local decide tier has been run end to end here.</b> The recipe, the price and
+        the latency are measured; the wiring is not, and no local harness generation run has been
+        measured on this machine.</li>
+        <li>Local is cheap per token, not fast. This machine generates at <b>33 tok/s</b> on a
+        small MoE (96 tokens in 2.9 s), its serving logs for the larger code models sit at
+        <b>~1.5–2 tok/s</b>, and the project's own local soak measured a 35B at <b>5.7–12.4 s</b>
+        per ambient review and <b>7.3–15.5 s</b> per resolve. A model that slow becomes viable
+        when the tokens it has to produce drop, which is what a rule set does.</li>
+        <li>Accuracy is not the same across routes. The same 18 decisions answered <b>12/18,
+        67%</b> on the local arm against <b>17/18, 94%</b> for <code>typesafe/jev-1.13</code>, so
+        a local tier has less margin and the floor wants more room.</li>
+        <li>The instruction document, as arithmetic rather than a measurement: a 2,000-token
+        instruction file re-sent across 50 turns is about 100,000 instruction tokens in one
+        session, $0.010 at the measured chat rate.</li>
+      </ul>
+
+      <h3>What leaves the machine</h3>
+      <p>The chat tiers default to a local OpenAI-compatible server. The decide tier's default is
+      remote: <code>wire = "system_one"</code>, <code>base_url =
+      "https://api.typesafe.ai/v1"</code>, model <code>jev-latest</code>, key from
+      <code>TYPESAFE_API_KEY</code>. On a default install the text of a changed file leaves the
+      machine on every rules pass, on save, without anything being asked for. Two settings change
+      that, and either one is a line of configuration:</p>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="name">settings.json</span>
+        <span>docs/MODEL.md §8</span>
+      </div>
+<pre><code><span class="dim">// a local System One server: the same wire, on your machine</span>
+{ <span class="fill">"models"</span>: { <span class="fill">"decide"</span>: { <span class="fill">"base_url"</span>: <span class="dim">"http://127.0.0.1:8009/v1"</span>, <span class="fill">"model"</span>: <span class="dim">"kev-latest"</span> } } }
+
+<span class="dim">// or no ambient pass at all: the rules pass is the only ambient path</span>
+{ <span class="fill">"rules"</span>: { <span class="fill">"enabled"</span>: <span class="dim">false</span> } }
+</code></pre>
+    </div>
+    <div class="prose">
+      <p><code>JEV_DECIDE_BASE_URL</code>, <code>JEV_DECIDE_MODEL</code>,
+      <code>JEV_DECIDE_WIRE</code> and <code>JEV_DECIDE_TIMEOUT_MS</code> do the same from the
+      environment. <code>JEV_BASE_URL</code> does not move this tier: it names an
+      OpenAI-compatible chat server, and a decision is not a chat. Turning the rules off returns
+      the ambient path to the <code>review</code> tier, which is also remote by default.</p>
+    </div>
+  </div>
+</section>
+
+<section id="install" aria-labelledby="install-h">
+  <div class="container">
+    <div class="prose">
+      <p class="eyebrow">04 · Install</p>
+      <h2 id="install-h">Three clients</h2>
+      <p>There is no release page yet, so the two binaries come from <code>cargo install</code>,
+      which needs a Rust toolchain (1.75 or later). <code>git clone</code> plus <code>cargo build
+      --release</code> produces the same two binaries under <code>target/release/</code>.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="name">shell</span>
+        <span>the two binaries</span>
+      </div>
+<pre><code><span class="dim">$</span> cargo install --git https://github.com/makefunstuff/jev-lsp --locked jev-lsp jev
+</code></pre>
+    </div>
+    <div class="prose">
+      <p>That puts <code>jev-lsp</code> (the server) and <code>jev</code> (a CLI) in
+      <code>~/.cargo/bin</code>, which is on <code>PATH</code> for a normal toolchain install.
+      <code>cargo binstall</code>, a Homebrew formula and a published <code>.vsix</code> do not
+      exist yet.</p>
+
+      <h3>Neovim, the primary client</h3>
+      <p>The plugin owns the attach pass that covers files Neovim cannot identify, the keymaps
+      and <code>:Jev</code>. Point a plugin manager at the repository's <code>nvim/</code>
+      directory, or symlink it, then call <code>setup()</code> from your config.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="name">shell, then init.lua</span>
+        <span>docs/TUTORIAL.md §1</span>
+      </div>
+<pre><code><span class="dim"># 1. the plugin</span>
+ln -s /path/to/jev-lsp/nvim ~/.local/share/nvim/site/pack/jev/start/jev
+
+<span class="dim">-- 2. in your config; with `jev-lsp` on PATH, the command is the plugin's own default</span>
+require(<span class="dim">'jev'</span>).setup({})
+</code></pre>
+    </div>
+    <div class="prose">
+      <p><code>setup()</code> registers the client config, calls
+      <code>vim.lsp.enable('jev')</code> and starts the attach pass. Nothing appears on screen
+      yet. A lazy-managed config takes the same plugin as a local <code>dir</code> spec. Without
+      the plugin, Neovim's own client reaches the same surfaces in two lines, and
+      <code>filetypes</code> is then the client's job.</p>
+      <p>Four keys cover the surfaces; everything else is typed, and <code>:Jev &lt;Tab&gt;</code>
+      completes eighteen subcommands.</p>
+    </div>
+    <div class="table-wrap">
+      <table class="stack labels">
+        <caption>Source: the front page of <code>README.md</code> and
+        <code>docs/GUIDE.md</code> §1. The plugin requires Neovim ≥ 0.12.</caption>
+        <thead>
+          <tr>
+            <th scope="col">key</th>
+            <th scope="col">what it does</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row"><code>&lt;leader&gt;ja</code></th>
+            <td>the code-action picker; in visual mode the selection is the scope</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>&lt;leader&gt;ju</code></th>
+            <td>undo the last applied edit; the buffer returns to before it, byte for byte</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>&lt;leader&gt;jq</code></th>
+            <td>ask a question about the file; the answer opens in a scratch buffer</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>&lt;leader&gt;js</code></th>
+            <td>status: queue, budgets, endpoints in force</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p><code>:Jev inspect</code> reports what the rules pass did for the current file: the
+      counts, the findings and every skip, so a pass that found nothing can be told apart from a
+      pass that never ran.</p>
+    </div>
+
+    <div class="prose">
+      <h3>Any LSP client, including a harness</h3>
+      <p><code>jev-lsp --stdio</code> is a language server, so any client that can start one can
+      use it. The plugin is optional: without it you still get findings through pull diagnostics
+      and <code>workspace/diagnostic/refresh</code>, edits through <code>codeAction</code> and
+      <code>codeAction/resolve</code>, and every command through
+      <code>workspace/executeCommand</code>, including <code>jev.inspect</code>. The server reads
+      its endpoints from the environment it is started with.</p>
+      <p>OMP, the client the recorded transcript at the top of this page comes from, takes a JSON
+      entry written to <code>&lt;project&gt;/.omp/lsp.json</code>, or to
+      <code>~/.omp/agent/lsp.json</code> to apply it to every project:</p>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="name">.omp/lsp.json</span>
+        <span>README.md, “Use it with another LSP client”</span>
+      </div>
+<pre><code>{<span class="fill">"servers"</span>:{<span class="fill">"jev-lsp"</span>:{<span class="fill">"command"</span>:<span class="dim">"/path/to/jev-lsp/target/release/jev-lsp"</span>,<wbr><span class="fill">"args"</span>:[<span class="dim">"--stdio"</span>],<wbr>
+  <span class="fill">"fileTypes"</span>:[<span class="dim">".rs"</span>,<span class="dim">".py"</span>,<span class="dim">".md"</span>,<span class="dim">".toml"</span>,<span class="dim">".json"</span>,<span class="dim">".lua"</span>,<span class="dim">".sh"</span>],<wbr><span class="fill">"rootMarkers"</span>:[<span class="dim">".git"</span>],<wbr>
+  <span class="fill">"settings"</span>:{<span class="fill">"jev"</span>:{<span class="fill">"models"</span>:{<span class="fill">"decide"</span>:{<span class="fill">"wire"</span>:<span class="dim">"system_one"</span>,
+    <span class="fill">"base_url"</span>:<span class="dim">"https://opencode.ai/zen/v1"</span>,
+    <span class="fill">"model"</span>:<span class="dim">"jev-1.13"</span>, <span class="fill">"api_key_env"</span>:<span class="dim">"TYPESAFE_API_KEY"</span>,
+    <span class="fill">"timeout_ms"</span>:<span class="dim">15000</span>}}}}}}}
+</code></pre>
+    </div>
+    <div class="prose">
+      <p>OMP answers the server's <code>workspace/configuration</code> pull with
+      <code>settings.jev</code>, so the entry can carry the endpoints.
+      <code>settings</code> names the key's <b>variable</b> (<code>api_key_env</code>) and cannot
+      carry the key itself, so export it before the harness starts; without it a hosted decision
+      call fails with <code>model_error</code>. Environment variables win over the
+      <code>settings</code> block, which is what lets the stub and local-server recipes work
+      without editing the client config.</p>
+    </div>
+
+    <div class="prose">
+      <h3>Cursor</h3>
+      <p>Cursor has no settings-only route for a language server, because
+      <code>.cursor/mcp.json</code> configures MCP tools, a different protocol. It needs the
+      extension in <code>editors/cursor/</code>, either symlinked from a clone or installed from
+      the <code>.vsix</code> the packing script produces.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="name">shell</span>
+        <span>editors/cursor/ · docs/CURSOR.md</span>
+      </div>
+<pre><code><span class="dim"># from a clone; reload the window afterwards</span>
+ln -s "$PWD/editors/cursor" ~/.cursor/extensions/makefunstuff.jev-0.1.0
+
+<span class="dim"># or as a .vsix (verified here)</span>
+bash editors/cursor/pack.sh /tmp/jev-0.1.0.vsix
+/Applications/Cursor.app/Contents/Resources/app/bin/cursor --install-extension /tmp/jev-0.1.0.vsix
+</code></pre>
+    </div>
+    <div class="prose">
+      <p>The minimum for a finding is the decide endpoint and the key. The key's value comes from
+      a file, never from a setting:</p>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="name">Cursor settings</span>
+        <span>README.md, from docs/CURSOR.md</span>
+      </div>
+<pre><code>{ <span class="fill">"jev.server.path"</span>: <span class="dim">"/path/to/jev-lsp/target/release/jev-lsp"</span>,
+  <span class="fill">"jev.decide.baseUrl"</span>: <span class="dim">"https://api.typesafe.ai/v1"</span>,
+  <span class="fill">"jev.decide.model"</span>: <span class="dim">"jev-latest"</span>,
+  <span class="fill">"jev.decide.wire"</span>: <span class="dim">"system_one"</span>,            <span class="dim">// system_one | open_router</span>
+  <span class="fill">"jev.decide.apiKeyEnv"</span>: <span class="dim">"TYPESAFE_API_KEY"</span>, <span class="dim">// the NAME of the variable, never the key</span>
+  <span class="fill">"jev.decide.apiKeyFile"</span>: <span class="dim">"~/.bash_profile"</span>  <span class="dim">// where the key's VALUE is read from</span>
+}
+</code></pre>
+    </div>
+    <figure>
+      <img src="./assets/jev-cursor.webp" width="1568" height="1205" loading="lazy" decoding="async" alt="Cursor showing jev's finding in a hover over a squiggled line, with jev: explain offered as an inlay hint.">
+      <figcaption><b>Cursor / VS Code</b>, a client that is neither Neovim nor the harness: jev's
+      finding in the hover, the squiggle on the line, and <code>jev: explain</code> as an inlay
+      hint. Source: <code>docs/assets/jev-cursor.webp</code>.</figcaption>
+    </figure>
+
+    <div class="prose">
+      <h3>The decide endpoint</h3>
+      <p>Nothing is published until the decision tier answers. It is hosted Jev by default
+      (<code>api.typesafe.ai</code>, model <code>jev-latest</code>), and it needs a key. The
+      other routes, and the <code>wire</code> and <code>timeout_ms</code> traps that go with
+      them, are in <code>docs/MODEL.md</code> §8.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="name">shell</span>
+        <span>the key, and a second route</span>
+      </div>
+<pre><code>export TYPESAFE_API_KEY=…
+
+<span class="dim"># a hosted route that is not the default needs the wire, the ceiling and the key's name</span>
+export JEV_DECIDE_WIRE=system_one
+export JEV_DECIDE_BASE_URL=https://opencode.ai/zen/v1
+export JEV_DECIDE_MODEL=jev-1.13            <span class="dim"># not jev-1.13-free: 429 FreeUsageLimitError in bursts</span>
+export JEV_DECIDE_TIMEOUT_MS=15000          <span class="dim"># the 5000 ms default is too close to its tail</span>
+export JEV_DECIDE_API_KEY_ENV=OPENCODE_API_KEY
+export OPENCODE_API_KEY=&lt;key&gt;
+</code></pre>
+    </div>
+    <div class="prose">
+      <p>The chat tiers answer actions, plans and explanations rather than findings, and are
+      needed only for those. <code>api_key_env</code> names a variable and never carries a key;
+      prompt text and response bodies are never persisted outside the conclusion cache, which
+      stores parsed conclusions rather than raw model traffic.</p>
+
+      <h3>The first rule</h3>
+      <p><code>.jev/rules/</code> is read from the repository root, in path order. With a file a
+      rule claims in a buffer, <code>:Jev inspect</code> reports what the pass did, and the next
+      save puts the sign in the margin by itself.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="name">shell, then Neovim</span>
+        <span>docs/TUTORIAL.md §3</span>
+      </div>
+<pre><code>mkdir -p .jev/rules
+cat &gt; .jev/rules/handlers.json &lt;&lt;'JSON'
+{ <span class="fill">"schema"</span>: <span class="dim">"jev.rules/1"</span>,
+  <span class="fill">"rules"</span>: [
+    { <span class="fill">"id"</span>: <span class="dim">"no-unwrap-in-handlers"</span>,
+      <span class="fill">"title"</span>: <span class="dim">"Unwrap in a request handler"</span>,
+      <span class="fill">"text"</span>: <span class="dim">"A handler must not unwrap: a bad request would take the worker down. Return the error instead."</span>,
+      <span class="fill">"severity"</span>: <span class="dim">"warning"</span>,
+      <span class="fill">"applies_to"</span>: [<span class="dim">"src/**/*.rs"</span>],
+      <span class="fill">"inspection"</span>: { <span class="fill">"kind"</span>: <span class="dim">"regex"</span>, <span class="fill">"pattern"</span>: <span class="dim">"\\.unwrap\\(\\)"</span> },
+      <span class="fill">"judgement"</span>: {
+        <span class="fill">"question"</span>: <span class="dim">"Is this unwrap reachable from a request handler, rather than from test or startup code?"</span>,
+        <span class="fill">"criteria"</span>: { <span class="fill">"true"</span>: <span class="dim">"a request can reach it"</span>, <span class="fill">"false"</span>: <span class="dim">"test or startup code"</span> },
+        <span class="fill">"min_probability"</span>: <span class="dim">0.75</span> },
+      <span class="fill">"verb_hint"</span>: <span class="dim">"fix"</span> } ] }
+JSON
+
+<span class="dim"># then, with a file it claims in a buffer</span>
+:Jev inspect     <span class="dim">" what the pass did: rules considered, candidates found, findings, every skip</span>
+:w               <span class="dim">" and on the next save the sign appears by itself</span>
+</code></pre>
+    </div>
+    <div class="prose">
+      <p>Three things cost an hour if they are not known. Editing a rule does not repaint the
+      findings already on screen, because nothing watches <code>.jev/rules/</code>;
+      <code>:Jev inspect --force</code> or <code>:Jev recompute</code> apply it now. A pass that
+      found nothing says so, listing <code>unchanged</code>, <code>no_rules</code>, and any rule
+      file that failed to load with its reason. And a broken rule file does not take the pass
+      down: a file that cannot be read or parsed, or that carries another
+      <code>schema</code>, is skipped with a reason and the rest still load.</p>
+    </div>
+  </div>
+</section>
+<section id="rules" aria-labelledby="rules-h">
+  <div class="container">
+    <div class="prose">
+      <p class="eyebrow">05 · Writing rules</p>
+      <h2 id="rules-h">The rule document</h2>
+      <p>A rule pairs a convention in prose with the inspection that finds the lines it is about.
+      <code>.jev/rules/</code> is read from the repository root, in path order, and every file
+      carries <code>"schema": "jev.rules/1"</code>. What each field decides, in the order a rule
+      author cares about them:</p>
+    </div>
+    <div class="table-wrap">
+      <table class="stack labels">
+        <caption>Source: <code>docs/GUIDE.md</code> §4.</caption>
+        <thead>
+          <tr>
+            <th scope="col">field</th>
+            <th scope="col">what it decides</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row"><code>applies_to</code></th>
+            <td>globs over the document's path <b>relative to the workspace root</b> (the absolute
+            path when there is no root), so <code>src/**/*.rs</code> matches a file at the root's
+            <code>src/</code>, and a leading <code>**/</code> is optional. A rule for
+            <code>**/*.rs</code> never sees a Python file</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>inspection.kind</code></th>
+            <td><code>regex</code> (every matching line) or <code>absent</code> (the file is
+            expected to contain the pattern and does not: a licence header, a module
+            declaration)</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>inspection.pattern</code></th>
+            <td>the candidate finder. It <b>decides nothing</b>: it names lines</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>judgement.question</code></th>
+            <td>what the decision tier is asked about each candidate</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>judgement.criteria</code></th>
+            <td>passed through to the decision wire unchanged; this question kind wants
+            <code>{"true": …, "false": …}</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><code>judgement.min_probability</code></th>
+            <td>the floor a <code>true</code> must clear. Default 0.5, and it belongs outside the
+            answer's measured spread rather than on it</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>title</code>, <code>text</code></th>
+            <td>the finding's label (clipped at 60 characters) and its detail</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>verb_hint</code></th>
+            <td>the verb the menu offers first for it: <code>fix</code>, <code>harden</code>,
+            <code>types</code>, <code>docs</code>, <code>rewrite</code>, <code>test</code>,
+            <code>generate</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <h3>Two things decide whether a rule works</h3>
+      <p>Both were measured against hosted Jev (<code>typesafe/jev-1.13</code>), and both are
+      cheap to get wrong.</p>
+      <p><b>The question has to state the violation.</b> A <code>true</code> answer is what
+      publishes, so <code>true</code> must mean the code is wrong. Ask about the decision
+      (<code>is this unwrap reachable from a handler?</code>) and the answer separates the cases;
+      ask about the syntax the regex already matched and the rule says nothing new. A
+      <code>false</code> answer is invisible through <code>:Jev inspect</code>, which publishes
+      only what clears the floor, so a backwards question looks exactly like a rule that never
+      fires.</p>
+      <p><b>The floor goes outside the measured spread, not on it.</b> A sharply-posed question
+      answered <b>0.96–0.97 across 25 real runs</b> (median 0.97, sd 0.0048). The same endpoint on
+      a question nearer the decision boundary varied <b>0.82–0.86 across 8 runs</b>. A floor at
+      the answer's median turns the endpoint's own noise into a coin flip: identical input,
+      publishing on half the runs and not the other half, with nothing in the report saying which
+      run was the odd one out. If the spread straddles the floor you want, the question is the
+      problem rather than the floor, and no value of <code>min_probability</code> makes a
+      boundary-straddling question stable. Sharpen it, name the criterion that separates the
+      cases, and measure again.</p>
+
+      <h3>The twenty-one rules this repository states about itself</h3>
+      <p>Read from the repository root on every save of a file a rule claims. <code>absent</code>
+      means the pattern is expected and missing; the rest are <code>regex</code>.</p>
+    </div>
+    <div class="table-wrap">
+      <table class="wide">
+        <caption>Source: <code>.jev/rules/*.json</code>, quoted as stored.</caption>
+        <thead>
+          <tr>
+            <th scope="col">id</th>
+            <th scope="col">title</th>
+            <th scope="col" class="num">floor</th>
+            <th scope="col">pattern kind</th>
+            <th scope="col">claims</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row"><code>cache-keys-name-their-inputs</code></th>
+            <td>A cache key names every input it depends on</td>
+            <td class="num">0.8</td>
+            <td>regex</td>
+            <td><code>**/crates/**/*.rs</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><code>claims-name-their-command</code></th>
+            <td>A claim names the command that produced it</td>
+            <td class="num">0.7</td>
+            <td>regex</td>
+            <td><code>**/STATUS.md</code>, <code>**/README.md</code>,
+            <code>**/docs/**/*.md</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><code>contract-claims-name-their-pin</code></th>
+            <td>A contract claim names what pins it</td>
+            <td class="num">0.8</td>
+            <td>regex</td>
+            <td><code>**/PROTOCOL.md</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><code>module-doc-says-why</code></th>
+            <td>A Rust module says why it exists</td>
+            <td class="num">0.65</td>
+            <td>absent</td>
+            <td><code>**/crates/**/*.rs</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><code>no-allow-to-silence-warnings</code></th>
+            <td>Silence warnings at the root, not with <code>#[allow]</code></td>
+            <td class="num">0.7</td>
+            <td>regex</td>
+            <td><code>**/crates/**/*.rs</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><code>no-async-in-jev-core</code></th>
+            <td>jev-core is synchronous by construction</td>
+            <td class="num">0.8</td>
+            <td>regex</td>
+            <td><code>**/crates/jev-core/src/**/*.rs</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><code>no-client-namespace-in-a-server-id</code></th>
+            <td>A command id must name a client that can run it</td>
+            <td class="num">0.55</td>
+            <td>regex</td>
+            <td><code>**/crates/**/*.rs</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><code>no-custom-lsp-method</code></th>
+            <td>No custom <code>jev/</code> LSP methods</td>
+            <td class="num">0.8</td>
+            <td>regex</td>
+            <td><code>**/crates/**/*.rs</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><code>no-detached-progress-token</code></th>
+            <td>A task that owns a token closes it on every path</td>
+            <td class="num">0.65</td>
+            <td>regex</td>
+            <td><code>**/crates/jev-lsp/src/**/*.rs</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><code>no-language-gate</code></th>
+            <td>Language is metadata, never a gate</td>
+            <td class="num">0.75</td>
+            <td>regex</td>
+            <td><code>**/crates/**/*.rs</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><code>no-lsp-in-jev-core</code></th>
+            <td>jev-core never learns about LSP</td>
+            <td class="num">0.75</td>
+            <td>regex</td>
+            <td><code>**/crates/jev-core/src/**/*.rs</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><code>no-placeholder-macros</code></th>
+            <td>No <code>todo!()</code> or <code>unimplemented!()</code> left in</td>
+            <td class="num">0.7</td>
+            <td>regex</td>
+            <td><code>**/crates/**/*.rs</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><code>no-process-global-state</code></th>
+            <td>No process-global state outliving a session</td>
+            <td class="num">0.55</td>
+            <td>regex</td>
+            <td><code>**/crates/**/*.rs</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><code>no-prompt-text-in-the-server</code></th>
+            <td>The server passes prompts, it does not carry them</td>
+            <td class="num">0.75</td>
+            <td>regex</td>
+            <td><code>**/crates/jev-lsp/src/**/*.rs</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><code>no-success-without-a-measurement</code></th>
+            <td>A harness must not report success it did not measure</td>
+            <td class="num">0.75</td>
+            <td>regex</td>
+            <td><code>**/verify/**/*.py</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><code>no-swallowed-failures</code></th>
+            <td>A failure the caller needed is not swallowed</td>
+            <td class="num">0.7</td>
+            <td>regex</td>
+            <td><code>**/verify/**</code>, <code>**/scripts/**/*.sh</code>,
+            <code>**/.github/workflows/*.yml</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><code>no-sweeping-adds-or-rewritten-history</code></th>
+            <td>Stage what you own, never rewrite history</td>
+            <td class="num">0.75</td>
+            <td>regex</td>
+            <td><code>**/*.sh</code>, <code>**/.github/workflows/*.yml</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><code>no-untracked-placeholders</code></th>
+            <td>A placeholder ships as a tracked promise</td>
+            <td class="num">0.8</td>
+            <td>regex</td>
+            <td><code>**/crates/**/*.rs</code>, <code>**/nvim/**/*.lua</code>,
+            <code>**/editors/**/*.js</code>, and the three prose files</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>no-unwrap-outside-tests</code></th>
+            <td>Unwrap outside tests</td>
+            <td class="num">0.85</td>
+            <td>regex</td>
+            <td><code>**/crates/**/*.rs</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><code>report-layout-default</code></th>
+            <td>A report's default leaves the window alone</td>
+            <td class="num">0.75</td>
+            <td>regex</td>
+            <td><code>**/editors/**/*.js</code>, <code>**/nvim/**/*.lua</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><code>words-must-carry-a-fact</code></th>
+            <td>A word must carry a fact, not a temperature</td>
+            <td class="num">0.8</td>
+            <td>regex</td>
+            <td><code>**/README.md</code>, <code>**/STATUS.md</code>,
+            <code>**/PROTOCOL.md</code>, <code>**/docs/**/*.md</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <h3>What no rules means</h3>
+      <p>With no rules there are no ambient findings. The pass reports <code>no_rules</code>
+      rather than a clean document, so "nothing was inspected" and "nothing was found" are
+      different answers, and that distinction is pinned by <code>verify/rules_test.py</code> and
+      by the negative control in <code>verify/omp_lsp.sh</code>. The chat review does not step in
+      to cover the gap: <code>PROTOCOL.md</code> §12 records that as a decision.</p>
+    </div>
+  </div>
+</section>
+
+<section id="evidence" aria-labelledby="evidence-h">
+  <div class="container">
+    <div class="prose">
+      <p class="eyebrow">06 · Evidence</p>
+      <h2 id="evidence-h">How each claim is proven</h2>
+      <p>The suite is one command, <code>bash verify/run-suite.sh /tmp/suite.log</code>, and every
+      row is a harness named for the defect it catches rather than for the code it touches. It
+      never uses <code>set -e</code>: a red row has to be visible, not fatal to the run. These are
+      the rows that carry the claims on this page.</p>
+    </div>
+    <div class="table-wrap">
+      <table class="wide">
+        <caption>Source: the artefact table at the head of <code>docs/VERIFICATION.md</code>.</caption>
+        <thead>
+          <tr>
+            <th scope="col">harness</th>
+            <th scope="col">what it proves</th>
+            <th scope="col">last result</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row"><code>verify/run-suite.sh</code></th>
+            <td>the whole table in one run</td>
+            <td>24 rows <code>ok</code>, <code>quality_eval</code> reported as <code>?</code>
+            because it needs a real model</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>verify/lsp_client.py</code></th>
+            <td>a stdio LSP client written from the specification, sharing no code with the
+            server, ten steps including the three reachable failure paths</td>
+            <td>44 ok, 0 FAIL, 0 skip, 0 warn</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>verify/omp_lsp.sh</code></th>
+            <td>a client nobody here wrote receives a rule's finding and calls
+            <code>jev.inspect</code>, with a negative control</td>
+            <td>0 failures, 0 skips</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>verify/rules_test.py</code></th>
+            <td>the rules pass end to end: inspections, gates, cache, skips, and one decision call
+            for N candidates</td>
+            <td>45/45</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>verify/rules_live.lua</code></th>
+            <td>a rule's finding reaching the sign column on save through the real plugin</td>
+            <td>0 failures, 0 skips on Neovim 0.12.5 and 0.12.1</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>verify/cli_parity.py</code></th>
+            <td>the CLI and the LSP produce identical findings and byte-identical edits</td>
+            <td>30/30</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>verify/nvim_live.lua</code></th>
+            <td>real plugin, real server, real buffer, including
+            <code>:Jev undo</code> restoring the buffer byte for byte</td>
+            <td>0 failures, 0 skips</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>verify/plan_test.py</code></th>
+            <td>the plan loop, server-side apply, revert, staleness, divergence, multi-file
+            creation</td>
+            <td>35/35</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>verify/soak.py</code></th>
+            <td>the whole loop over six languages against a real endpoint, with
+            <code>ast.parse</code> on every result</td>
+            <td>10/12 runs applied an edit, 2 left the file unparseable, 12/12 billed</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>verify/quality_eval.py</code></th>
+            <td>is the review right, on six labelled fixtures</td>
+            <td>recall 3/4, precision 3/3, 0 findings on both clean files</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>verify/repo_bench.py</code></th>
+            <td>a measurement rather than a threshold</td>
+            <td>40 files of this repository: 62 findings, <b>3.21 per 1000 lines</b>; three runs
+            at 3.21 / 3.48 / 3.71, measured 2026-09-18</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p>Two negative controls are recorded for the rules harness, and both are meant to be red in
+      a particular way. With the decide endpoint dead, the rules harness reports 0 failures and
+      <b>4 skips</b>, each naming why, because "no endpoint" must not read as "no product". With
+      the stub alive but answering nothing usable, it reports <b>4 failures and 1 skip</b>, and
+      nothing in those failures says <i>stub</i>. That is why the runner owns the stub's whole
+      lifecycle, checks the process id as well as the health endpoint, and waits for the port to
+      be free: twice in this project a red harness turned out to be a stale stub, which from the
+      client's end is indistinguishable from a product defect.</p>
+      <p>The suite also records a defect that passed every test before it was found:
+      <code>diagnosticProvider.workspaceDiagnostics</code> was advertised as
+      <code>true</code> from the first capability block while <code>workspace/diagnostic</code>
+      was never implemented, and Neovim's <code>on_refresh</code> checks that flag. That is what
+      <code>verify/smoke.py</code> now pins. Two further defects were found in the harnesses
+      themselves rather than in the product, and are recorded with the same weight.</p>
+    </div>
+  </div>
+</section>
+<section id="limits" aria-labelledby="limits-h">
+  <div class="container">
+    <div class="prose">
+      <p class="eyebrow">07 · Limitations</p>
+      <h2 id="limits-h">Known unverified, and known limitations</h2>
+      <p>Kept here because they are boundaries rather than oversights, and because a page that
+      pitches a tool without them is not worth reading. Sources:
+      <code>docs/VERIFICATION.md</code> §10 and §11, and <code>docs/MODEL.md</code> §8.</p>
+      <ul>
+        <li><b>The hosted default decide endpoint has not been called from here.</b>
+        <code>api.typesafe.ai</code> is the default and was never reached. What was called is the
+        same model through a different route, OpenRouter's <code>/alpha/decisions</code>
+        (<code>typesafe/jev-1.13</code>, eight observations at p = 0.82–0.86), so the wire, the
+        body, the parsing and the key name are verified against a real decision endpoint, and the
+        vendor's own base URL and credential are not. A local System One server is likewise
+        unexercised.</li>
+        <li><b>Model quality on any verb is not proven.</b> The suite proves the pipeline, never
+        the usefulness of a particular model's output, which is measured by the user in the
+        editor.</li>
+        <li><b><code>state = "ready"</code> means the contract passed, never that the file still
+        compiles.</b> Nothing in <code>crates/</code> parses the result of an applied edit, and
+        that is a decision rather than an omission: a structural probe is blind to the failure
+        that prompted it, a parser would be the largest dependency in the repository, and the
+        party that already holds the file is the user's own language server. Measured three times
+        on <code>google/gemini-2.5-flash-lite</code>, the answer replaced one statement with a
+        block header and did not re-indent the body, so the anchor resolved,
+        <code>state = "ready"</code> was reported, and the file no longer parsed.
+        <code>verify/soak.py</code> and <code>verify/real_model.py</code> call
+        <code>ast.parse</code> on the result, and the harness is the only place that question is
+        asked.</li>
+        <li><b>The post-apply prediction check covers the plan path only.</b> The server
+        materialises the exact post-edit text and publishes a divergence diagnostic when the
+        client's bytes differ, but that comparison is recorded on the <code>jev.apply</code> step
+        path alone. On a resolved code action, which is the commoner way an edit reaches a buffer,
+        no prediction is recorded and nothing is checked.</li>
+        <li><b>The client's own diagnostics already reach the server and are dropped.</b> The
+        plugin fills <code>CodeActionContext.diagnostics</code> on every code-action request and
+        pushes a versioned document on every change with a 300 ms debounce; the server reads
+        <code>trigger_kind</code> and nothing else of the context. Correlating them is about
+        30–40 lines, and it is not built.</li>
+        <li><b>No treesitter scope.</b> Scope resolution is structural, by brace or indentation,
+        with a whole-file fallback. <code>scope_source</code> reports which was used, so the
+        quality is never claimed to be higher than it is.</li>
+        <li><b>Undo granularity of a client-applied edit is unmeasured.</b> Headless script
+        execution cannot record undo blocks, so the probe was inconclusive. What is verified is
+        the plugin's own path: <code>:Jev undo</code> restores the buffer byte for byte. Plain
+        <code>u</code> remains unmeasured.</li>
+        <li><b><code>shutdown</code> with an explicit <code>params</code> member is rejected</b>
+        with <code>-32602 Unexpected params</code>. JSON-RPC 2.0 permits omitting
+        <code>params</code> and does not define a null one, so the rejection is spec-correct, and
+        Neovim is unaffected: it calls <code>rpc.request('shutdown', nil, …)</code> and Lua drops
+        a nil table value, so the member never reaches the wire. A client that sends null sees a
+        failed shutdown and can force-stop the server.</li>
+        <li><b>A plan needs anchors that exist in an open document.</b> Steps are resolved against
+        the content the server holds and refused as <code>stale</code> when the target has moved,
+        so a greenfield goal has no step to anchor and <code>jev.plan</code> answers that the plan
+        contained no step whose target could be located, rather than inventing files. That is the
+        reason <code>docs/GUIDE.md</code> §8 puts the first step of greenfield work in the shell,
+        until a document exists.</li>
+        <li><b>`languages.overrides[].verbs` narrows the menu and nothing enforces the
+        complement.</b> A client can invoke any verb through a hand-built action. The server
+        validates the result rather than the request, which is what the version stamp and the
+        anchor rules are for.</li>
+        <li><b>Rows that cite an unbuilt harness are requirements, not coverage.</b>
+        <code>verify/goldens/</code> and <code>verify/bench.sh</code> do not exist yet.</li>
+      </ul>
+      <p>One thing that is not a limitation but reads like one: the project checks itself with
+      jev, and over its own <code>crates/**/*.rs</code> the shipped floors produced two findings
+      in 140 candidates. A rules pass on a repository whose conventions are already written down
+      and followed is quiet, and quiet is the intended end state rather than a failure to
+      detect.</p>
+    </div>
+  </div>
+</section>
+
+<section id="read" aria-labelledby="read-h">
+  <div class="container">
+    <div class="prose">
+      <p class="eyebrow">08 · Read more</p>
+      <h2 id="read-h">The documents behind this page</h2>
+      <p>Every section above is drawn from one of these, and each one is longer and more exact
+      than a pitch. Start with the tutorial.</p>
+    </div>
+    <div class="table-wrap">
+      <table class="stack labels">
+        <caption>Source: the “Read more” section of <code>README.md</code>.</caption>
+        <thead>
+          <tr>
+            <th scope="col">document</th>
+            <th scope="col">what it holds</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row"><code>docs/TUTORIAL.md</code></th>
+            <td>the first run, end to end: install, the endpoints, one rule, a save, the finding,
+            the fix, and the workflow the rules carry</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>docs/GUIDE.md</code></th>
+            <td>the reference: surfaces and keys, where a report goes, settings and environment
+            variables, the <code>jev.rules/1</code> schema, budgets, the CLI, troubleshooting, and
+            what lives on disk</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>docs/MODEL.md</code></th>
+            <td>the tiers, routing, the decision wire, the provider routes, what a pass costs, and
+            what leaves your machine</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>docs/VERIFICATION.md</code></th>
+            <td>how each claim is proven, which harnesses prove it, and what is unverified</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>docs/CURSOR.md</code></th>
+            <td>Cursor: the extension, the settings, and what its API does not do</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>docs/UX.md</code></th>
+            <td>the surfaces and the decisions behind them: noise policy, approval, the plan
+            buffer, why asking a question must not rearrange your windows</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>docs/LANGUAGE.md</code></th>
+            <td>unconditional support: the attachment ladder, language resolution, scope,
+            gates</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>docs/ARCHITECTURE.md</code></th>
+            <td>components, process topology, the document store, the scheduler</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>PROTOCOL.md</code></th>
+            <td>frozen: the LSP method surface, the command list, artifact schemas, the CLI, exit
+            codes</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>STATUS.md</code></th>
+            <td>project state, decisions taken, and the dated log</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>docs/ROADMAP.md</code></th>
+            <td>the units of work and their acceptance criteria</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>docs/STYLE.md</code></th>
+            <td>the register these documents are written in, with the audit that enforces it</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p>The verification table is one command: <code>bash verify/run-suite.sh
+      /tmp/suite.log</code>.</p>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="site-foot">
+  <div class="container">
+    <div class="prose">
+      <p>jev-lsp is a proof of concept. Every number on this page is quoted from a document in the
+      repository, and each table names its source: the measured cost tables are
+      <code>docs/MODEL.md</code> §7 with the short version on the front page of
+      <code>README.md</code>; the rule documents are <code>.jev/rules/*.json</code> and
+      <code>docs/TUTORIAL.md</code>; the harness results and the limitations are
+      <code>docs/VERIFICATION.md</code>.</p>
+      <p>The three screenshots under <code>assets/</code> are copies of
+      <code>docs/assets/jev-steering.svg</code>, <code>docs/assets/jev-neovim.webp</code> and
+      <code>docs/assets/jev-cursor.webp</code>, because this site is published as the document
+      root and cannot reach <code>docs/</code>. Re-syncing means re-copying them.</p>
+      <p>One HTML file and one stylesheet. No script, no framework, no webfont, no request to any
+      host but this one.</p>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

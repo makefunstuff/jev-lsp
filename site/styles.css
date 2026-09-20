@@ -1,0 +1,734 @@
+/* jev-lsp — site stylesheet.
+ *
+ * One file, no framework, no webfont, no external URL, no script.
+ *
+ * The palette is the product's own: --accent is the amber from
+ * docs/assets/jev-steering.svg, and --machine is that file's own page
+ * background, so the screenshots sit flush against the code panels.
+ *
+ * The type scale is four sizes plus monospace:
+ *   --t-caption  13px      nav, eyebrows, captions, tables
+ *   --t-body     17px      prose (serif)
+ *   --t-h2       24px      section headings
+ *   --t-display  30-44px   the page title
+ *   --t-code     15px      code
+ * An h3 is body size in the sans face at weight 660: weight and face carry the
+ * level, not a fifth size.
+ */
+
+:root {
+  color-scheme: light;
+
+  --paper: #fcfbf8;
+  --ink: #15171c;
+  --ink-soft: #383e49;
+  --muted: #5b6270;
+  --rule: #e4dfd5;
+  --rule-strong: #cdc6b7;
+  --code-wash: #f2efe8;
+
+  /* The one accent: the highlighted diagnostic row of the steering screenshot. */
+  --accent: #f0b849;
+  --accent-ink: #7a4d00; /* the same hue, dark enough for text on paper */
+  --accent-wash: rgba(240, 184, 73, 0.15);
+  --accent-line: rgba(240, 184, 73, 0.7);
+
+  /* Machine surfaces. Both tones are lifted from the same screenshot. */
+  --machine: #0e1117;
+  --machine-raised: #151a22;
+  --machine-rule: #2b323c;
+  --machine-ink: #d6dde6;
+  --machine-dim: #97a3b0;
+
+  --t-caption: 0.8125rem;
+  --t-body: 1.0625rem;
+  --t-h2: 1.5rem;
+  --t-display: clamp(1.9rem, 1.05rem + 2.7vw, 2.75rem);
+  --t-code: 0.9375rem;
+
+  --serif: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia,
+    "Times New Roman", serif;
+  --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+    monospace;
+
+  --wide: 64rem;
+  --measure: 70ch;
+  --gutter: clamp(1rem, 4vw, 2rem);
+  --radius: 6px;
+}
+
+/* A dark reading surface, off by default. Same accent, no glow: it exists so a
+ * reader whose system is dark is not handed a white page. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --paper: #0f1116;
+    --ink: #e8ecf2;
+    --ink-soft: #c5cbd6;
+    --muted: #98a1b0;
+    --rule: #242a34;
+    --rule-strong: #363f4b;
+    --code-wash: #171c24;
+    --accent-ink: #f0b849;
+    --accent-wash: rgba(240, 184, 73, 0.13);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: var(--t-body) / 1.62 var(--serif);
+}
+
+/* ---------------------------------------------------------------- skip link */
+
+.skip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.skip:focus {
+  width: auto;
+  height: auto;
+  clip-path: none;
+  padding: 0.5rem 0.9rem;
+  background: var(--accent);
+  color: #15171c;
+  font: 640 var(--t-caption) / 1.4 var(--sans);
+  text-decoration: none;
+}
+
+/* ------------------------------------------------------------------- header */
+
+.site-head {
+  border-bottom: 1px solid var(--rule);
+}
+
+.site-head .container {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1.4rem;
+  padding-block: 1.1rem 0.9rem;
+}
+
+.wordmark {
+  font: 660 var(--t-caption) / 1.3 var(--mono);
+  color: var(--ink);
+  text-decoration: none;
+  padding-bottom: 0.2rem;
+  border-bottom: 2px solid var(--accent);
+}
+
+.wordmark span {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.toc ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.toc a {
+  display: block;
+  padding: 0.4rem 0.55rem;
+  font: 500 var(--t-caption) / 1.3 var(--sans);
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.toc a:hover,
+.toc a:focus-visible {
+  color: var(--ink);
+  background: var(--accent-wash);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 0.18em;
+}
+
+/* ------------------------------------------------------------------ layout */
+
+.container {
+  max-width: var(--wide);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+.prose {
+  max-width: var(--measure);
+  margin-inline: auto;
+}
+
+section {
+  padding-block: clamp(2.25rem, 5.5vw, 3.75rem);
+}
+
+.hero {
+  padding-block: clamp(2rem, 5vw, 3.25rem) clamp(1.75rem, 4vw, 2.75rem);
+}
+
+/* -------------------------------------------------------------- typography */
+
+h1,
+h2,
+h3 {
+  font-family: var(--sans);
+  color: var(--ink);
+  text-wrap: balance;
+  margin: 0;
+}
+
+h1 {
+  font-size: var(--t-display);
+  font-weight: 680;
+  line-height: 1.1;
+  letter-spacing: -0.018em;
+  max-width: 30ch;
+  margin-bottom: 0.75rem;
+}
+
+h2 {
+  position: relative;
+  font-size: var(--t-h2);
+  font-weight: 660;
+  line-height: 1.2;
+  letter-spacing: -0.012em;
+  padding-top: 1.05rem;
+  border-top: 1px solid var(--rule);
+  margin-bottom: 0.9rem;
+}
+
+h2::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 0;
+  width: 2.75rem;
+  height: 2px;
+  background: var(--accent);
+}
+
+h3 {
+  font-size: var(--t-body);
+  font-weight: 660;
+  letter-spacing: -0.005em;
+  margin: 2rem 0 0.45rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.9rem;
+  font: 620 var(--t-caption) / 1.4 var(--sans);
+  letter-spacing: 0.02em;
+  color: var(--accent-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+p,
+ul,
+ol,
+dl {
+  margin: 0 0 1.05em;
+}
+
+.prose > :last-child,
+.prose > :last-child > :last-child {
+  margin-bottom: 0;
+}
+
+ul,
+ol {
+  padding-left: 1.35em;
+}
+
+li + li {
+  margin-top: 0.35em;
+}
+
+li > ul,
+li > ol {
+  margin-top: 0.35em;
+  margin-bottom: 0;
+}
+
+strong {
+  font-weight: 660;
+}
+
+a {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: var(--accent-line);
+  text-underline-offset: 0.16em;
+}
+
+a:hover,
+a:focus-visible {
+  text-decoration-color: currentColor;
+  background: var(--accent-wash);
+}
+
+/* -------------------------------------------------------------------- code */
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+}
+
+:not(pre) > code {
+  font-size: 0.88em;
+  background: var(--code-wash);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 0.05em 0.28em;
+  overflow-wrap: break-word;
+}
+
+a > code {
+  color: inherit;
+}
+
+pre {
+  margin: 0;
+  padding: 1rem 1.1rem;
+  background: var(--machine);
+  color: var(--machine-ink);
+  border: 1px solid var(--machine-rule);
+  border-radius: var(--radius);
+  font-size: var(--t-code);
+  line-height: 1.55;
+  overflow-x: auto;
+  tab-size: 2;
+}
+
+pre .dim {
+  color: var(--machine-dim);
+}
+
+pre .fill {
+  color: var(--machine-ink);
+}
+
+/* A full-bleed amber row inside a panel: the product's own highlight, from the
+ * steering screenshot. */
+pre .row {
+  display: block;
+  margin-inline: -1.1rem;
+  padding: 0.15rem 1.1rem 0.15rem calc(1.1rem - 3px);
+  border-left: 3px solid var(--accent);
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+/* ----------------------------------------------------------------- figures */
+
+figure {
+  margin: 1.7rem 0 0;
+}
+
+figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--machine-rule);
+  border-radius: var(--radius);
+  background: var(--machine);
+}
+
+figcaption {
+  margin-top: 0.6rem;
+  font: 400 var(--t-caption) / 1.5 var(--sans);
+  color: var(--muted);
+  max-width: var(--measure);
+}
+
+figcaption code {
+  font-size: 0.92em;
+}
+
+figcaption b {
+  color: var(--ink-soft);
+  font-weight: 640;
+}
+
+/* A dark panel with a title bar, matching the framing the screenshots use. A
+ * panel is wider than the prose measure but narrower than a figure, so a rule
+ * document reads as its own artifact rather than as a paragraph. */
+.panel {
+  max-width: 48rem;
+  margin: 1.35rem auto 1.1rem;
+  border: 1px solid var(--machine-rule);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--machine);
+}
+
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.45rem 0.9rem;
+  background: var(--machine-raised);
+  border-bottom: 1px solid var(--machine-rule);
+  font: 400 var(--t-caption) / 1.45 var(--mono);
+  color: var(--machine-dim);
+}
+
+.panel-head .name {
+  color: var(--machine-ink);
+}
+
+/* A panel holds data rather than a program: a rule document, a JSON result, a
+ * shell recipe. Long values wrap, so nothing is hidden behind a scrollbar and
+ * a phone never has to scroll sideways to read a regex. */
+.panel pre {
+  border: 0;
+  border-radius: 0;
+  padding-inline: 0.9rem;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.panel .row {
+  margin-inline: -0.9rem;
+  padding-inline: calc(0.9rem - 3px) 0.9rem;
+}
+
+/* ------------------------------------------------------------------ tables */
+
+.table-wrap {
+  margin: 1.5rem 0;
+  overflow-x: auto;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font: 400 var(--t-caption) / 1.45 var(--sans);
+}
+
+table.wide {
+  min-width: 40rem;
+}
+
+/* A table whose rows are a short label and a sentence reads better with the
+ * label column at its natural width than at half the container, and better
+ * narrower than the full container: a value at the far right edge of 1024px is
+ * not a table any more. */
+table.labels {
+  max-width: 44rem;
+}
+
+table.labels thead th:first-child,
+table.labels tbody th {
+  width: 1%;
+  white-space: nowrap;
+}
+
+caption {
+  caption-side: top;
+  text-align: left;
+  padding: 0 0 0.55rem;
+  color: var(--muted);
+  font-size: var(--t-caption);
+  max-width: var(--measure);
+}
+
+th,
+td {
+  padding: 0.55rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--rule);
+}
+
+th + th,
+td + td,
+th + td {
+  border-left: 1px solid var(--rule);
+}
+
+thead th {
+  border-bottom: 1px solid var(--rule-strong);
+  font-weight: 640;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+tbody th {
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+td.num,
+th.num {
+  text-align: right;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+tbody tr:last-child th,
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+td code,
+th code {
+  font-size: 0.95em;
+  border: 0;
+  background: none;
+  padding: 0;
+}
+
+/* The row the argument rests on. */
+tr.mark th,
+tr.mark td {
+  background: var(--accent-wash);
+}
+
+/* ------------------------------------------------------------------- notes */
+
+.note {
+  margin: 1.5rem 0;
+  padding: 0.9rem 1.1rem;
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--accent-wash);
+}
+
+.note p {
+  margin-bottom: 0.6em;
+}
+
+.note > :last-child {
+  margin-bottom: 0;
+}
+
+.note .label {
+  display: block;
+  font: 660 var(--t-caption) / 1.4 var(--sans);
+  letter-spacing: 0.02em;
+  color: var(--accent-ink);
+  margin-bottom: 0.35rem;
+}
+
+.note blockquote {
+  margin: 0.7rem 0 0;
+  padding-left: 0.9rem;
+  border-left: 1px solid var(--rule-strong);
+  color: var(--ink-soft);
+}
+
+.note blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+/* --------------------------------------------------------------- fact list */
+
+.facts {
+  display: grid;
+  gap: 0.7rem 1.5rem;
+  margin: 1.6rem 0 0;
+  padding: 1.1rem 0 0;
+  border-top: 1px solid var(--rule);
+  max-width: var(--measure);
+}
+
+.facts div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.facts dt {
+  font: 640 var(--t-caption) / 1.4 var(--sans);
+  color: var(--muted);
+}
+
+.facts dd {
+  margin: 0;
+  font-size: var(--t-body);
+  font-family: var(--serif);
+}
+
+.facts dd code {
+  font-size: 0.85em;
+}
+
+/* ------------------------------------------------------------------ footer */
+
+.site-foot {
+  margin-top: clamp(2rem, 6vw, 3.5rem);
+  border-top: 1px solid var(--rule);
+  padding-block: 1.6rem 3.5rem;
+  font: 400 var(--t-caption) / 1.6 var(--sans);
+  color: var(--muted);
+}
+
+.site-foot .prose p {
+  margin-bottom: 0.7em;
+}
+
+.site-foot a {
+  color: var(--ink-soft);
+}
+
+/* -------------------------------------------------------------- responsive */
+
+/* One breakpoint. Below it, everything is a single column, the tables scroll
+ * inside their own box rather than the page, and a rule document wraps instead
+ * of running off the side. */
+@media (min-width: 48rem) {
+  .facts {
+    grid-template-columns: 1fr 1fr;
+    column-gap: 2.5rem;
+  }
+}
+
+@media (max-width: 47.999rem) {
+  .site-head .container {
+    align-items: flex-start;
+  }
+
+  .toc a {
+    padding-inline: 0.45rem;
+  }
+
+  h1 {
+    max-width: none;
+  }
+
+  /* A label-and-prose table becomes a stacked definition, so a phone never
+   * scrolls a table sideways to read a sentence. The genuinely tabular tables
+   * keep their scroll box. */
+  table.stack,
+  table.stack caption,
+  table.stack tbody,
+  table.stack tr,
+  table.stack th,
+  table.stack td {
+    display: block;
+    width: auto;
+  }
+
+  table.stack thead {
+    display: none;
+  }
+
+  table.stack th,
+  table.stack td {
+    border: 0;
+    padding: 0;
+    white-space: normal;
+  }
+
+  table.stack th[scope="row"] {
+    margin-bottom: 0.2rem;
+  }
+
+  table.stack tr + tr {
+    border-top: 1px solid var(--rule);
+    margin-top: 0.8rem;
+    padding-top: 0.8rem;
+  }
+}
+
+/* ------------------------------------------------------------------- print */
+
+@media print {
+  :root {
+    --paper: #fff;
+    --ink: #000;
+    --ink-soft: #222;
+    --muted: #444;
+    --rule: #bbb;
+    --rule-strong: #888;
+    --accent: #b57f00;
+    --accent-ink: #7a4d00;
+    --accent-wash: transparent;
+    --accent-line: #999;
+    --machine: #fff;
+    --machine-raised: #fff;
+    --machine-rule: #999;
+    --machine-ink: #000;
+    --machine-dim: #333;
+  }
+
+  body {
+    font-size: 11pt;
+  }
+
+  .toc,
+  .skip {
+    display: none;
+  }
+
+  a {
+    text-decoration: none;
+  }
+
+  /* Backgrounds are dropped by default when printing; without this the light
+   * text of a code panel would print on white. */
+  pre,
+  .panel,
+  .panel-head {
+    background: #fff !important;
+  }
+
+  pre,
+  pre .dim,
+  pre .fill,
+  pre .amb,
+  pre .row {
+    color: #000 !important;
+    background: transparent !important;
+  }
+
+  pre .row {
+    border-left-color: #000;
+  }
+
+  figure img {
+    border-color: #999;
+  }
+
+  h2,
+  h3 {
+    break-after: avoid;
+  }
+
+  /* A long table has to be allowed to break across pages; a figure, a panel or
+   * a note that splits is worth moving whole. */
+  figure,
+  pre,
+  .note {
+    break-inside: avoid;
+  }
+}
