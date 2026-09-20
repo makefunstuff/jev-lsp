@@ -1,0 +1,27 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "no-blanket-except",
+      "title": "A catch-all discard says why the failure cannot matter",
+      "text": "`except:` and `except Exception:` take every failure the block can raise, including the programming mistakes nobody wrote a handler for, and a body that discards the failure leaves the caller reading an ordinary result: the exceptions the block can answer for are named, or the line says why the failure cannot matter.",
+      "severity": "warning",
+      "applies_to": [
+        "**/*.py"
+      ],
+      "inspection": {
+        "kind": "regex",
+        "pattern": "^\\s*except\\s*(Exception|BaseException)?\\s*:\\s*$|^\\s*except\\s*(Exception|BaseException)?\\s*:\\s*(pass|continue|break|return)\\b"
+      },
+      "judgement": {
+        "question": "Does this catch-all discard the failure without saying why the failure cannot matter?",
+        "criteria": {
+          "true": "the handler takes every application failure and discards it, and nothing beside the handler says why the failure cannot matter",
+          "false": "the handler records the failure, raises it or a replacement the caller handles, re-runs the work, or the handler (or a comment beside it) says why the failure cannot matter"
+        },
+        "min_probability": 0.8
+      },
+      "verb_hint": "fix"
+    }
+  ]
+}

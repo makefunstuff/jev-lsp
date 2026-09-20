@@ -1,0 +1,28 @@
+{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "no-suppression-without-a-reason",
+      "title": "A suppression says why the finding cannot be fixed",
+      "text": "`# type: ignore` and `@SuppressWarnings` silence one finding at one line: the line says why the fix is not available here, so the next reader can tell a deliberate exception from a warning that was made to stop.",
+      "severity": "warning",
+      "applies_to": [
+        "**/*.py",
+        "**/*.java"
+      ],
+      "inspection": {
+        "kind": "regex",
+        "pattern": "#\\s*type:\\s*ignore\\b|@SuppressWarnings\\b"
+      },
+      "judgement": {
+        "question": "Is this suppression unexplained: does nothing on the line or the line above say why the finding cannot be fixed here?",
+        "criteria": {
+          "true": "nothing explains it: the lint is silenced and no words on this line or the line above say anything about why the finding cannot be fixed here",
+          "false": "the line or the line above explains it, in words about why the finding cannot be fixed here"
+        },
+        "min_probability": 0.85
+      },
+      "verb_hint": "fix"
+    }
+  ]
+}
