@@ -24,7 +24,8 @@ Free text appears exactly once, in `:Jev plan`, because the protocol cannot ask 
 and because a goal is the only thing a picker cannot express.
 
 **Every row above is a standard surface, and the plugin is convenience, never a requirement.**
-Findings arrive by pull diagnostics plus `workspace/diagnostic/refresh`; actions by
+Findings arrive by push (`textDocument/publishDiagnostics`, when a background pass lands) and by
+pull diagnostics plus `workspace/diagnostic/refresh`; actions by
 `codeAction` and `codeAction/resolve`; the material the model is shown by
 `workspace/executeCommand` and `workspace/configuration`; progress by `$/progress` under a
 token the client itself issued; free text by the client, because the protocol cannot ask for it
@@ -197,8 +198,11 @@ preview is still a real split, deliberately: a side-by-side diff is something th
 ### 3.1 Ambient finding, fixed in three keystrokes
 
 1. You save. The rules pass runs against the budget gates: a rule's inspection names a line, the
-   decision tier confirms it, the finding is stored and `workspace/diagnostic/refresh` goes out.
-2. Neovim re-pulls; a warning sign appears on the line. No popup, no sound, no tab.
+   decision tier confirms it, the finding is stored and pushed
+   (`textDocument/publishDiagnostics`), and `workspace/diagnostic/refresh` goes out. A pass that
+   is not sub-second shows a `jev: checking…` cue first, which the finding replaces.
+2. Neovim re-pulls (or shows the pushed sign directly); a warning sign appears on the line. No
+   popup, no sound, no tab.
 3. `<leader>ja` — the menu opens instantly from cache, first entry
    `Handle the error from read_file` marked `isPreferred`.
 4. You pick it. `resolve` returns the edit; Neovim applies it; the sign clears.
