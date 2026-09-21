@@ -194,26 +194,48 @@ alone. When the shipped set is what carried a pass, `:Jev inspect` says so in a 
 own (`default_rules`).
 
 The ambient pass runs the repository's rules, so the first rule you write is what turns this from
-a general reviewer into *yours*. Rules are data, in `.jev/rules/`, read in path order:
+a general reviewer into *yours*. Rules are data, in `.jev/rules/`, read in path order. A rule file
+is `schema: jev.rules/1` plus a list of rules, and it is read whether it is written as YAML
+(`.yaml`, `.yml`) or as JSON (`.json`): the extension picks the parser and nothing else, so the
+two spellings are one rule — the same merge, the same hash, the same findings — and a repository
+can hold both, or move a file from one to the other, without a pass noticing. **Write YAML.**
+Prose needs no `\n` escapes in it, and a regex is written once rather than escaped twice; JSON
+still loads and stays the interchange format (the shipped set is embedded as JSON).
 
 ```sh
 mkdir -p .jev/rules
-cat > .jev/rules/handlers.json <<'JSON'
-{ "schema": "jev.rules/1",
-  "rules": [
-    { "id": "no-unwrap-in-handlers",
-      "title": "Unwrap in a request handler",
-      "text": "A handler must not unwrap: a bad request would take the worker down. Return the error instead.",
-      "severity": "warning",
-      "applies_to": ["src/**/*.rs"],
-      "inspection": { "kind": "regex", "pattern": "\\.unwrap\\(\\)" },
-      "judgement": {
-        "question": "Is this unwrap reachable from a request handler, rather than from test or startup code?",
-        "criteria": { "true": "a request can reach it", "false": "test or startup code" },
-        "min_probability": 0.75 },
-      "verb_hint": "fix" } ] }
-JSON
+cat > .jev/rules/handlers.yaml <<'YAML'
+schema: jev.rules/1
+rules:
+  - id: no-unwrap-in-handlers
+    title: Unwrap in a request handler
+    text: >-
+      A handler must not unwrap: a bad request would take the worker down. Return the error
+      instead.
+    severity: warning
+    applies_to: ["src/**/*.rs"]
+    inspection:
+      kind: regex
+      pattern: '\.unwrap\(\)'
+    judgement:
+      question: Is this unwrap reachable from a request handler, rather than from test or startup code?
+      criteria:
+        "true": a request can reach it
+        "false": test or startup code
+      min_probability: 0.75
+    verb_hint: fix
+YAML
 ```
+
+Two YAML habits, both visible above: a regex goes in **single quotes**, where a backslash is a
+backslash and not the start of an escape (`'\.unwrap\(\)'`, not `"\\.unwrap\\\\(\\)"`); and the
+`criteria` keys are **quoted**, because an unquoted `true:` is a YAML boolean where the decision
+wire wants the string `"true"`. Every field below means the same thing in either spelling.
+
+`jev rules compile .jev/rules/handlers.yaml -o .jev/rules/handlers.json` writes the same rule as
+the JSON document, which is how a YAML rule reaches anything that speaks JSON — a diff, a
+converter, a tool written before the YAML spelling existed. It is not a step a rule needs to run:
+the loader reads the YAML where it stands, and `jev rules compile` validates while it converts.
 
 Then, with a file it claims in a buffer:
 
@@ -327,6 +349,7 @@ jev action --verb harden src/lib.rs:40-80
 jev plan --goal "make retry cancellable" src/lib.rs
 jev inspect src/lib.rs [--force]       # the repository's rules, with the counts and skips
 jev rules init [--dir <dir>] [--force] # write the shipped rule set out to read and edit
+jev rules compile a.yaml [-o a.json]   # one rule file as the JSON document for it
 jev status                             # budget, queue and cache
 ```
 
@@ -344,6 +367,12 @@ jev status                             # budget, queue and cache
   shipped file, named by its group (`prose-lists-end-in-etc.json`), idempotent and
   non-clobbering. A file already there that differs is **refused by name** rather than
   overwritten; `--force` replaces it, and `--dir` writes somewhere else.
+- `jev rules compile <file> [-o <file>]` reads one rule file — `.json`, `.yaml` or `.yml` — and
+  emits the `jev.rules/1` JSON document. Without `-o` the document is the one JSON line on
+  stdout; with it, the file is written there and stdout carries a result naming the path and the
+  rule count. It parses with the loader's own parser, so a file it refuses is one the pass would
+  have skipped, for the same reason, and a refusal writes nothing. The loader reads YAML where it
+  stands, so this is for interchange and validation, not a required build step.
 - **The decide tier's key variable is nameable from the shell**: `api_key_env` defaults to
   `TYPESAFE_API_KEY`, and `JEV_DECIDE_API_KEY_ENV` points it at another variable
   (`JEV_DECIDE_API_KEY_ENV=OPENCODE_API_KEY OPENCODE_API_KEY=… jev inspect …`). It takes a *name*,
@@ -428,7 +457,7 @@ First-run walkthrough: `docs/TUTORIAL.md`. Surfaces and schema detail: §1–§4
 
 | path | what it is |
 |---|---|
-| `.jev/rules/*.json` | the repository's rules, read in path order |
+| `.jev/rules/*.{json,yaml,yml}` | the repository's rules, read in path order |
 | `<root>/.git/jev/session.jsonl` | the session record: one line per command and per analysis |
 | `<root>/.git/jev/dismissed.json` | dismissed findings, keyed by content |
 | `~/.cache/jev/<workspace-id>/` | the daemon's cache, when the daemon exists (phases 1–2 keep it in memory) |

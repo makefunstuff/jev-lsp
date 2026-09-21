@@ -1,0 +1,36 @@
+# The rule in `.jev/rules/no-unwrap-outside-tests.json`, written as YAML.
+#
+# The loader reads this file where it stands: `.jev/rules/*.yaml` and `.jev/rules/*.yml` are
+# parsed into the same `jev.rules/1` document `.json` holds, so a rule can be authored,
+# reviewed and edited in whichever spelling reads better. This is the spelling `docs/GUIDE.md`
+# §4 leads with, and `cargo test -p jev-core yaml_and_json` proves the two files are the same
+# rule — not two rules that resemble each other.
+#
+# Two YAML conventions worth knowing, both visible below:
+#   * a regex goes in single quotes, so a backslash is a backslash and not the start of an
+#     escape (`'\.unwrap\(\)'`, not `"\\.unwrap\\\\(\\)"`);
+#   * `criteria` keys are quoted, because an unquoted `true:` is a YAML boolean and the
+#     judgement wire wants the strings `"true"` and `"false"`.
+schema: jev.rules/1
+rules:
+  - id: no-unwrap-outside-tests
+    title: Unwrap outside tests
+    text: >-
+      A `.unwrap()` outside test code is a defect: the value was not checked, and a failed check
+      takes the process down instead of the request — handle the error, or say in a comment why
+      it cannot fail.
+    severity: warning
+    applies_to:
+      - "**/crates/**/*.rs"
+    inspection:
+      kind: regex
+      pattern: '\.unwrap\(\)'
+    judgement:
+      question: >-
+        Is this unwrap on a path that ships and can reach a value it did not check, rather than
+        inside a test module, a doc comment, or behind an invariant the surrounding code states?
+      criteria:
+        "true": code that ships can reach it and the value is not guaranteed
+        "false": it is in a test module, quoted in a doc comment, or behind an invariant the surrounding lines state
+      min_probability: 0.85
+    verb_hint: fix

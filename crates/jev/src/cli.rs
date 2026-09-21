@@ -17,6 +17,7 @@ USAGE:
     jev plan --goal <text> <path>               plan artifact (JSON) to stdout
     jev inspect <path> [--force]                the repository's rules, run over <path>
     jev rules init [--dir <dir>] [--force]      write the shipped rule set out to read/edit
+    jev rules compile <file> [-o <file>]        one rule file as the JSON the loader reads
     jev status                                  budget, queue and cache (JSON) to stdout
 
     <path>     the one file to read. `-` reads the document from stdin instead.
@@ -33,6 +34,7 @@ OPTIONS:
     --force             inspect: run the rules even if the file is unchanged since HEAD
                         rules init: overwrite rule files that are already there
     --dir <dir>         rules init: where to write (default <root>/.jev/rules)
+    -o, --out <file>    rules compile: where to write (default stdout)
     --base-url <url>    override the model endpoint for every tier (also JEV_BASE_URL)
     --model <name>      override the model name for every tier (also JEV_MODEL,
                         JEV_REVIEW_MODEL)
@@ -90,12 +92,17 @@ pub enum Command {
     Review(Target),
     Action { verb: Verb, target: Target },
     Plan { goal: String, target: Target },
-    /// Run the repository's `.jev/rules/*.json` over one file. `force` skips the
-    /// git-changed-set check.
+    /// Run the repository's rules (`DIR`, `.json`/`.yaml`/`.yml`) over one file. `force` skips
+    /// the git-changed-set check.
     Inspect { target: Target, force: bool },
     /// `jev rules init [--dir <dir>] [--force]`: write the shipped rule set into a directory
     /// the user can read and edit (PROTOCOL.md §9). No model is called and no document is read.
     RulesInit { dir: Option<String>, force: bool },
+    /// `jev rules compile <file> [-o <file>]`: read one rule file — JSON or YAML — and emit the
+    /// `jev.rules/1` JSON document for it (PROTOCOL.md §11). The loader reads both spellings, so
+    /// this is interchange and validation, not a required step: no model is called and no
+    /// document is read.
+    RulesCompile { path: String, out: Option<String> },
     Status,
 }
 
@@ -182,6 +189,7 @@ pub fn parse(args: &[String]) -> Result<Invocation, UsageError> {
     let mut verb: Option<Verb> = None;
     let mut goal: Option<String> = None;
     let mut dir: Option<String> = None;
+    let mut out: Option<String> = None;
     let mut force = false;
     let mut positional: Vec<String> = Vec::new();
 
@@ -237,6 +245,13 @@ pub fn parse(args: &[String]) -> Result<Invocation, UsageError> {
                 }
                 dir = Some(value);
             }
+            "-o" | "--out" => {
+                let value = value_of(args, &mut i, inline, name)?;
+                if value.trim().is_empty() {
+                    return Err(UsageError(format!("{name} needs a file to write")));
+                }
+                out = Some(value);
+            }
             "--force" => {
                 if inline.is_some() {
                     return Err(UsageError("--force takes no value".to_string()));
@@ -263,6 +278,7 @@ pub fn parse(args: &[String]) -> Result<Invocation, UsageError> {
             no_flag(verb.is_some(), "--verb", "explain")?;
             no_flag(goal.is_some(), "--goal", "explain")?;
             no_flag(dir.is_some(), "--dir", "explain")?;
+            no_flag(out.is_some(), "--out", "explain")?;
             no_flag(force, "--force", "explain")?;
             Command::Explain(one_target("explain", &rest, Position::LineCol)?)
         }
@@ -270,12 +286,14 @@ pub fn parse(args: &[String]) -> Result<Invocation, UsageError> {
             no_flag(verb.is_some(), "--verb", "review")?;
             no_flag(goal.is_some(), "--goal", "review")?;
             no_flag(dir.is_some(), "--dir", "review")?;
+            no_flag(out.is_some(), "--out", "review")?;
             no_flag(force, "--force", "review")?;
             Command::Review(one_target("review", &rest, Position::None)?)
         }
         "action" => {
             no_flag(goal.is_some(), "--goal", "action")?;
             no_flag(dir.is_some(), "--dir", "action")?;
+            no_flag(out.is_some(), "--out", "action")?;
             no_flag(force, "--force", "action")?;
             let Some(verb) = verb else {
                 return Err(UsageError(
@@ -290,6 +308,7 @@ pub fn parse(args: &[String]) -> Result<Invocation, UsageError> {
         "plan" => {
             no_flag(verb.is_some(), "--verb", "plan")?;
             no_flag(dir.is_some(), "--dir", "plan")?;
+            no_flag(out.is_some(), "--out", "plan")?;
             no_flag(force, "--force", "plan")?;
             let Some(goal) = goal else {
                 return Err(UsageError("plan needs --goal <text>".to_string()));
@@ -303,6 +322,7 @@ pub fn parse(args: &[String]) -> Result<Invocation, UsageError> {
             no_flag(verb.is_some(), "--verb", "inspect")?;
             no_flag(goal.is_some(), "--goal", "inspect")?;
             no_flag(dir.is_some(), "--dir", "inspect")?;
+            no_flag(out.is_some(), "--out", "inspect")?;
             Command::Inspect {
                 target: one_target("inspect", &rest, Position::None)?,
                 force,
@@ -313,29 +333,70 @@ pub fn parse(args: &[String]) -> Result<Invocation, UsageError> {
             no_flag(goal.is_some(), "--goal", "rules")?;
             let mut rest = rest.into_iter();
             match rest.next().as_deref() {
-                // `init` is the only subcommand: the shipped set is written out to be read and
-                // edited, and there is nothing to list, enable or delete that the files
-                // themselves do not already say.
+                // `init` is the only subcommand that writes a directory: the shipped set is
+                // written out to be read and edited, and there is nothing to list, enable or
+                // delete that the files themselves do not already say.
                 Some("init") => {
                     if let Some(extra) = rest.next() {
                         return Err(UsageError(format!(
                             "rules init takes no arguments, got `{extra}`"
                         )));
                     }
+                    if out.is_some() {
+                        return Err(UsageError(
+                            "rules init writes into --dir; --out is for `rules compile`"
+                                .to_string(),
+                        ));
+                    }
                     Command::RulesInit { dir, force }
+                }
+                // `compile` reads one file and writes one file's worth of JSON. It takes no
+                // `--dir` and no `--force`: there is one input and at most one output, so a
+                // directory to search or a file to overwrite is a different command.
+                Some("compile") => {
+                    if dir.is_some() {
+                        return Err(UsageError(
+                            "rules compile reads the file you name; --dir is for `rules init`"
+                                .to_string(),
+                        ));
+                    }
+                    if force {
+                        return Err(UsageError(
+                            "rules compile writes only where -o says; --force is not for it"
+                                .to_string(),
+                        ));
+                    }
+                    let Some(path) = rest.next() else {
+                        return Err(UsageError(
+                            "rules compile needs a file to read, e.g. `jev rules compile a.yaml`"
+                                .to_string(),
+                        ));
+                    };
+                    if let Some(extra) = rest.next() {
+                        return Err(UsageError(format!(
+                            "rules compile takes one file, got `{extra}` too"
+                        )));
+                    }
+                    Command::RulesCompile { path, out }
                 }
                 Some(other) => {
                     return Err(UsageError(format!(
-                        "unknown `rules` subcommand `{other}`; the only one is `init`"
+                        "unknown `rules` subcommand `{other}`; they are `init` and `compile`"
                     )))
                 }
-                None => return Err(UsageError("rules needs a subcommand: `jev rules init`".to_string())),
+                None => {
+                    return Err(UsageError(
+                        "rules needs a subcommand: `jev rules init`, `jev rules compile`"
+                            .to_string(),
+                    ))
+                }
             }
         }
         "status" => {
             no_flag(verb.is_some(), "--verb", "status")?;
             no_flag(goal.is_some(), "--goal", "status")?;
             no_flag(dir.is_some(), "--dir", "status")?;
+            no_flag(out.is_some(), "--out", "status")?;
             no_flag(force, "--force", "status")?;
             if !rest.is_empty() {
                 return Err(UsageError(format!(
@@ -773,6 +834,45 @@ mod tests {
         assert!(parse_args(&["review", "--verb", "docs", "a.py"]).is_err());
         assert!(parse_args(&["status", "--goal", "x"]).is_err());
         assert!(parse_args(&["explain", "--goal", "x", "a.py"]).is_err());
+        assert!(parse_args(&["status", "--out", "x"]).is_err(), "--out is for rules compile");
+        assert!(parse_args(&["inspect", "--out", "x", "a.py"]).is_err());
+    }
+
+    #[test]
+    fn rules_compile_takes_one_file_and_an_optional_destination() {
+        assert_eq!(
+            run(&["rules", "compile", ".jev/rules/a.yaml"]).0,
+            Command::RulesCompile {
+                path: ".jev/rules/a.yaml".to_string(),
+                out: None,
+            }
+        );
+        assert_eq!(
+            run(&["rules", "compile", "a.yaml", "-o", "a.json"]).0,
+            Command::RulesCompile {
+                path: "a.yaml".to_string(),
+                out: Some("a.json".to_string()),
+            }
+        );
+        assert_eq!(
+            run(&["rules", "compile", "a.yaml", "--out=b.json"]).0,
+            Command::RulesCompile {
+                path: "a.yaml".to_string(),
+                out: Some("b.json".to_string()),
+            }
+        );
+
+        // One file in, at most one file out. A missing input, a second input, and the flags
+        // that belong to `rules init` are each refused, and the unknown-subcommand message
+        // names both subcommands rather than the one that used to be the only one.
+        assert!(parse_args(&["rules", "compile"]).unwrap_err().0.contains("needs a file"));
+        assert!(parse_args(&["rules", "compile", "a.yaml", "b.yaml"]).is_err());
+        assert!(parse_args(&["rules", "compile", "a.yaml", "--dir", "d"]).is_err());
+        assert!(parse_args(&["rules", "compile", "a.yaml", "--force"]).is_err());
+        assert!(parse_args(&["rules", "init", "--out", "x"]).is_err());
+        let e = parse_args(&["rules", "comple"]).unwrap_err();
+        assert!(e.0.contains("init"), "{e}");
+        assert!(e.0.contains("compile"), "{e}");
     }
 
     #[test]
@@ -815,11 +915,13 @@ mod tests {
             assert!(USAGE.contains(&format!("jev {command} ")), "{command}");
         }
         assert!(USAGE.contains("jev rules init "), "rules init");
+        assert!(USAGE.contains("jev rules compile "), "rules compile");
         for flag in [
             "--verb",
             "--goal",
             "--force",
             "--dir",
+            "--out",
             "--base-url",
             "--model",
             "--max-tokens",

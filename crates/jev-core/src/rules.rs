@@ -17,8 +17,17 @@
 //! *nearly* right finds *nearly* the right lines, which is a bug farm nobody can debug. Each
 //! rule's pattern is compiled once per pass, in `inspections::candidates`, never per line.
 //!
-//! **Two sources, one set.** A rule comes either from `.jev/rules/*.json` — the repository's
-//! own, `RuleSource::Repository` — or from the set shipped inside the binary
+//! **One document, two spellings.** A rule file is `schema: jev.rules/1` and a list of rules, and
+//! it is read whether it is written as JSON (`.json`) or as YAML (`.yaml`, `.yml`). The extension
+//! picks the parser and nothing else: both spellings deserialise into the same `RuleFile`, so the
+//! merged set, the hash, the lints and the findings cannot tell which one a rule was authored in,
+//! and a repository can move a file from one spelling to the other without changing what a pass
+//! does. YAML is the spelling for a *hand*: prose does not need `\n` escapes, and a regex is
+//! written once rather than escaped twice (see GUIDE §4). JSON remains the interchange — the
+//! shipped set is embedded as JSON, and `jev rules compile` emits it.
+//!
+//! **Two sources, one set.** A rule comes either from `.jev/rules/*.{json,yaml,yml}` — the
+//! repository's own, `RuleSource::Repository` — or from the set shipped inside the binary
 //! (`default_rules/<group>/*.json`, embedded by `build.rs`, `RuleSource::Builtin`). [`load`]
 //! merges them with the repository winning: a file the user wrote always shadows a shipped rule
 //! that claims the same `id`. Which source a rule came from travels with it onto every finding
@@ -40,6 +49,9 @@ use std::path::{Path, PathBuf};
 pub const SCHEMA: &str = "jev.rules/1";
 
 /// Where rules live, relative to the workspace root.
+///
+/// One flat directory: the repository's rule files, one rule or many per file, as JSON
+/// (`.json`) or YAML (`.yaml`, `.yml`).
 pub const DIR: &str = ".jev/rules";
 
 /// Where the shipped set lives in the source tree, relative to `crates/jev-core`.
@@ -80,14 +92,14 @@ pub enum Inspection {
         pattern: String,
         /// Only report when the file holds *more* than this many matches; `Some(0)` means
         /// "any match at all". `None` is the same as `Some(0)`.
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         max_matches: Option<usize>,
     },
     /// The pattern the file is expected to contain but does not (a licence header, a module
     /// declaration). One candidate, at the head of the file.
     Absent {
         pattern: String,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         max_matches: Option<usize>,
     },
 }
@@ -114,14 +126,14 @@ pub struct Judgement {
     pub question: String,
     /// Passed through to the wire unchanged: an object for `choice`, an ordered array for
     /// `score`, `{"true": …, "false": …}` for `noul`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub criteria: Option<serde_json::Value>,
     /// The labels an answer may pick to say *why*. Advisory.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasons: Option<serde_json::Value>,
     /// A candidate is only reported when the decision's probability clears this. Default 0.5:
     /// a coin flip is not a finding.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_probability: Option<f64>,
 }
 
@@ -133,15 +145,15 @@ pub struct Rule {
     /// The rule, in prose. Becomes part of `Finding.detail`.
     pub text: String,
     /// `information` or `warning`; `error` is reserved (PROTOCOL §9) and maps to `warning`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub severity: Option<String>,
     #[serde(default)]
     pub applies_to: Vec<String>,
     pub inspection: Inspection,
     pub judgement: Judgement,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verb_hint: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub docs: Option<String>,
     /// Where this rule was read from. Never part of the file format and never part of the
     /// rules' hash: a rule's *text* is what a conclusion was taken against, and the two
@@ -150,13 +162,55 @@ pub struct Rule {
     pub source: RuleSource,
 }
 
-/// What one rule file holds.
-#[derive(Debug, Deserialize)]
+/// What one rule file holds, in either spelling.
+///
+/// `Serialize` is here for `jev rules compile`, which reads a `.yaml` file through this struct
+/// and writes the `.json` document back out: one deserialiser and one serialiser for the format,
+/// so a compiled file is a file [`parse`] reads again. An optional field that is absent stays
+/// absent on the way out (`skip_serializing_if`), so the emitted document has the shape a rule
+/// file is written in — the same keys a hand-authored `.json` carries, no `null` padding —
+/// and a diff against that file is the rule's change rather than the converter's.
+#[derive(Debug, Serialize, Deserialize)]
 struct RuleFile {
     #[serde(default)]
     schema: Option<String>,
     #[serde(default)]
     rules: Vec<Rule>,
+}
+
+/// The rule-file spellings the loader reads, chosen by the file's extension.
+///
+/// The extension picks the parser and nothing else. It is not a check on the contents — a
+/// `.yaml` file holding JSON is valid YAML, because YAML is a JSON superset, and this parser
+/// reads it as the document it is — and a file with no rule-file extension is not a rule file at
+/// all, so a README left in `.jev/rules/` is ignored rather than reported as broken.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Format {
+    Json,
+    Yaml,
+}
+
+impl Format {
+    /// The format a path's extension names, or `None` when the loader does not read it.
+    fn of(path: &Path) -> Option<Format> {
+        match path.extension().and_then(|e| e.to_str()) {
+            Some("json") => Some(Format::Json),
+            Some("yaml") | Some("yml") => Some(Format::Yaml),
+            _ => None,
+        }
+    }
+
+    /// One document, or the parser's own account of what is wrong with it.
+    ///
+    /// The two parsers have two error types and one message: what the caller reports is
+    /// "is not a rules document" plus the parser's line, which is what a reader needs from a
+    /// hand-edited file.
+    fn parse(self, text: &str) -> Result<RuleFile, String> {
+        match self {
+            Format::Json => serde_json::from_str(text).map_err(|e| e.to_string()),
+            Format::Yaml => serde_yaml::from_str(text).map_err(|e| e.to_string()),
+        }
+    }
 }
 
 /// The rules that loaded, the files that did not, and a hash of the result.
@@ -192,7 +246,8 @@ impl RuleSet {
     }
 }
 
-/// Read the rules for `root`: `.jev/rules/*.json`, plus the shipped set when `defaults`.
+/// Read the rules for `root`: `.jev/rules/*.{json,yaml,yml}`, plus the shipped set when
+/// `defaults`.
 ///
 /// A file that cannot be read, cannot be parsed, or does not carry `schema: "jev.rules/1"` is
 /// skipped with a stated reason and the rest still load — the same treatment `Config` gives a
@@ -237,21 +292,28 @@ fn merge(shipped: Vec<Rule>, repo: Vec<Rule>) -> Vec<Rule> {
     rules
 }
 
-/// Read one directory of `<name>.json` files, in path order.
+/// Read one directory of rule files, in path order, in whichever spelling each one is written.
+///
+/// Every file whose extension is `json`, `yaml` or `yml` is read; anything else in the directory
+/// is not a rule file and is left alone. Both spellings mix freely in one directory — a rule set
+/// is one set whatever the extension of each file — and the order is the sorted path, so which
+/// rule a pass runs first does not depend on the filesystem.
 fn load_dir(dir: &Path, source: RuleSource) -> RuleSet {
-    let mut paths: Vec<PathBuf> = match std::fs::read_dir(dir) {
+    let mut paths: Vec<(PathBuf, Format)> = match std::fs::read_dir(dir) {
         Ok(entries) => entries
             .flatten()
             .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|e| e == "json"))
+            .filter_map(|path| Format::of(&path).map(|format| (path, format)))
             .collect(),
         // No rules directory is the normal case in a repository that has written none yet.
         Err(_) => return RuleSet::default(),
     };
-    paths.sort();
+    // Path order, and only path order: the extension must not become a tiebreaker between two
+    // files whose paths merely start alike.
+    paths.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut set = RuleSet::default();
-    for path in paths {
+    for (path, format) in paths {
         let shown = path.display().to_string();
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
@@ -260,7 +322,7 @@ fn load_dir(dir: &Path, source: RuleSource) -> RuleSet {
                 continue;
             }
         };
-        match parse(&text, source) {
+        match parse(&text, source, format) {
             Ok(rules) => set.rules.extend(rules),
             Err(reason) => set.skipped.push((shown, reason)),
         }
@@ -269,12 +331,19 @@ fn load_dir(dir: &Path, source: RuleSource) -> RuleSet {
 }
 
 /// Read embedded files that are already in memory, named as they are in the source tree.
+///
+/// The shipped set is embedded from `default_rules/<group>/*.json` (`build.rs`), so its names
+/// end in `.json` and it parses as JSON. The extension still decides, rather than this function
+/// assuming JSON: if the shipped tree ever holds a `.yaml` file it is read as YAML here with no
+/// second code path, and a name carrying no rule-file extension (the shape a fixture with a
+/// plain name has) keeps the JSON reading it has always had.
 fn load_named(files: &[(&str, &str)], source: RuleSource) -> RuleSet {
     let mut set = RuleSet::default();
     for (name, text) in files {
         // The path a reader can open in this repository, not the build's temporary copy.
         let shown = format!("{DEFAULT_DIR}/{name}");
-        match parse(text, source) {
+        let format = Format::of(Path::new(name)).unwrap_or(Format::Json);
+        match parse(text, source, format) {
             Ok(rules) => set.rules.extend(rules),
             Err(reason) => set.skipped.push((shown, reason)),
         }
@@ -283,21 +352,60 @@ fn load_named(files: &[(&str, &str)], source: RuleSource) -> RuleSet {
 }
 
 /// One rules document's rules, or the reason it was skipped.
-fn parse(text: &str, source: RuleSource) -> Result<Vec<Rule>, String> {
-    let file: RuleFile =
-        serde_json::from_str(text).map_err(|e| format!("is not a rules document: {e}"))?;
+fn parse(text: &str, source: RuleSource, format: Format) -> Result<Vec<Rule>, String> {
+    let file = format
+        .parse(text)
+        .map_err(|e| format!("is not a rules document: {e}"))?;
+    Ok(valid(file, source)?.rules)
+}
+
+/// One parsed document, with the schema checked and every rule stamped with its source.
+///
+/// The single place the `schema` string is checked and the single place a rule is told where it
+/// came from, so the pass and `compile` ([`compile`]) cannot disagree about what a rule file is:
+/// the loader reports the reason a file is skipped, and the converter refuses the same file with
+/// the same sentence.
+fn valid(mut file: RuleFile, source: RuleSource) -> Result<RuleFile, String> {
     match file.schema.as_deref() {
-        Some(SCHEMA) => Ok(file
-            .rules
-            .into_iter()
-            .map(|mut rule| {
+        Some(SCHEMA) => {
+            for rule in &mut file.rules {
                 rule.source = source;
-                rule
-            })
-            .collect()),
+            }
+            Ok(file)
+        }
         Some(other) => Err(format!("schema is {other:?}, not {SCHEMA:?}")),
         None => Err(format!("carries no `schema`; expected {SCHEMA:?}")),
     }
+}
+
+/// One rule file as a `jev.rules/1` JSON document, whatever spelling it was written in.
+///
+/// `jev rules compile` (§11) is for interchange, not for running: the loader already reads a
+/// `.yaml` file where it stands, so nothing needs this to inspect with. It exists so a rule
+/// authored in YAML can be handed to anything that speaks JSON — reviewed as a diff, checked
+/// by a tool, or kept as a generated `.json` file — and so a conversion has one implementation
+/// rather than a script per author.
+///
+/// It **validates while it converts**: the document goes through the same [`Format::parse`] and
+/// the same schema check the pass uses, so a file this refuses (an unknown extension, a document
+/// that does not parse, a schema that is not `jev.rules/1`) is one the pass would have skipped,
+/// for the same reason. The returned value is the JSON document itself, so a caller can print it
+/// compact or write it pretty without decoding a string again.
+pub fn compile(path: &Path) -> Result<serde_json::Value, String> {
+    let Some(format) = Format::of(path) else {
+        return Err(format!(
+            "{} is not a rule file; expected a .json, .yaml or .yml extension",
+            path.display()
+        ));
+    };
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("{} cannot be read: {e}", path.display()))?;
+    let file = format
+        .parse(&text)
+        .map_err(|e| format!("{} is not a rules document: {e}", path.display()))?;
+    let file = valid(file, RuleSource::Repository)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(serde_json::to_value(file).expect("a serde_json::Value always serializes"))
 }
 
 /// A stable digest of the rules, taken over their JSON.
@@ -341,7 +449,9 @@ impl InitReport {
 /// A rule the user cannot read is a rule they cannot calibrate, so the shipped set is
 /// materialisable: one file per shipped file, in the format `.jev/rules/*.json` already uses, so
 /// that editing one is editing a rule file and the repository's own copy then shadows the
-/// shipped rule it came from (`merge`).
+/// shipped rule it came from (`merge`). The name keeps the shipped file's extension — the
+/// shipped set is embedded as JSON, so these are `.json` — and the written file is read back
+/// whichever spelling it has.
 ///
 /// **Each file is written under its group and its name** (`default_rules/prose/lists-end-in-etc.json`
 /// → `prose-lists-end-in-etc.json`). The loader reads one flat directory (`DIR`), so the group
@@ -555,8 +665,312 @@ mod tests {
         }]
     }"#;
 
+    /// `GOOD` written in the other spelling: same document, same rule, same fields.
+    ///
+    /// Every field `GOOD` sets is set here too — `max_matches`, `criteria`, `reasons`,
+    /// `min_probability`, `docs` — because the point of the twin is that a move between the
+    /// spellings is not a move between schemas. The two conventions it shows are the two a YAML
+    /// author has to know: a regex in single quotes is literal, and `criteria` keys are quoted
+    /// so they are the strings `"true"`/`"false"` and not YAML booleans.
+    const YAML_GOOD: &str = r#"
+schema: jev.rules/1
+rules:
+  - id: no-unwrap-in-handlers
+    title: Unwrap in a request handler
+    text: A handler must not unwrap; return the error instead.
+    severity: warning
+    applies_to:
+      - "**/*.rs"
+    inspection:
+      kind: regex
+      pattern: '\.unwrap\(\)'
+      max_matches: 0
+    judgement:
+      question: Is this unwrap reachable from a request handler?
+      criteria:
+        "true": a request can reach it
+        "false": test code
+      reasons:
+        reachable: a request can reach it
+      min_probability: 0.75
+    verb_hint: fix
+    docs: why this rule exists
+"#;
+
     fn one_rule() -> Rule {
         serde_json::from_str::<RuleFile>(GOOD).unwrap().rules.remove(0)
+    }
+
+    #[test]
+    fn a_yaml_file_loads_as_the_rule_its_json_twin_holds() {
+        // The whole claim of the second spelling: a repository can move one file from `.json`
+        // to `.yaml` and the pass runs the same rule. Compared field by field through the
+        // struct, so a field the YAML spelling quietly dropped shows up here.
+        let root = dir("yaml-twin");
+        write(&root, "a.json", GOOD);
+        write(&root, "b.yaml", YAML_GOOD);
+        write(&root, "c.yml", YAML_GOOD);
+
+        let set = load(&root, false, &[]);
+        assert!(set.skipped.is_empty(), "{:?}", set.skipped);
+        let loaded: Vec<&str> = set.rules.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(loaded, vec!["no-unwrap-in-handlers"; 3], "{:?}", set.skipped);
+        let json = one_rule();
+        for rule in &set.rules {
+            assert_eq!(rule, &json, "a YAML spelling changed the rule");
+        }
+        // And the fields a rule is written *for*, checked directly rather than through `==`, so
+        // a failure says which one the YAML lost.
+        let yaml = &set.rules[1];
+        assert_eq!(yaml.title, "Unwrap in a request handler");
+        assert_eq!(yaml.text, "A handler must not unwrap; return the error instead.");
+        assert_eq!(yaml.applies_to, vec!["**/*.rs".to_string()]);
+        assert_eq!(yaml.severity.as_deref(), Some("warning"));
+        assert_eq!(yaml.verb_hint.as_deref(), Some("fix"));
+        assert_eq!(yaml.docs.as_deref(), Some("why this rule exists"));
+        assert_eq!(yaml.judgement.min_probability, Some(0.75));
+        assert_eq!(
+            yaml.judgement.criteria,
+            Some(serde_json::json!({"true": "a request can reach it", "false": "test code"}))
+        );
+        assert_eq!(
+            yaml.judgement.reasons,
+            Some(serde_json::json!({"reachable": "a request can reach it"}))
+        );
+        assert_eq!(
+            yaml.inspection,
+            Inspection::Regex {
+                pattern: "\\.unwrap\\(\\)".to_string(),
+                max_matches: Some(0),
+            }
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn broken_yaml_is_skipped_with_a_reason_and_the_rest_still_load() {
+        let root = dir("yaml-broken");
+        // An unclosed quote: unparsable, and the reason names the line.
+        write(&root, "a-broken.yaml", "schema: jev.rules/1\nrules:\n  - id: 'oops\n");
+        write(&root, "b-wrong-schema.yml", "schema: jev.rules/9\nrules: []\n");
+        write(&root, "c-no-schema.yaml", "rules: []\n");
+        // YAML is a JSON superset, so JSON pasted into a `.yaml` file is not a mistake and is
+        // not reported as one: it parses as the document it is.
+        write(
+            &root,
+            "d-json-inside-yaml.yaml",
+            &GOOD.replace("no-unwrap-in-handlers", "json-inside-yaml"),
+        );
+        write(&root, "e-good.yaml", YAML_GOOD);
+
+        let set = load(&root, false, &[]);
+        assert_eq!(set.skipped.len(), 3, "{:?}", set.skipped);
+        assert_eq!(
+            set.rules.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            vec!["json-inside-yaml", "no-unwrap-in-handlers"]
+        );
+        assert!(set.skipped[0].0.ends_with("a-broken.yaml"));
+        assert!(set.skipped[0].1.contains("not a rules document"), "{:?}", set.skipped[0]);
+        assert!(
+            set.skipped[0].1.contains("line 3"),
+            "the reason names the line: {:?}",
+            set.skipped[0]
+        );
+        assert!(set.skipped[1].0.ends_with("b-wrong-schema.yml"));
+        assert!(set.skipped[1].1.contains("jev.rules/9"), "{:?}", set.skipped[1]);
+        assert!(set.skipped[2].1.contains("schema"), "{:?}", set.skipped[2]);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn json_and_yaml_load_together_in_path_order() {
+        // One set, two spellings, one order: the sorted path, so the extension is not a
+        // tiebreaker and the two files run in the order a reader sees them.
+        let root = dir("mixed");
+        write(&root, "b.yaml", &YAML_GOOD.replace("no-unwrap-in-handlers", "second"));
+        write(&root, "c.yml", &YAML_GOOD.replace("no-unwrap-in-handlers", "third"));
+        write(&root, "a.json", &GOOD.replace("no-unwrap-in-handlers", "first"));
+
+        let set = load(&root, false, &[]);
+        assert!(set.skipped.is_empty(), "{:?}", set.skipped);
+        assert_eq!(
+            set.rules.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            vec!["first", "second", "third"]
+        );
+        // The hash of the mixed set is the hash of the same rules, so moving a file between
+        // spellings does not invalidate a cached conclusion.
+        let same: Vec<Rule> = ["first", "second", "third"]
+            .iter()
+            .map(|id| {
+                let mut rule = one_rule();
+                rule.id = (*id).to_string();
+                rule
+            })
+            .collect();
+        assert_eq!(set.hash, hash_of(&same));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn one_yaml_file_holds_many_rules() {
+        // A rule file is a document, not a rule: one `.yaml` file can hold the whole of a
+        // repository's policy, and the loader reads it as the rules it holds, in file order.
+        let root = dir("yaml-many");
+        write(
+            &root,
+            "policy.yaml",
+            r#"
+schema: jev.rules/1
+rules:
+  - id: first
+    title: First rule
+    text: The first convention.
+    applies_to: ["**/*.rs"]
+    inspection: {kind: regex, pattern: 'TODO'}
+    judgement: {question: Is it a violation?}
+  - id: second
+    title: Second rule
+    text: The second convention.
+    applies_to: ["**/*.py"]
+    inspection:
+      kind: absent
+      pattern: '# Copyright'
+    judgement:
+      question: Is the header missing?
+      min_probability: 0.9
+"#,
+        );
+        let set = load(&root, false, &[]);
+        assert!(set.skipped.is_empty(), "{:?}", set.skipped);
+        assert_eq!(
+            set.rules.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            vec!["first", "second"]
+        );
+        assert_eq!(set.rules[1].applies_to, vec!["**/*.py".to_string()]);
+        assert_eq!(
+            set.rules[1].inspection,
+            Inspection::Absent {
+                pattern: "# Copyright".to_string(),
+                max_matches: None,
+            }
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_rule_file_is_left_alone() {
+        // `.jev/rules/` is a directory a person reads. A README, or an editor's backup, is not
+        // a broken rule and is not reported as one.
+        let root = dir("not-rules");
+        write(&root, "README.md", "# notes\n");
+        write(&root, "a.json.bak", GOOD);
+        write(&root, "a.yaml", YAML_GOOD);
+        let set = load(&root, false, &[]);
+        assert_eq!(set.rules.len(), 1);
+        assert!(set.skipped.is_empty(), "{:?}", set.skipped);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn yaml_and_json_are_the_same_rule() {
+        // The golden: the rule this repository ships for its own `.unwrap()` convention, in
+        // both spellings, read from the tree rather than from a fixture. `include_str!` means
+        // the test fails at the compiler if either file is deleted, and the assertions below
+        // are the no-unwrap fields in full — the `applies_to` glob, the pattern, the question,
+        // both criteria, the floor and the verb hint.
+        let json_text = include_str!("../../../.jev/rules/no-unwrap-outside-tests.json");
+        let yaml_text = include_str!("../../../docs/research/examples/no-unwrap-outside-tests.yaml");
+
+        let json = parse(json_text, RuleSource::Repository, Format::Json).unwrap();
+        let yaml = parse(yaml_text, RuleSource::Repository, Format::Yaml).unwrap();
+        assert_eq!(json.len(), 1);
+        assert_eq!(
+            yaml, json,
+            "the YAML example must be the JSON rule, not a rule that resembles it"
+        );
+
+        let rule = &yaml[0];
+        assert_eq!(rule.id, "no-unwrap-outside-tests");
+        assert_eq!(rule.title, "Unwrap outside tests");
+        assert_eq!(rule.applies_to, vec!["**/crates/**/*.rs".to_string()]);
+        assert_eq!(
+            rule.inspection,
+            Inspection::Regex {
+                pattern: "\\.unwrap\\(\\)".to_string(),
+                max_matches: None,
+            }
+        );
+        assert_eq!(rule.judgement.min_probability, Some(0.85));
+        assert_eq!(rule.verb_hint.as_deref(), Some("fix"));
+        assert!(
+            rule.text.contains("— handle the error"),
+            "the prose survived the spelling change intact: {}",
+            rule.text
+        );
+        assert!(
+            rule.judgement.question.contains("rather than inside a test module"),
+            "the folded question is one line: {}",
+            rule.judgement.question
+        );
+        assert_eq!(
+            rule.judgement.criteria,
+            Some(serde_json::json!({
+                "true": "code that ships can reach it and the value is not guaranteed",
+                "false": "it is in a test module, quoted in a doc comment, or behind an invariant the surrounding lines state",
+            }))
+        );
+
+        // And the interchange direction, on the same two files: `jev rules compile` of the YAML
+        // emits the document in the tree, and compiling the JSON file is that file again. Both
+        // compared as JSON values, so this is the *document* being equal, not just the rules it
+        // deserialises to.
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let checked_in: serde_json::Value = serde_json::from_str(json_text).unwrap();
+        assert_eq!(
+            compile(
+                &root.join("docs/research/examples/no-unwrap-outside-tests.yaml")
+            )
+            .unwrap(),
+            checked_in,
+            "compiling the YAML example must produce the JSON rule that is in the tree"
+        );
+        assert_eq!(
+            compile(&root.join(".jev/rules/no-unwrap-outside-tests.json")).unwrap(),
+            checked_in,
+            "compiling a JSON rule file is that file: no key added, no `null` padding"
+        );
+    }
+
+    #[test]
+    fn compile_emits_json_the_loader_reads_back() {
+        let source = dir("compile");
+        write(&source, "a.yaml", YAML_GOOD);
+        let path = source.join(DIR).join("a.yaml");
+
+        let document = compile(&path).unwrap();
+        assert_eq!(document["schema"], "jev.rules/1");
+        assert_eq!(document["rules"][0]["id"], "no-unwrap-in-handlers");
+
+        // What `compile` writes is what `load` reads: the emitted JSON, on its own, is a rule
+        // file the pass runs — into a directory of its own, so what is loaded is the compiled
+        // document and not the YAML it came from.
+        let target = dir("compile-out");
+        let written = target.join(DIR).join("a.json");
+        std::fs::write(&written, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+        let set = load(&target, false, &[]);
+        assert!(set.skipped.is_empty(), "{:?}", set.skipped);
+        assert_eq!(set.rules.len(), 1, "compiling to JSON must not change the rule");
+        assert_eq!(set.rules[0], one_rule());
+
+        // A file the pass would skip is refused here too, with the reason.
+        std::fs::write(source.join(DIR).join("bad.yaml"), "schema: jev.rules/9\nrules: []\n")
+            .unwrap();
+        let e = compile(&source.join(DIR).join("bad.yaml")).unwrap_err();
+        assert!(e.contains("jev.rules/9"), "{e}");
+        let e = compile(&source.join(DIR).join("notes.md")).unwrap_err();
+        assert!(e.contains("not a rule file"), "{e}");
+        std::fs::remove_dir_all(&source).ok();
+        std::fs::remove_dir_all(&target).ok();
     }
 
     #[test]

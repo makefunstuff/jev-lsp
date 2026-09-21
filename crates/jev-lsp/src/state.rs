@@ -514,7 +514,7 @@ impl AppState {
 
     // ---- the rules pass -----------------------------------------------------
 
-    /// The rules for a workspace root: `.jev/rules/*.json`, plus the shipped set when
+    /// The rules for a workspace root: `.jev/rules/*.{json,yaml,yml}`, plus the shipped set when
     /// `rules.defaults` is on.
     ///
     /// The files are read on every call, because a rule the user just edited has to take effect
