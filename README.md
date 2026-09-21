@@ -9,7 +9,7 @@
 
 ## Demo
 
-Silent action loop across OpenCode, Neovim, and VS Code: paste an AI-slop comment, get a finding, apply the fix.
+Silent action loop across Neovim and VS Code: paste an AI-slop comment, get a finding, apply the fix. (OpenCode ambient unsupported on 1.18 — see below.)
 
 [![Demo: OpenCode → Neovim → VS Code](https://makefunstuff.github.io/jev-lsp/assets/demo-slop-triptych-poster.jpg)](https://makefunstuff.github.io/jev-lsp/assets/demo-slop-triptych.mp4)
 
