@@ -7,6 +7,7 @@ use jev_core::types::{
     Severity, Verb, ACTION_DATA_VERSION, ARTIFACT_SCHEMA, RESULT_SCHEMA,
 };
 use serde_json::{json, Value};
+use std::future::Future;
 use std::sync::Arc;
 use tower_lsp::jsonrpc::Result as RpcResult;
 use tower_lsp::lsp_types::notification::Progress;
@@ -259,6 +260,7 @@ impl JevServer {
                 return;
             };
             let mut wait = debounce;
+            let surfaces = ClientSurfaces(&client);
             loop {
                 if let Some(d) = wait.take() {
                     tokio::time::sleep(d).await;
@@ -290,8 +292,17 @@ impl JevServer {
                             if let Some(root) = state.root() {
                                 let _ = crate::trace::append(&root, &passed.trace_entry(&uri));
                             }
+                            // The idle trigger covers documents a one-shot pull may have
+                            // asked about at `didOpen`; pushing here is what makes the late
+                            // conclusion reach such a client (PROTOCOL §9).
+                            surfaces
+                                .publish(&uri, ambient_items(&passed.findings, &doc, passed.source))
+                                .await;
                         }
-                        Ok(Err(f)) => report(&client, &uri, Err(f), Pass::Rules).await,
+                        Ok(Err(f)) => {
+                            report(&client, &uri, Err(f), Pass::Rules).await;
+                            surfaces.publish(&uri, Vec::new()).await;
+                        }
                         Err(_) => continue,
                     }
                     refresh_surfaces(&state, &client).await;
@@ -344,12 +355,19 @@ impl JevServer {
                 return;
             }
             let mut wait = debounce;
+            // Findings are pushed, not only re-pulled, when a background pass lands: a client
+            // that one-shots `textDocument/diagnostic` before the pass has run would otherwise
+            // render an empty sign column forever (PROTOCOL §9). An explicitly requested review
+            // is answered by its command, so it is not pushed.
+            let push = matches!(pass, Pass::Rules | Pass::Review);
+            let surfaces = ClientSurfaces(&client);
             loop {
                 if let Some(d) = wait.take() {
                     tokio::time::sleep(d).await;
                 }
                 let generation = state.generation(&uri);
-                let outcome = {
+                let ambient = state.config().ambient;
+                let work = {
                     let state = state.clone();
                     let uri = uri.clone();
                     tokio::task::spawn_blocking(move || {
@@ -365,19 +383,46 @@ impl JevServer {
                             }
                         })
                     })
-                    .await
+                };
+
+                // The pending cue, and the budget that retires it, belong to the background
+                // path only: an explicit review's caller waits for the answer itself.
+                let awaited = if push {
+                    supervise_ambient(&surfaces, &uri, &ambient, work).await
+                } else {
+                    Some(work.await)
                 };
 
                 let superseded = state.generation(&uri) != generation;
-                if let Ok(Some(outcome)) = outcome {
-                    if !superseded {
+                match awaited {
+                    // The pass met its budget and was abandoned: the cue is already cleared,
+                    // and there is no conclusion to record.
+                    None => {}
+                    Some(Ok(Some(outcome))) if !superseded => {
                         // `outcome` here is what `report` takes: a Result, because a run can
                         // fail as well as find nothing, and only a completed run is recorded.
                         if let (Ok(passed), Some(root)) = (&outcome, state.root()) {
                             let _ = crate::trace::append(&root, &passed.trace_entry(&uri));
                         }
+                        if push {
+                            // Push the conclusion, replacing the cue. An empty set clears it: a
+                            // pass that no-hits must retire the cue, not leave it standing.
+                            match (state.doc(&uri), &outcome) {
+                                (Some(doc), Ok(passed)) => {
+                                    surfaces
+                                        .publish(
+                                            &uri,
+                                            ambient_items(&passed.findings, &doc, passed.source),
+                                        )
+                                        .await;
+                                }
+                                (Some(_), Err(_)) => surfaces.publish(&uri, Vec::new()).await,
+                                (None, _) => {}
+                            }
+                        }
                         report(&client, &uri, outcome, pass).await;
                     }
+                    Some(_) => {}
                 }
 
                 let again = match pass {
@@ -848,6 +893,125 @@ async fn refresh_surfaces(state: &AppState, client: &Client) {
                 "jev: client does not serve workspace/diagnostic/refresh",
             )
             .await;
+    }
+}
+
+/// The push surface the ambient path writes to, split from `Client` so the pending cue and
+/// the budget can be driven without a socket (PROTOCOL §9).
+///
+/// Findings are pushed with `textDocument/publishDiagnostics` when a background pass lands,
+/// not only re-pulled: a client that one-shots `textDocument/diagnostic` before the pass has
+/// run would otherwise sit empty forever. The refresh (`refresh_surfaces`) still goes out
+/// alongside, for the clients that are written to re-pull.
+#[async_trait]
+trait AmbientSurfaces: Send + Sync {
+    /// Replace every diagnostic this server has published for `uri` with `items`. An empty
+    /// vector clears them — which is what retires the pending cue.
+    async fn publish(&self, uri: &str, items: Vec<Diagnostic>);
+    async fn log(&self, level: MessageType, text: String);
+}
+
+/// The real surface: the LSP client this server was built with.
+struct ClientSurfaces<'a>(&'a Client);
+
+#[async_trait]
+impl AmbientSurfaces for ClientSurfaces<'_> {
+    async fn publish(&self, uri: &str, items: Vec<Diagnostic>) {
+        if let Ok(url) = Url::parse(uri) {
+            self.0.publish_diagnostics(url, items, None).await;
+        }
+    }
+
+    async fn log(&self, level: MessageType, text: String) {
+        self.0.log_message(level, text).await;
+    }
+}
+
+/// The document-level "checking…" cue. One per document, at the head, never a finding: its
+/// `data.pending` says what it is, and the finding set that replaces it carries the real one.
+fn pending_cue() -> Diagnostic {
+    Diagnostic {
+        range: Range {
+            start: Position {
+                line: 0,
+                character: 0,
+            },
+            end: Position {
+                line: 0,
+                character: 0,
+            },
+        },
+        severity: Some(DiagnosticSeverity::INFORMATION),
+        code: Some(NumberOrString::String("jev.checking".to_string())),
+        code_description: None,
+        source: Some("jev".to_string()),
+        message: "jev: checking…".to_string(),
+        related_information: None,
+        tags: None,
+        data: Some(json!({"pending": true})),
+    }
+}
+
+/// The findings a completed ambient pass pushes for one document, in the same shape the pull
+/// serves (`to_diagnostic`), so the two routes never disagree.
+fn ambient_items(findings: &[Finding], doc: &jev_core::Document, source: &str) -> Vec<Diagnostic> {
+    findings
+        .iter()
+        .map(|f| to_diagnostic(f, &doc.hash, source))
+        .collect()
+}
+
+/// What `spawn_blocking` hands back for one pass.
+type PassWork = std::result::Result<Option<std::result::Result<Passed, Failure>>, tokio::task::JoinError>;
+
+/// Watch one background pass: publish the pending cue if it outlives `ambient.pending_ms`,
+/// clear it and give up if it outlives `ambient.budget_ms`.
+///
+/// `None` means the budget expired. The cue (if shown) has been cleared and the caller must
+/// record nothing and push nothing: a pass that outlived its documented budget is not a
+/// conclusion, and holding the cue past the clock is the silent empty gutter under another
+/// name. `Some(work)` is the pass's own result — success or failure — for the caller to report
+/// and publish.
+async fn supervise_ambient<F>(
+    surfaces: &dyn AmbientSurfaces,
+    uri: &str,
+    cfg: &jev_core::config::Ambient,
+    mut work: F,
+) -> Option<PassWork>
+where
+    F: Future<Output = PassWork> + Unpin,
+{
+    let budget_ms = cfg.budget_ms.max(1);
+    // A cue that would appear after the budget can never appear: clamp it, so the two clocks
+    // cannot disagree about whether there was ever anything to clear.
+    let pending_after = std::time::Duration::from_millis(cfg.pending_ms.min(budget_ms));
+    let budget = std::time::Duration::from_millis(budget_ms);
+    let mut pending = Box::pin(tokio::time::sleep(pending_after));
+    let mut deadline = Box::pin(tokio::time::sleep(budget));
+    let mut cued = false;
+    loop {
+        tokio::select! {
+            done = &mut work => return Some(done),
+            _ = &mut pending, if !cued => {
+                cued = true;
+                surfaces.publish(uri, vec![pending_cue()]).await;
+            }
+            _ = &mut deadline => {
+                if cued {
+                    surfaces.publish(uri, Vec::new()).await;
+                }
+                surfaces
+                    .log(
+                        MessageType::WARNING,
+                        format!(
+                            "jev: ambient pass for {uri} exceeded its {budget_ms} ms budget; \
+                             the next pass will answer"
+                        ),
+                    )
+                    .await;
+                return None;
+            }
+        }
     }
 }
 
@@ -1700,6 +1864,115 @@ mod progress_tests {
             seen.lock().len(),
             1,
             "the aborted command's token was closed exactly once"
+        );
+    }
+}
+
+/// The ambient push path — the pending cue and the budget — driven without a socket.
+#[cfg(test)]
+mod ambient_tests {
+    use super::*;
+    use parking_lot::Mutex;
+    use std::time::Duration;
+
+    /// What one `publish` call put on the wire, collapsed to what the test cares about.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Pushed {
+        Cue,
+        Clear,
+        Findings(usize),
+    }
+
+    #[derive(Default)]
+    struct Recorder {
+        pushed: Mutex<Vec<Pushed>>,
+        logs: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl AmbientSurfaces for Recorder {
+        async fn publish(&self, _uri: &str, items: Vec<Diagnostic>) {
+            let code = items.first().and_then(|d| d.code.as_ref()).map(|c| match c {
+                NumberOrString::String(s) => s.clone(),
+                NumberOrString::Number(n) => n.to_string(),
+            });
+            let pushed = match (items.len(), code.as_deref()) {
+                (0, _) => Pushed::Clear,
+                (_, Some("jev.checking")) => Pushed::Cue,
+                (n, _) => Pushed::Findings(n),
+            };
+            self.pushed.lock().push(pushed);
+        }
+
+        async fn log(&self, _level: MessageType, text: String) {
+            self.logs.lock().push(text);
+        }
+    }
+
+    fn cfg(pending_ms: u64, budget_ms: u64) -> jev_core::config::Ambient {
+        jev_core::config::Ambient {
+            pending_ms,
+            budget_ms,
+            ..Default::default()
+        }
+    }
+
+    fn passed() -> Passed {
+        Passed {
+            findings: Vec::new(),
+            discarded: 0,
+            from_cache: false,
+            source: "rules",
+            skipped: Vec::new(),
+        }
+    }
+
+    fn done() -> PassWork {
+        Ok(Some(Ok(passed())))
+    }
+
+    #[tokio::test]
+    async fn a_pass_inside_the_pending_window_never_shows_a_cue() {
+        let rec = Recorder::default();
+        let work = Box::pin(async {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            done()
+        });
+        let out = supervise_ambient(&rec, "file:///a.rs", &cfg(50, 500), work).await;
+        assert!(matches!(out, Some(Ok(Some(Ok(_))))), "the pass returns");
+        assert!(
+            rec.pushed.lock().is_empty(),
+            "a sub-second pass must not flash a pending cue"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_slow_pass_shows_the_cue_then_returns_the_result() {
+        let rec = Recorder::default();
+        let work = Box::pin(async {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            done()
+        });
+        let out = supervise_ambient(&rec, "file:///a.rs", &cfg(5, 500), work).await;
+        assert!(out.is_some(), "the pass lands inside the budget");
+        assert_eq!(*rec.pushed.lock(), vec![Pushed::Cue]);
+    }
+
+    #[tokio::test]
+    async fn a_pass_past_the_budget_clears_the_cue_and_gives_up() {
+        let rec = Recorder::default();
+        let work = Box::pin(std::future::pending::<PassWork>());
+        let out = supervise_ambient(&rec, "file:///a.rs", &cfg(5, 30), work).await;
+        assert!(out.is_none(), "the pass is abandoned at its budget");
+        assert_eq!(
+            *rec.pushed.lock(),
+            vec![Pushed::Cue, Pushed::Clear],
+            "the cue is cleared, never left standing"
+        );
+        assert_eq!(
+            rec.logs.lock().len(),
+            1,
+            "and giving up is logged rather than silent"
         );
     }
 }

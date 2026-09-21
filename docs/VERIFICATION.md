@@ -139,9 +139,12 @@ It performs, in order, and asserts at each step:
 6. `workspace/applyEdit` → assert `applied == true`.
 7. Mutate the document, resolve the *same* action again → assert **no `edit` is returned**
    (staleness), and that the response is not an error.
-8. `textDocument/diagnostic` → assert findings carry `data.finding_id` and `data.verb`.
+8. `textDocument/diagnostic` → assert findings carry `data.finding_id` and `data.verb`, that the
+   ambient pass pushed them with `textDocument/publishDiagnostics` before the re-pull, and that
+   the `workspace/diagnostic/refresh` the pull clients rely on also arrived (§9).
 9. `workspace/executeCommand` `jev.cancel` mid-flight → assert a `$/progress` `end` was
-   received for the token and no `edit` followed.
+   received for the token, no `edit` followed, and every `textDocument/publishDiagnostics` names
+   a document the server was told about (a push for an unopened document is the §9 defect).
 10. The three reachable §3.5 failure paths — **model error**, **budget refusal**, **cancellation** —
    each assert exactly one `begin` and one `end` in that order under the supplied `workDoneToken`,
    that nothing arrives under that token after its `end` (read after a settle window, so a leak

@@ -141,7 +141,7 @@ design is visible, not as a claim of coverage.
 | `workspace/applyEdit` | Applying an approved plan step without a pick. | yes |
 | `window/showDocument` | Opening a plan or explanation artifact as a buffer. | yes |
 | `window/showMessage` | The failures a user must be told about once: the model unreachable, a budget first exhausted, a post-apply divergence (§4, §8). Never on a normal edit. | yes |
-| `textDocument/publishDiagnostics` | Only for findings the plugin has explicitly requested as push (edits made *by* the server). | yes |
+| `textDocument/publishDiagnostics` | A background pass's conclusion, pushed when the pass lands — so a client that one-shots `textDocument/diagnostic` before it has run still sees the findings — and the post-apply divergence of §8. | yes |
 | `window/workDoneProgress/create` | Progress the server starts with no request to attach to. | no — every token comes from the client (§3.5 path 1), so none is ever created |
 | `window/showMessageRequest` | Approval prompt with a pick-list `[R2]`. | no — the decision is the client's own picker (`vim.ui.select`) |
 | `client/registerCapability` | `workspace/didChangeWatchedFiles` watchers. | no — no watchers are registered at all, statically or dynamically: the changed set is asked of git when a pass needs it (§5) |
@@ -510,6 +510,12 @@ re-asking about files nobody touched; then one budget permit taken *before* one 
 for the whole document. No answer is invented: a question the response does not mention
 publishes nothing.
 
+**The ambient pass is bounded in time, not only in cost** (§9): `ambient.pending_ms` pushes a
+document-level "checking…" cue when the pass stops being sub-second, and `ambient.budget_ms`
+retires it. A pass that meets its budget pushes its findings (or clears the cue on a no-hit)
+with `textDocument/publishDiagnostics`, so a one-shot pull that arrived early is answered late
+rather than left empty.
+
 **The rules' hash is taken over the merged set** — the repository's rules and the shipped ones
 (§9) — so the shipped set enters the cache key through it, and there is no separate version
 string to keep in step. Editing a shipped rule, adding one, or turning the whole set off with
@@ -736,8 +742,22 @@ is applied when the document has not moved, and is refused by the client when it
   the two differently needs to know, and nothing else about the finding differs.
 - Findings must be dismissible (`:Jev dismiss <finding_id>`), and a dismissal is recorded
   in a per-repository file so it does not resurface.
-- Publish is reserved for changes the server made; otherwise findings are served by pull,
-  refreshed by `workspace/diagnostic/refresh` `[R5]`.
+- Findings reach the client two ways, and both are the contract. A **pull**
+  (`textDocument/diagnostic`) is answered from the cache and refreshed by
+  `workspace/diagnostic/refresh` `[R5]`; and when a background pass finishes, the server
+  **pushes** what it concluded with `textDocument/publishDiagnostics`. The push is what makes a
+  client that one-shots a pull *before* the pass has run work: that pull is empty because no
+  analysis has landed, and a client that reads "empty" as "clean" — or never re-pulls — is left
+  with a silent gutter. Pushing is not reserved for edits the server made: a finding is a
+  finding whether it arrived by pull or by push.
+- **The ambient pass has a clock.** `ambient.pending_ms` (default 500, §10) is how long a
+  background pass may run before the server pushes a document-level `jev.checking` information
+  diagnostic — so a decision that is not sub-second shows a cue rather than an empty gutter;
+  `ambient.budget_ms` (default 8000) is the hard ceiling at which that cue is cleared and the
+  pass stops being awaited. The ceiling sits above `models.decide.timeout_ms` (5000) on purpose:
+  a healthy decision always lands and pushes, and the budget only bites a call that has already
+  outlived its own tier timeout. When the pass lands, its findings replace the cue — or clear it
+  when the pass no-hits. `ERROR` remains reserved for the §8 divergence.
 
 **Two sources, and the repository's own wins.** A rule comes from one of exactly two places,
 and every finding says which (`rule_source`, §6):
@@ -908,6 +928,13 @@ windows around the candidates and no longer on the head (§9) — and `max_files
 documents one idle pass covers. What it declines to look at is reported, never dropped quietly (§9), and
 so is the fact that the shipped set is carrying a pass (`default_rules`, §6).
 
+**`ambient.pending_ms` and `ambient.budget_ms` time the ambient pass** (§9). `pending_ms`
+(default 500) is how long a background pass runs before the server pushes a document-level
+`jev.checking` information diagnostic, so a decision that is not sub-second shows a cue instead
+of an empty gutter; `budget_ms` (default 8000) is the ceiling at which that cue is cleared and
+the pass stops being awaited. Both are read (`crates/jev-lsp/src/server.rs::supervise_ambient`)
+— unlike `ambient.code_lens` and `ambient.inlay_hints` in the list below.
+
 **Ten declared settings are not read by this implementation**, and each is named here so a
 reader does not configure an effect that never happens. They are in the schema because a client
 that sends them must not be rejected; setting one changes nothing:
@@ -1059,3 +1086,4 @@ Recorded so the refusals are not relitigated:
 | 2026-09-20 | **§3.5's "the `end` arrives before the response" was the transport's ordering, and the row that asserted it was a coin flip.** That parenthetical was `verify/lsp_client.py`'s own reading of "valid only until the response to that request is sent" (`[R12]`): the command keeps the lifetime in the order it controls — the `end` is awaited into the transport before the command body returns — but `tower-lsp` writes the two through two arms of one `futures::stream::select` (`transport.rs`), polled round-robin, so which of the server's own two messages is written first is the scheduler's. Measured on one unchanged binary: `jev.status` inverted in 4/50 runs (−36.1 µs … +29.9 µs), with the CI red at −21 µs and a green run the same day at +29 µs, and step 10's paths sat 5 µs from flipping. §3.5 now states what step 9 and step 10 assert — one `begin`, one `end`, and nothing under the token after it, read after a settle window — and that the order of those two is not the command's to fix; `--selftest` gained the `progress_after_end` defect so the replacement can fail. |
 | 2026-09-20 | **The rules have a shipped source, and missing rule files are no longer silence.** A repository with no `.jev/rules/` produced no ambient findings at all — `no_rules` was the whole answer — so a fresh install and a broken one were indistinguishable, and this project's own conventions published nothing on the repository they were written for. §9 now names **two sources**: the repository's files and a set embedded in the binary from `crates/jev-core/default_rules/<group>/*.json` (globbed by `build.rs`; an empty tree builds and behaves exactly as before). The repository's file **shadows** the shipped rule with the same `id`, and within one source duplicate ids are still kept and still linted. `rules.defaults` (default `true`, §10) turns the shipped set off. `jev rules init [--dir <dir>] [--force]` (§11) writes it into `.jev/rules/` so a rule can be read before it is believed — each file named for its group (`prose-lists-end-in-etc.json`), so two groups authored in parallel cannot collide, and idempotent, non-clobbering, exit `2` when it refuses to overwrite a file the user edited. Every finding now carries `rule_source` (`repository` | `builtin` | `null`, §6), because a finding you cannot trace to a file you can open is one you cannot turn off; `:Jev inspect` and `jev inspect` print it, and a pass carried by the shipped set says so (`default_rules`). §5's key is taken over the merged set, so the shipped rules are an input to every rules conclusion — and `noise.max_visible_findings`, which was missing from it, is in it now. §12 keeps its refusal: no generative fallback, and the defaults are hand-written data an editor can open. |
 | 2026-09-20 | **The state is a window around each candidate, not the file head — and the client's declarations are a new input to the cache key.** §9 said the decision is handed a state; what the state *was* is the first `max_state_lines` lines, and candidates live anywhere. On this repository's own `crates/jev-lsp/src/server.rs` (2,805 lines, thirteen candidates from line 243 to line 2518) none of the thirteen was inside the 200-line head, so every floor measured on it was measured with the line invisible, and a class of rules — how many call sites, how many implementations, whether a dependency ships it — could not be authored at all. §9 now states the rule: the smallest enclosing declaration the client sent (`jev.document`, §3.4.3), else a bounded neighbourhood around the candidate, merged where windows overlap, numbered absolutely so the state's numbers and the candidate ids stay the same numbers; the two budgets are spent trimming windows around their candidates and never drop one, with `truncate_state` the bound of last resort. Because the window now reads what the client sent, `cache::rules_key` carries a digest of it (`cache::definitions_digest`) — the same defect class §5 records for `noise.max_visible_findings` — and §5 says so. Measured on `server.rs`: 13/13 candidates in the state against 0/13, 15,389 bytes against 14,017, both inside the unchanged 16,000-byte and 200-line budgets; on a 126-line file with six candidates, 7,355 → 3,615 bytes. Tests in `crates/jev-core/src/inspections.rs` (including one over that real document) and `crates/jev-core/src/cache.rs`. |
+| 2026-09-21 | **The ambient pass pushes its findings, and has a clock.** §9 reserved `publishDiagnostics` for edits the server made and served findings by pull alone, refreshed by `workspace/diagnostic/refresh`. That left a client that one-shots `textDocument/diagnostic` before its background pass has run — the shape omp has at ~500 ms — reading an empty answer as "clean", with no late result reaching it; and a slow decision (measured at ~6 s) rendered as a silent empty gutter in the meantime. The contract now names a second route: when a background pass lands the server **pushes** what it concluded with `textDocument/publishDiagnostics` (replacing the cue, or clearing it on a no-hit), alongside the refresh the pull clients already use. `ambient.pending_ms` (default 500, §10) pushes a document-level `jev.checking` information diagnostic when the pass stops being sub-second, and `ambient.budget_ms` (default 8000) is the hard ceiling that clears it and stops awaiting the pass — above `models.decide.timeout_ms` (5000) so a healthy decision always lands. No severity remap and no `--opencode` costume: `ERROR` stays reserved for the §8 divergence. `crates/jev-lsp/src/server.rs` (`supervise_ambient`, `ClientSurfaces`, `ambient_items`), with unit tests for the sub-second, cue-then-result, and budget-expiry paths; `verify/lsp_client.py`'s step 9 assertion is retargeted from "no push before the server's own change" to "no push for a document the server was never told about", and `verify/rules_test.py` step 9 asserts the push carries the findings without a pull. |

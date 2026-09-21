@@ -221,6 +221,17 @@ pub struct Ambient {
     pub code_lens: bool,
     pub inlay_hints: bool,
     pub diagnostics: bool,
+    /// How long a background ambient pass may run before the server publishes a
+    /// document-level "checking…" information diagnostic, so a slow decision never leaves a
+    /// silent empty gutter (PROTOCOL §9). Sub-second by default: a pass that finishes first
+    /// never shows the cue.
+    pub pending_ms: u64,
+    /// The hard ceiling on the ambient pass (PROTOCOL §9). At this point the pending cue is
+    /// cleared and the pass stops being awaited, so the user is never left waiting on a
+    /// decision with no clock. Above `models.decide.timeout_ms` (5000) on purpose: a healthy
+    /// decision always lands and publishes, and this only bites a call that has already
+    /// outlived its own tier timeout.
+    pub budget_ms: u64,
 }
 
 impl Default for Ambient {
@@ -229,6 +240,8 @@ impl Default for Ambient {
             code_lens: true,
             inlay_hints: false,
             diagnostics: true,
+            pending_ms: 500,
+            budget_ms: 8000,
         }
     }
 }
@@ -529,6 +542,20 @@ mod tests {
         assert!(!merged.enabled);
         assert_eq!(merged.log, "debug");
         assert_eq!(merged.budget.max_calls_per_min, c.budget.max_calls_per_min);
+    }
+
+    #[test]
+    fn the_ambient_budget_has_a_documented_clock() {
+        let c = Config::default();
+        assert_eq!(c.ambient.pending_ms, 500, "the cue is the sub-second threshold");
+        assert_eq!(c.ambient.budget_ms, 8000, "the ceiling sits above the 5 s decide timeout");
+        assert!(
+            c.ambient.pending_ms <= c.ambient.budget_ms,
+            "the cue must be able to fire before the ceiling retires it"
+        );
+        let merged = c.merged_with(Some(&serde_json::json!({"ambient": {"budget_ms": 2000}})));
+        assert_eq!(merged.ambient.budget_ms, 2000, "the patch applied");
+        assert_eq!(merged.ambient.pending_ms, 500, "its sibling survived");
     }
 
     #[test]

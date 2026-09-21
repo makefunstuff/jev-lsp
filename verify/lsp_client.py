@@ -17,8 +17,8 @@ Runs, in order, and asserts at each step (docs/VERIFICATION.md §1):
      §6 does not name, nothing §6 serves left unadvertised), and no draft capability advertised
      — §2's "advertise only what is served" is the rule the set is checked against.
   2. `textDocument/didOpen` for two fixture documents written into a temp dir under the
-     workspace (a normal `.py` and a never-touched control `.txt`). A notification carries
-     no assertion of its own; the control document exists to make step 9 checkable.
+     workspace (a normal `.py` and a never-modified control `.txt`). A notification carries
+     no assertion of its own; the two documents are what step 9 checks the push against.
   3. `textDocument/codeAction`, `triggerKind = 1` (Invoked): the response arrives within the
      50 ms budget (docs/ARCHITECTURE.md §4) and no returned action carries an `edit` (N2).
   4. `textDocument/codeAction`, `triggerKind = 2` (Automatic): every returned action has
@@ -29,19 +29,19 @@ Runs, in order, and asserts at each step (docs/VERIFICATION.md §1):
   7. Staleness: take `codeAction` again, mutate the document with `didChange`, resolve the
      previously obtained action -> no `edit` in the response (§8 rule 3) and no JSON-RPC
      error.
-  8. `textDocument/diagnostic`: after `didSave` the server's background pass asks to be
-     re-pulled with `workspace/diagnostic/refresh` (§3.4/§9); the re-pull must carry
-     findings, `kind == "full"`, a `resultId`, and `data.finding_id` + `data.verb` on every
-     item (§9). An empty report after that refresh is a FAIL — a correct-but-empty pull
-     before it is exactly the mistake a real client must not make.
+  8. `textDocument/diagnostic`: after `didSave` the server's background pass pushes its
+     findings with `textDocument/publishDiagnostics` and asks to be re-pulled with
+     `workspace/diagnostic/refresh` (§3.4/§9); the pull must carry findings, `kind == "full"`,
+     a `resultId`, and `data.finding_id` + `data.verb` on every item (§9). An empty report
+     after that refresh is a FAIL — a correct-but-empty pull before it is exactly the mistake
+     a one-shot client must not make.
   9. `workspace/executeCommand` with a `workDoneToken` in the params, on a served command:
      a `$/progress` `begin` and an `end` arrive for that token (§3.5), nothing arrives under
      that token after the `end` — the token is closed, read after a settle window — no
      `$/progress` arrives under a token this client never supplied or created (§3.5), the two
      failure paths stay distinct — an unserved `jev.nonexistent` answers `not_implemented`, a
-     served `jev.plan` with unusable arguments answers `bad_arguments` (§6.1) — and no
-     `textDocument/publishDiagnostics` arrives for a document the server has not changed
-     (§9).
+     served `jev.plan` with unusable arguments answers `bad_arguments` (§6.1) — and every
+     `textDocument/publishDiagnostics` names a document the server was told about (§9).
  10. The other three §3.5 paths, each in a server of its own (see the Step 10 note below):
      a chat tier pointing at an endpoint nothing answers on, a budget of zero calls a
      minute, and a cancellation delivered mid-model-call. Each must produce exactly one
@@ -168,8 +168,9 @@ def parse_retry(payload, attempts=3):
 FIXTURE_MARKER = "for attempt in range(attempts)"
 
 FIXTURE_TXT = """\
-Scratch notes. This document is opened and never modified: it is the control for the
-unsolicited `textDocument/publishDiagnostics` assertion (PROTOCOL §9).
+Scratch notes. This document is opened and never modified: it is a second document the
+server holds, so a push for it is legitimate — the defect step 9 still catches is a push
+for a document the server was never told about (PROTOCOL §9).
 """
 
 
@@ -372,8 +373,6 @@ class Session(object):
         self._stray_responses = []  # responses whose id matched nothing we sent
         self._owned_tokens = set()  # workDoneToken we supplied, or the server created
         self._changed = set()       # uris whose text this client has changed
-        self._change_log = []       # [(monotonic time, uri)] — §9 allows a publish only
-                                    # after the server's own change to that document
         self._docs = {}             # uri -> {version, text, path, language_id}
         self._doclock = threading.RLock()
         self._fatal = None
@@ -615,23 +614,27 @@ class Session(object):
             return set(self._changed)
 
     def _mark_changed(self, uri):
-        self._change_log.append((time.monotonic(), uri))
         self._changed.add(uri)
 
-    def unsolicited_publishes(self):
-        """`textDocument/publishDiagnostics` that arrived before any change to that
-        document — §9 reserves publish for changes the server made."""
+    def publishes_for_unknown_documents(self):
+        """`textDocument/publishDiagnostics` for a URI this client never opened.
+
+        §9 pushes a background pass's findings for the documents the server holds, so a publish
+        for an *open* document is the contract — the server learns a document exists from
+        `didOpen` — not only the server's own edits. What is still a defect is a push for a
+        document the server was never told about: it cannot have analysed what it does not hold.
+        """
         with self._cv:
             publishes = [dict(m) for m in self._messages
                          if m["method"] == "textDocument/publishDiagnostics"]
         with self._doclock:
-            changes = list(self._change_log)
-        out = []
+            opened = set(self._docs)
+        unknown = []
         for publish in publishes:
             uri = (publish["params"] or {}).get("uri")
-            if not any(uri == changed_uri and at < publish["t"] for at, changed_uri in changes):
-                out.append(uri)
-        return out
+            if uri not in opened:
+                unknown.append(uri)
+        return unknown
 
     def server_request_count(self, method=None):
         with self._cv:
@@ -1186,10 +1189,11 @@ def _server_log_lines(session, limit=5):
 def _pull_diagnostics(session, report, uri, grace):
     """Pull findings, re-pulling briefly.
 
-    PROTOCOL §9 serves findings by pull and refreshes by `workspace/diagnostic/refresh`
-    (§3.4), which the server sends when an ambient pass finishes. Step 8 calls this once
-    per refresh, with a short grace so a pass that cached microseconds earlier is not
-    missed; the loop in step 8 is what handles the superseded-refresh ordering.
+    PROTOCOL §9 pushes a finished ambient pass with `textDocument/publishDiagnostics` and
+    refreshes with `workspace/diagnostic/refresh` (§3.4), which the server sends when an
+    ambient pass finishes. Step 8 calls this once per refresh, with a short grace so a pass
+    that cached microseconds earlier is not missed; the loop in step 8 is what handles the
+    superseded-refresh ordering.
     """
     params = {"textDocument": {"uri": uri}, "identifier": "jev"}
     result, _ = _try_request(session, report, 8, "textDocument/diagnostic", params,
@@ -1785,13 +1789,14 @@ def run_steps(session, workspace, timeout, report, keep_fixtures=False, server=N
         # -- step 8 --------------------------------------------------------
         report.step(8, "textDocument/diagnostic — findings carry data (§9)")
         session.did_save(py_uri)
-        # §9 serves findings by pull and refreshes by request: each ambient pass ends by
-        # asking the client to re-pull (§3.4). A pass that was superseded also refreshes
-        # (its conclusion is discarded, not its obligation to notify), and that request can
-        # arrive *before* the pass for the content we now hold — so re-pull on every new
-        # request until the report describes what the client actually has, bounded. A pull
-        # that is empty because the pass has not run yet is not a clean document, and a
-        # client that pulls once and believes it is exactly how findings get lost.
+        # §9 pushes a finished pass and refreshes by request: each ambient pass ends by asking
+        # the client to re-pull (§3.4) *and* by pushing what it concluded. A pass that was
+        # superseded also refreshes (its conclusion is discarded, not its obligation to
+        # notify), and that request can arrive *before* the pass for the content we now hold —
+        # so re-pull on every new request until the report describes what the client actually
+        # has, bounded. A pull that is empty because the pass has not run yet is not a clean
+        # document, and a client that pulls once and believes it is exactly how findings get
+        # lost.
         deadline = time.monotonic() + min(timeout, FINDINGS_WAIT_S)
         refreshes, diagnostics = 0, {}
         while True:
@@ -1842,6 +1847,18 @@ def run_steps(session, workspace, timeout, report, keep_fixtures=False, server=N
                             "no items: the server has no conclusion for the content this "
                             "client holds, so the §9 item assertions above were vacuous; "
                             "server log: %s" % _describe(_server_log_lines(session))[:200])
+
+        # §9's second route: the finished pass pushes with `textDocument/publishDiagnostics`, so
+        # a client that one-shots the pull before the pass lands is not left empty. Asserted on
+        # the same findings the pull carried, so the two routes cannot silently disagree.
+        pushed = [d
+                  for note in session.notifications("textDocument/publishDiagnostics")
+                  if ((note.get("params") or {}).get("uri")) == py_uri
+                  for d in ((note.get("params") or {}).get("diagnostics") or [])]
+        report.check(8, "the ambient pass pushed its findings with "
+                        "textDocument/publishDiagnostics, not only the re-pull (§9)",
+                     any((d.get("data") or {}).get("finding_id") for d in pushed),
+                     "pushed diagnostics: %s" % _describe(pushed)[:160])
 
         # -- step 9 --------------------------------------------------------
         report.step(9, "workspace/executeCommand + workDoneToken — progress (§3.5)")
@@ -1948,11 +1965,11 @@ def run_steps(session, workspace, timeout, report, keep_fixtures=False, server=N
                      "end at %s, kinds after it: %s"
                      % (ends[-1] if ends else None, _describe(after_end)))
         publishes = session.notifications("textDocument/publishDiagnostics")
-        unsolicited = session.unsolicited_publishes()
-        report.check(9, "no textDocument/publishDiagnostics before the server's own change "
-                        "to that document (§9)", not unsolicited,
-                     "unsolicited uris: %s" % _describe(unsolicited))
-        report.info(9, "publishDiagnostics total=%d (documents this client changed: %s)"
+        unknown = session.publishes_for_unknown_documents()
+        report.check(9, "every textDocument/publishDiagnostics names a document the server was "
+                        "told about (§9)", not unknown,
+                     "publishes for unknown uris: %s" % _describe(unknown))
+        report.info(9, "publishDiagnostics total=%d (documents this client opened: %s)"
                     % (len(publishes), _describe(sorted(session.changed_uris()))[:160]))
         report.info(9, "server->client requests answered: %s"
                     % _describe([r["method"] for r in session.server_requests()])[:200])
@@ -2030,6 +2047,7 @@ class StubServer(threading.Thread):
         self.refresh_sent = 0
         self.refresh_acked = 0
         self.publish_sent = 0
+        self.last_saved_uri = None
         self.other_responses = []
         self._refresh_ids = set()
         self._awaiting = {}
@@ -2089,6 +2107,29 @@ class StubServer(threading.Thread):
     def _become_current(self):
         self.current_ready = True
         self._send_refresh()
+        self._publish_findings()
+
+    def _diagnostic_items(self):
+        """The one finding this stub serves, and pushes, once its pass has landed."""
+        if not self.current_ready:
+            return []
+        return [{
+            "range": {"start": {"line": 5, "character": 4},
+                      "end": {"line": 5, "character": 20}},
+            "severity": 2,
+            "source": "jev",
+            "message": "unchecked error path",
+            "data": {"finding_id": "stub-finding-1", "verb": "fix",
+                     "content_hash": "sha256:stub"},
+        }]
+
+    def _publish_findings(self):
+        """A faithful server pushes a finished pass (§9), so step 8 sees both routes here."""
+        if self.last_saved_uri is None:
+            return
+        self.publish_sent += 1
+        self._notify("textDocument/publishDiagnostics",
+                     {"uri": self.last_saved_uri, "diagnostics": self._diagnostic_items()})
 
     def _flush_held(self):
         """Correlate mode: answer a held `initialize` only once another request has been
@@ -2181,19 +2222,10 @@ class StubServer(threading.Thread):
         elif method == "textDocument/diagnostic":
             uri = (params.get("textDocument") or {}).get("uri")
             version = (self.docs.get(uri) or {}).get("version", 0)
-            items = [] if not self.current_ready else [{
-                "range": {"start": {"line": 5, "character": 4},
-                          "end": {"line": 5, "character": 20}},
-                "severity": 2,
-                "source": "jev",
-                "message": "unchecked error path",
-                "data": {"finding_id": "stub-finding-1", "verb": "fix",
-                         "content_hash": "sha256:stub"},
-            }]
             self._respond(msg_id, {
                 "kind": "full",
                 "resultId": "stub-diag-%d" % version,
-                "items": items,
+                "items": self._diagnostic_items(),
             })
         elif method == "workspace/executeCommand":
             command = params.get("command")
@@ -2301,7 +2333,7 @@ class StubServer(threading.Thread):
             if self.defect == "unsolicited_publish":
                 self.publish_sent += 1
                 self._notify("textDocument/publishDiagnostics",
-                             {"uri": document["uri"], "diagnostics": []})
+                             {"uri": document["uri"] + ".never-opened", "diagnostics": []})
         elif method == "textDocument/didChange":
             document = params["textDocument"]
             entry = self.docs.setdefault(document["uri"], {"version": 0, "text": ""})
@@ -2311,15 +2343,18 @@ class StubServer(threading.Thread):
                     entry["text"] = change.get("text", "")
         elif method == "textDocument/didSave":
             self.did_save_params.append(params)
+            self.last_saved_uri = (params.get("textDocument") or {}).get("uri")
             self._send_refresh()
             if self.superseded:
                 # The interrupted pass's refresh, then the live pass's — the order a real
-                # server produces, and the order one-pull-after-one-refresh gets wrong.
+                # server produces, and the order one-pull-after-one-refresh gets wrong. The
+                # push waits for the live pass, exactly as the real server's does.
                 timer = threading.Timer(0.25, self._become_current)
                 timer.daemon = True
                 timer.start()
             else:
                 self.current_ready = True
+                self._publish_findings()
         elif method == "exit":
             raise _StubExit()
 
@@ -2607,8 +2642,8 @@ def run_selftest(timeout):
         ("unowned_progress", "9", "progress under a token the client never supplied"),
         ("token_in_arguments", "9", "a token smuggled through `arguments` instead of "
                                     "workDoneToken"),
-        ("unsolicited_publish", "9", "publishDiagnostics for a document the server did "
-                                     "not change"),
+        ("unsolicited_publish", "9", "publishDiagnostics for a document the server was "
+                                     "never told about"),
         ("extra_capability_member", "1", "a non-standard member nested inside a standard "
                                          "capability (N6)"),
     ]

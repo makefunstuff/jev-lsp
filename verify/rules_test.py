@@ -465,6 +465,28 @@ def main():
                 "every finding is still dismissible by a stable id",
             )
 
+        # The push, not the pull: a client that one-shots `textDocument/diagnostic` before the
+        # pass lands must still see the findings, so the completed pass publishes them itself
+        # (PROTOCOL §9). The pull above proves the cache; this proves the notification.
+        publish_diags = [
+            (note.get("params") or {}).get("diagnostics") or []
+            for note in server.saw_notification("textDocument/publishDiagnostics")
+            if ((note.get("params") or {}).get("uri")) == uri
+        ]
+        pushed = next((d for d in publish_diags if len(d) == 3), [])
+        check(
+            bool(pushed),
+            "the ambient pass pushes its findings with publishDiagnostics, no pull needed "
+            f"(publish sizes: {[len(d) for d in publish_diags]})",
+        )
+        if pushed:
+            check(
+                all(i.get("source") == "jev"
+                    and (i.get("data") or {}).get("source") == "rules"
+                    for i in pushed),
+                "the pushed findings carry the same shape as the pull",
+            )
+
         status = server.request(
             "workspace/executeCommand", {"command": "jev.status", "arguments": []}
         ).get("result", {})
