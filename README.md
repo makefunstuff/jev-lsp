@@ -86,7 +86,14 @@ Lazy.nvim: `{ dir = '/path/to/jev-lsp/nvim', name = 'jev', lazy = false, config 
 
 ## Other clients
 
-`jev-lsp --stdio` is a standard language server — any client that can start one works. Plugin is Neovim-only extras (attach, keymaps, `:Jev`).
+`jev-lsp --stdio` is a standard language server for clients that finish the pull path
+(`workspace/diagnostic/refresh` → re-pull) **or** accept late `textDocument/publishDiagnostics`
+(PROTOCOL §3.4/§9). Ambient is a **background** rules pass on edit/save: if decide is not
+sub-second, the server pushes a document-level `jev.checking` info cue (~`ambient.pending_ms`,
+default 500), then the Warning (or clear) when ready, and drops the cue by `ambient.budget_ms`
+(default 8000). That is not “instant LSP,” and we do not claim it is.
+
+Neovim and VS Code/Cursor do this. Plugin is Neovim-only extras (attach, keymaps, `:Jev`).
 
 Export endpoints before launch (`JEV_DECIDE_*`, `JEV_BASE_URL`, …) or set them in the client config. Other routes / local decide: [`docs/MODEL.md`](docs/MODEL.md) §8.
 
@@ -109,12 +116,24 @@ export JEV_API_KEY_ENV=OPENROUTER_API_KEY   # name of the env var, not the key
 
 `api_key_env` names the variable — export the value yourself. Env wins over `settings`. Helper: `verify/omp_lsp.sh`.
 
+**omp quirk:** an edit-inline diagnostics pull can still return empty/`OK` before the ambient
+pass finishes (client one-shot ~500ms). After decide lands, `lsp diagnostics` shows the Warning
+**without** `:Jev inspect` — do not treat the early empty as final.
+
 ### OpenCode
 
-```json
-{"lsp":{"jev-lsp":{"command":["/path/to/jev-lsp/target/release/jev-lsp","--stdio"],"extensions":[".rs"],
-  "env":{"JEV_DECIDE_BASE_URL":"http://127.0.0.1:8009/v1","JEV_DECIDE_MODEL":"kev-latest"}}}}
-```
+**Unsupported for ambient findings on OpenCode 1.18** — see
+[#21](https://github.com/makefunstuff/jev-lsp/issues/21). Same `jev-lsp` ambient-surfaces in
+Neovim, VS Code/Cursor, and (after decide) omp; OpenCode’s client path does not. Upstream:
+
+- [anomalyco/opencode#17869](https://github.com/anomalyco/opencode/issues/17869) — agent/TUI keeps
+  **Error only**; Warnings never reach it
+- [anomalyco/opencode#23911](https://github.com/anomalyco/opencode/issues/23911) /
+  [#23873](https://github.com/anomalyco/opencode/issues/23873) — LSP connects green, diagnostics
+  stay empty
+
+Do not configure bare `jev-lsp --stdio` in OpenCode and expect findings. There is no supported
+bridge or `--opencode` costume. Use Neovim or VS Code/Cursor until ambient Warning works there.
 
 ### Cursor / VS Code
 
