@@ -9,9 +9,9 @@
 
 ## Demo
 
-Silent action loop across Neovim and VS Code: paste an AI-slop comment, get a finding, apply the fix. (OpenCode ambient unsupported on 1.18 — see below.)
+Silent action loop across Neovim, VS Code, and omp: paste an AI-slop comment, get a finding, apply the fix. (omp may flash early OK until decide lands — see below. OpenCode ambient unsupported on 1.18 — see below.)
 
-[![Demo: Neovim → VS Code](https://makefunstuff.github.io/jev-lsp/assets/demo-slop-triptych-poster.jpg)](https://makefunstuff.github.io/jev-lsp/assets/demo-slop-triptych.mp4)
+[![Demo: Neovim → VS Code → omp](https://makefunstuff.github.io/jev-lsp/assets/demo-slop-triptych-poster.jpg)](https://makefunstuff.github.io/jev-lsp/assets/demo-slop-triptych.mp4)
 
 [Watch (~32s)](https://makefunstuff.github.io/jev-lsp/assets/demo-slop-triptych.mp4) · [landing page](https://makefunstuff.github.io/jev-lsp/#demo)
 
@@ -93,7 +93,7 @@ sub-second, the server pushes a document-level `jev.checking` info cue (~`ambien
 default 500), then the Warning (or clear) when ready, and drops the cue by `ambient.budget_ms`
 (default 8000). That is not “instant LSP,” and we do not claim it is.
 
-Neovim and VS Code/Cursor do this. Plugin is Neovim-only extras (attach, keymaps, `:Jev`).
+Neovim, VS Code/Cursor, and omp do this (omp: see quirk below). Plugin is Neovim-only extras (attach, keymaps, `:Jev`).
 
 Export endpoints before launch (`JEV_DECIDE_*`, `JEV_BASE_URL`, …) or set them in the client config. Other routes / local decide: [`docs/MODEL.md`](docs/MODEL.md) §8.
 
