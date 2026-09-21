@@ -1364,6 +1364,27 @@ local function load_dismissals(root)
   end
 end
 
+--- Drop the findings the user has dismissed from a wire diagnostic list.
+---
+--- One set, two routes: a finding reaches the client by pull (`filter_findings`) and by the
+--- ambient pass's push (`filter_pushed`, PROTOCOL §9), and filtering one route only means the
+--- other re-renders what the user dismissed. A pending cue carries no `finding_id`, so it is
+--- never a dismissal and never dropped here.
+--- @param items table  LSP diagnostics, each optionally carrying `data.finding_id`
+--- @param root string?
+--- @return table
+local function without_dismissed(items, root)
+  load_dismissals(root)
+  local kept = {}
+  for _, item in ipairs(items) do
+    local id = item.data and item.data.finding_id
+    if not (id and dismissed[id]) then
+      kept[#kept + 1] = item
+    end
+  end
+  return kept
+end
+
 --- Filter pulled findings by the dismissal set, before the client renders them.
 ---
 --- This is the client's own handler table (`vim.lsp.ClientConfig.handlers`), so it applies to
@@ -1372,17 +1393,29 @@ end
 local function filter_findings(err, result, ctx)
   if not err and type(result) == 'table' and type(result.items) == 'table' then
     local root = ctx.bufnr and vim.fs.root(ctx.bufnr, { '.git' })
-    load_dismissals(root)
-    local kept = {}
-    for _, finding in ipairs(result.items) do
-      local id = finding.data and finding.data.finding_id
-      if not (id and dismissed[id]) then
-        kept[#kept + 1] = finding
-      end
-    end
-    result.items = kept
+    result.items = without_dismissed(result.items, root)
   end
   return vim.lsp.diagnostic.on_diagnostic(err, result, ctx)
+end
+
+--- Filter pushed findings by the same set, on the route PROTOCOL §9 added beside the pull.
+---
+--- The ambient pass pushes its conclusion with `textDocument/publishDiagnostics` (PROTOCOL §9),
+--- and nvim renders a push into a different namespace than a pull —
+--- `nvim.lsp.<name>.<client_id>` versus `nvim.lsp.<name>.<client_id>.<pull_id>`
+--- (`vim/lsp/diagnostic.lua`) — which `filter_findings`, registered on `textDocument/diagnostic`,
+--- never saw. That is how a dismissed finding came back: the dismissal emptied the namespace the
+--- push had filled, and the next background pass published the same finding into it again.
+--- @param err lsp.ResponseError?
+--- @param params lsp.PublishDiagnosticsParams
+--- @param ctx lsp.HandlerContext
+local function filter_pushed(err, params, ctx)
+  if not err and type(params) == 'table' and type(params.diagnostics) == 'table' then
+    local ok, path = pcall(vim.uri_to_fname, params.uri)
+    local root = ok and vim.fs.root(path, { '.git' }) or nil
+    params.diagnostics = without_dismissed(params.diagnostics, root)
+  end
+  return vim.lsp.diagnostic.on_publish_diagnostics(err, params, ctx)
 end
 
 --- The finding metadata the server attaches to a diagnostic (PROTOCOL §9:
@@ -1451,9 +1484,11 @@ function M.dismiss(id)
   report_outcome(bufnr, { kind = 'finding-dismissed', id = id, line = line })
 end
 
---- The namespace this server's pulled findings were rendered into, or nil if there are none.
+--- The namespaces this server's findings were rendered into, from the diagnostics themselves.
 ---
---- Read off the diagnostics rather than asked of `vim.lsp.diagnostic.get_namespace`, whose
+--- Every one of them, not the first: the pull and the ambient push land in different namespaces
+--- (`vim/lsp/diagnostic.lua`, `get_namespace`), and a document served by both has the finding in
+--- both. Read off the diagnostics rather than asked of `vim.lsp.diagnostic.get_namespace`, whose
 --- signature moved under us: 0.12.5 takes `(client_id, is_pull, pull_id)`, 0.12.1 takes
 --- `(client_id, pull_id)`, and Lua *silently ignores* the extra argument. On 0.12.1 the old
 --- three-argument call answered the namespace of the deprecated boolean form — a different
@@ -1461,33 +1496,33 @@ end
 --- and every dismissal looked like a no-op until the next pull. The namespace is already on
 --- every rendered diagnostic (`vim.Diagnostic.namespace`), so there is nothing to guess.
 --- @param bufnr integer
---- @return integer?
-local function findings_namespace(bufnr)
+--- @return integer[]
+local function findings_namespaces(bufnr)
+  local namespaces, seen = {}, {}
   for _, d in ipairs(vim.diagnostic.get(bufnr)) do
-    if d.source == M.name then
-      return d.namespace
+    if d.source == M.name and not seen[d.namespace] then
+      seen[d.namespace] = true
+      namespaces[#namespaces + 1] = d.namespace
     end
   end
-  return nil
+  return namespaces
 end
 
 --- Drop dismissed findings from what is on screen now, so the sign disappears with the
 --- command instead of at the next refresh.
 --- @param bufnr integer
 function M.hide_dismissed(bufnr)
-  local ns = findings_namespace(bufnr)
-  if not ns then
-    return
-  end
-  local kept = {}
-  for _, d in ipairs(vim.diagnostic.get(bufnr, { namespace = ns })) do
-    local data = finding_data(d)
-    local id = data and data.finding_id
-    if not (id and dismissed[id]) then
-      kept[#kept + 1] = d
+  for _, ns in ipairs(findings_namespaces(bufnr)) do
+    local kept = {}
+    for _, d in ipairs(vim.diagnostic.get(bufnr, { namespace = ns })) do
+      local data = finding_data(d)
+      local id = data and data.finding_id
+      if not (id and dismissed[id]) then
+        kept[#kept + 1] = d
+      end
     end
+    vim.diagnostic.set(ns, bufnr, kept)
   end
-  vim.diagnostic.set(ns, bufnr, kept)
 end
 
 -- Undo --------------------------------------------------------------------------------------
@@ -1949,7 +1984,13 @@ function M.setup(opts)
   end
   install.handlers = vim.tbl_deep_extend(
     'force',
-    { ['textDocument/diagnostic'] = filter_findings },
+    {
+      -- Both routes findings reach the client by (PROTOCOL §9), both filtered by the
+      -- dismissal set: a client that filtered only the pull re-rendered a dismissed finding
+      -- as soon as the next ambient pass pushed it.
+      ['textDocument/diagnostic'] = filter_findings,
+      ['textDocument/publishDiagnostics'] = filter_pushed,
+    },
     install.handlers or {}
   )
 
