@@ -263,7 +263,10 @@ An ambient agent fails by being ignored, so the policy is written down and enfor
 - **Dismissal is permanent and per-repository.** `:Jev dismiss` writes the finding's
   content-addressed key to `.git/jev/dismissed.json` (never into the repo tree).
 - **Suppression.** A *finding* stays dismissed per repository — `.git/jev/dismissed.json`,
-  filtered from every pull (`filter_findings`). A verb is never suppressed: `noise.suppress_after_dismissals`
+  filtered from **both** routes a finding arrives by: the pull (`filter_findings`) and the
+  ambient pass's push (`filter_pushed`, PROTOCOL §9). nvim renders a push into a different
+  namespace from a pull, so a filter on one route leaves the other showing what the user
+  dismissed. A verb is never suppressed: `noise.suppress_after_dismissals`
   is in the settings schema and is not read (PROTOCOL §10).
 - **Quiet by default.** Hints are drawn only after the client asks (`:Jev hints on`), and
   `ambient.inlay_hints` is not read (PROTOCOL §10); diagnostics do not run per keystroke.
