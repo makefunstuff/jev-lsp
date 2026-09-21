@@ -10,36 +10,42 @@
 <body>
 <main>
   <h1>jev-lsp</h1>
-  <p>An <strong>LSP server</strong>. It loads classifier rules from <code>.jev/rules/*.json</code> and publishes normal LSP diagnostics, code actions, and code lens. Not a chat product.</p>
-  <p class="warn"><strong>WIP</strong> — expect breakage.</p>
+  <p class="lede">LSP server. Loads rules from <code>.jev/rules/*.json</code>. Publishes normal diagnostics, code actions, and code lens.</p>
+  <p class="warn"><strong>WIP.</strong> Expect breakage.</p>
+
+  <h2>What it is</h2>
+  <p>A classifier on matching lines, not a chat model. Pattern hits a line → decide returns a typed value + <code>p</code> → LSP surfaces it if <code>p</code> clears the floor.</p>
 
   <h2>What you can do</h2>
   <ul>
-    <li>Match lines with a pattern, ask a typed question about each hit</li>
-    <li>Get editor diagnostics when the answer clears the rule floor</li>
-    <li>Use code actions the server exposes</li>
-    <li>Run the same rules via CLI (<code>jev</code>) locally or in CI</li>
-    <li>Point decide at hosted Jev or another compatible endpoint</li>
+    <li>Match lines with a regex (or other inspection)</li>
+    <li>Ask one typed question about each hit</li>
+    <li>See diagnostics in the editor when the answer clears the floor</li>
+    <li>Run the same rules via CLI (<code>jev</code>) or CI</li>
+    <li>Point decide at hosted Jev or a compatible endpoint</li>
   </ul>
 
   <h2>Setup</h2>
   <ol>
-    <li>Install (Rust ≥ 1.75):
+    <li>
+      Install (Rust ≥ 1.75):
       <pre><code>cargo install --git https://github.com/makefunstuff/jev-lsp --locked jev-lsp jev</code></pre>
     </li>
-    <li>Decide key (hosted default):
+    <li>
+      Decide key (hosted default):
       <pre><code>export TYPESAFE_API_KEY=…</code></pre>
     </li>
-    <li>Neovim plugin (repo <code>nvim/</code>, Neovim ≥ 0.12):
-      <pre><code>ln -s /path/to/jev-lsp/nvim ~/.local/share/nvim/site/pack/jev/start/jev</code></pre>
-      <pre><code>require('jev').setup({})</code></pre>
-      Open a real file, run <code>:checkhealth jev</code>, save.
+    <li>
+      Neovim (≥ 0.12), plugin from repo <code>nvim/</code>:
+      <pre><code>ln -s /path/to/jev-lsp/nvim ~/.local/share/nvim/site/pack/jev/start/jev
+require('jev').setup({})</code></pre>
+      Open a real file. <code>:checkhealth jev</code>. Save.
     </li>
   </ol>
-  <p>Other editors: run <code>jev-lsp</code> as a standard LSP server.</p>
+  <p>Other editors: run <code>jev-lsp</code> as a normal language server.</p>
 
   <h2>Rule example</h2>
-  <p>Create <code>.jev/rules/no-unwrap-in-handlers.json</code>:</p>
+  <p><code>.jev/rules/no-unwrap-in-handlers.json</code>:</p>
   <pre><code>{
   "schema": "jev.rules/1",
   "rules": [
@@ -65,7 +71,7 @@
     }
   ]
 }</code></pre>
-  <p>Regex selects candidates; Jev only judges those lines. No match → no decide call.</p>
+  <p>Regex picks candidates. Jev judges only those lines. No match → no decide call.</p>
 
   <h2>Docs</h2>
   <ul>
