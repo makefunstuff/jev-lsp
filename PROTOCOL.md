@@ -742,8 +742,13 @@ is applied when the document has not moved, and is refused by the client when it
 **Two sources, and the repository's own wins.** A rule comes from one of exactly two places,
 and every finding says which (`rule_source`, §6):
 
-- **the repository's** — `.jev/rules/<id>.json`, read in path order, relative to the workspace
-  root (or, with no root, the document's own directory);
+- **the repository's** — `.jev/rules/*.json`, `*.yaml` or `*.yml`, read in path order, relative to
+  the workspace root (or, with no root, the document's own directory). One document, two
+  spellings: the extension picks the parser and nothing else, so a `.yaml` file and the `.json`
+  file it equals load as the same rule, hash the same, and produce the same findings. YAML is the
+  spelling for a hand — prose needs no `\n` escapes and a regex is written once rather than
+  escaped twice — and JSON stays the interchange: the shipped set is embedded as JSON and
+  `jev rules compile` (§11) emits it;
 - **the shipped set** — the defaults embedded in the binary from `default_rules/<group>/*.json`,
   applied when `rules.defaults` is true (the default, §10). They are ordinary rule files in the
   same format, and `jev rules init` writes them out so a user can read and edit them (§11).
@@ -784,6 +789,34 @@ repository owns:
                      "min_probability": 0.75 },
       "verb_hint": "fix" } ] }
 ```
+
+The same document, written as YAML (`.jev/rules/no-unwrap-in-handlers.yaml`):
+
+```yaml
+schema: jev.rules/1
+rules:
+  - id: no-unwrap-in-handlers
+    title: Unwrap in a request handler
+    text: >-
+      A handler must not unwrap: a bad request would take the worker down. Return the error
+      instead.
+    severity: warning
+    applies_to: ["**/*.rs"]
+    inspection: {kind: regex, pattern: '\.unwrap\(\)'}
+    judgement:
+      question: Is this unwrap reachable from a request handler, rather than from test or startup code?
+      criteria:
+        "true": a request can reach it
+        "false": test or startup code
+      min_probability: 0.75
+    verb_hint: fix
+```
+
+Two things a YAML author has to know, and both are YAML's rather than this design's: a regex goes
+in single quotes, where a backslash is a backslash and not the start of an escape; and the
+`criteria` keys are quoted, because an unquoted `true:` is a YAML boolean where the wire wants the
+string `"true"`. Everything else — every field, its meaning, and the floor — is unchanged between
+the spellings (`docs/GUIDE.md` §4).
 
 An `inspection` is tagged by `kind`: `regex` (every matching line; `max_matches` means
 "report only when the file holds *more* than this many", so any match at all is
@@ -944,6 +977,7 @@ jev action --verb <verb> <path>[:<range>]  # proposed edit, JSON (never applied)
 jev plan --goal <text> <path>              # plan artifact
 jev inspect <path> [--force]               # the repository's rules, run over <path>
 jev rules init [--dir <dir>] [--force]     # write the shipped rule set out to read and edit
+jev rules compile <file> [-o <file>]       # one rule file (JSON or YAML) as the JSON document
 jev status                                 # budget and queue
 ```
 
@@ -951,7 +985,7 @@ Flags: `--verb <verb>` (action, required), `--goal <text>` (plan, required), `--
 (inspect: run the rules even for a document git reports as unchanged; rules init: overwrite rule
 files that are already there), `--dir <dir>` (rules init: where to write; default
 `<root>/.jev/rules`, where `<root>` is the nearest ancestor of the working directory holding
-`.git`), `--base-url <url>`
+`.git`), `-o`/`--out <file>` (rules compile: where to write; default stdout), `--base-url <url>`
 and `--model <name>` (override every tier, the decision tier included; `JEV_BASE_URL`,
 `JEV_MODEL` and `JEV_REVIEW_MODEL` do the same for the chat tiers), `--max-tokens <n>`;
 `-h`/`--help`, `-V`/`--version`. Flags may be written `--k v` or `--k=v`.
@@ -969,7 +1003,19 @@ never replaced without `--force`, and the result names every file it left alone,
 `unchanged` (already byte-identical to the shipped rule) and `refused` (different: the user's
 bytes won). It writes nothing outside the target directory, and it calls no model. A refusal
 exits `2` with the refused names in the result and on stderr; a run that writes nothing because
-everything already matched exits `0`. `rules` takes no other subcommand.
+everything already matched exits `0`.
+
+**`jev rules compile` reads one rule file and emits the `jev.rules/1` JSON document** for it.
+It is not a step a rule needs to run — the loader reads `.yaml` where it stands (§9) — but it is
+how a rule authored in YAML is handed to anything that speaks JSON, how a conversion is reviewed
+as a diff, and how a file is validated without starting a pass. It accepts `.json`, `.yaml` and
+`.yml`; the parse is the loader's own, so a file it refuses is one the pass would have skipped,
+with the same reason, and a file it emits is one the pass reads back as the same rule. With
+`-o <file>` the document is written there (pretty-printed) and stdout carries a result naming the
+path and the rule count; without it the document itself is the artifact on stdout, one line. A
+path that cannot be read, a document that does not parse, a schema that is not `jev.rules/1`, and
+a destination that cannot be written are all exit `2`, and a refusal writes nothing anywhere. It
+calls no model and reads no document. `rules` takes no other subcommand.
 
 - stdin: additional context (diff, buffer text) when the path is `-`.
 - stdout: exactly one artifact or result, JSON, one line, no decoration.
@@ -984,7 +1030,7 @@ everything the pass skipped — from the same code, and writes nothing to the fi
 |---|---|
 | 0 | Success, artifact on stdout |
 | 1 | Transport or model failure |
-| 2 | Usage error or contract violation (bad verb, unparsable range; a `rules init` that would have overwritten a file the user edited) |
+| 2 | Usage error or contract violation (bad verb, unparsable range; a `rules init` that would have overwritten a file the user edited; a `rules compile` that cannot read or validate its file, or cannot write where it was told) |
 | 3 | Budget exhausted |
 | 4 | Stale target — the document changed since the request was built |
 
@@ -1032,6 +1078,13 @@ Recorded so the refusals are not relitigated:
   opinion asks for it, and the finding says which pass it came from (`data.source`, §9).
 - **A second source of truth for document state.** The client owns text; the server's
   cache is keyed by content hash and evictable at any time.
+- **Markdown as the rule source.** A rule pack written as a prose document with fenced machine
+  blocks (`RULES.md`) was drafted and rejected (2026-09-21, `docs/research/rules-human-readable-format-draft.md`
+  §0, §3B/§3C): it needs a compiler, a fence grammar and a heading/`id` convention to reach the
+  JSON the loader already reads, and every one of those is a place for a rule file to be wrong.
+  The authoring spelling is YAML beside JSON (§9), the loader reads both, and `jev rules compile`
+  (§11) is the only converter there is. A Markdown document that *describes* rules is a document,
+  not a rule file; `.jev/rules/` reads nothing but `json`, `yaml` and `yml`.
 
 ---
 
@@ -1059,3 +1112,4 @@ Recorded so the refusals are not relitigated:
 | 2026-09-20 | **§3.5's "the `end` arrives before the response" was the transport's ordering, and the row that asserted it was a coin flip.** That parenthetical was `verify/lsp_client.py`'s own reading of "valid only until the response to that request is sent" (`[R12]`): the command keeps the lifetime in the order it controls — the `end` is awaited into the transport before the command body returns — but `tower-lsp` writes the two through two arms of one `futures::stream::select` (`transport.rs`), polled round-robin, so which of the server's own two messages is written first is the scheduler's. Measured on one unchanged binary: `jev.status` inverted in 4/50 runs (−36.1 µs … +29.9 µs), with the CI red at −21 µs and a green run the same day at +29 µs, and step 10's paths sat 5 µs from flipping. §3.5 now states what step 9 and step 10 assert — one `begin`, one `end`, and nothing under the token after it, read after a settle window — and that the order of those two is not the command's to fix; `--selftest` gained the `progress_after_end` defect so the replacement can fail. |
 | 2026-09-20 | **The rules have a shipped source, and missing rule files are no longer silence.** A repository with no `.jev/rules/` produced no ambient findings at all — `no_rules` was the whole answer — so a fresh install and a broken one were indistinguishable, and this project's own conventions published nothing on the repository they were written for. §9 now names **two sources**: the repository's files and a set embedded in the binary from `crates/jev-core/default_rules/<group>/*.json` (globbed by `build.rs`; an empty tree builds and behaves exactly as before). The repository's file **shadows** the shipped rule with the same `id`, and within one source duplicate ids are still kept and still linted. `rules.defaults` (default `true`, §10) turns the shipped set off. `jev rules init [--dir <dir>] [--force]` (§11) writes it into `.jev/rules/` so a rule can be read before it is believed — each file named for its group (`prose-lists-end-in-etc.json`), so two groups authored in parallel cannot collide, and idempotent, non-clobbering, exit `2` when it refuses to overwrite a file the user edited. Every finding now carries `rule_source` (`repository` | `builtin` | `null`, §6), because a finding you cannot trace to a file you can open is one you cannot turn off; `:Jev inspect` and `jev inspect` print it, and a pass carried by the shipped set says so (`default_rules`). §5's key is taken over the merged set, so the shipped rules are an input to every rules conclusion — and `noise.max_visible_findings`, which was missing from it, is in it now. §12 keeps its refusal: no generative fallback, and the defaults are hand-written data an editor can open. |
 | 2026-09-20 | **The state is a window around each candidate, not the file head — and the client's declarations are a new input to the cache key.** §9 said the decision is handed a state; what the state *was* is the first `max_state_lines` lines, and candidates live anywhere. On this repository's own `crates/jev-lsp/src/server.rs` (2,805 lines, thirteen candidates from line 243 to line 2518) none of the thirteen was inside the 200-line head, so every floor measured on it was measured with the line invisible, and a class of rules — how many call sites, how many implementations, whether a dependency ships it — could not be authored at all. §9 now states the rule: the smallest enclosing declaration the client sent (`jev.document`, §3.4.3), else a bounded neighbourhood around the candidate, merged where windows overlap, numbered absolutely so the state's numbers and the candidate ids stay the same numbers; the two budgets are spent trimming windows around their candidates and never drop one, with `truncate_state` the bound of last resort. Because the window now reads what the client sent, `cache::rules_key` carries a digest of it (`cache::definitions_digest`) — the same defect class §5 records for `noise.max_visible_findings` — and §5 says so. Measured on `server.rs`: 13/13 candidates in the state against 0/13, 15,389 bytes against 14,017, both inside the unchanged 16,000-byte and 200-line budgets; on a 126-line file with six candidates, 7,355 → 3,615 bytes. Tests in `crates/jev-core/src/inspections.rs` (including one over that real document) and `crates/jev-core/src/cache.rs`. |
+| 2026-09-21 | **A rule file may be written as YAML, and `jev rules compile` converts one spelling to the other.** §9 said `.jev/rules/<id>.json` and meant it: a rule was JSON, and a hand-authored one paid for it — prose escaped into one line, a regex escaped twice, criteria keys quoted anyway. `.jev/rules/*.yaml` and `*.yml` are now read beside `.json`, parsed by extension into the same `jev.rules/1` document, so the two spellings are one rule: the same merge, the same hash, the same findings, and a file moved between spellings changes nothing a pass does. YAML is the spelling for a hand (prose needs no `\n` escapes; a regex is written once, in single quotes) and JSON stays the interchange — the shipped set is embedded as JSON and `jev rules compile` (§11) emits it, validating with the loader's own parse so a file it refuses is one the pass would have skipped. `docs/GUIDE.md` §4 leads with the YAML form and keeps the field table, which is unchanged and normative for both; the worked example is `docs/research/examples/no-unwrap-outside-tests.yaml`, and `cargo test -p jev-core yaml_and_json` asserts it against `.jev/rules/no-unwrap-outside-tests.json` field by field. No runtime semantic moved. |

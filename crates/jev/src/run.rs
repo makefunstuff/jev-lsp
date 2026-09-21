@@ -139,6 +139,7 @@ fn dispatch(command: &Command, overrides: &Overrides, deps: &Deps) -> Outcome {
             with_log(|log| inspect(&config, target, *force, deps, log))
         }
         Command::RulesInit { dir, force } => rules_init(dir.as_deref(), *force, deps),
+        Command::RulesCompile { path, out } => rules_compile(path, out.as_deref()),
     }
 }
 
@@ -760,6 +761,63 @@ fn rules_init(dir: Option<&str>, force: bool, deps: &Deps) -> Outcome {
         } else {
             Vec::new()
         },
+    }
+}
+
+/// One rule file as the `jev.rules/1` JSON document for it (PROTOCOL.md §11, `jev rules compile`).
+///
+/// The loader reads `.yaml` beside `.json`, so this is not a step a rule needs to run: it is how
+/// a rule authored in YAML is handed to anything that speaks the JSON schema — a diff, a review,
+/// a tool that predates the YAML spelling — and how a conversion is checked in beside the file it
+/// came from. The file is read through `rules::compile`, which is the loader's own parse, so a
+/// file this command refuses is one the pass would have skipped, with the same reason; a file it
+/// emits is a file the loader reads back as the same rule.
+///
+/// Without `-o` the document itself is the artifact on stdout, one line, like every other
+/// command's output. With `-o` it is written to that file — pretty, because a file someone
+/// opens should look like a file — and stdout carries the result instead, naming the file and
+/// the rule count. A path that cannot be written is a usage error (exit 2) that says so; nothing
+/// is written anywhere but the path the user named.
+fn rules_compile(path: &str, out: Option<&str>) -> Outcome {
+    let document = match rules::compile(std::path::Path::new(path)) {
+        Ok(document) => document,
+        Err(why) => {
+            return Outcome {
+                code: EXIT_USAGE,
+                stdout: Some(one_line(&result_err("usage", &why))),
+                stderr: vec![format!("jev: {why}")],
+            }
+        }
+    };
+    match out {
+        None => Outcome {
+            code: EXIT_OK,
+            stdout: Some(one_line(&document)),
+            stderr: Vec::new(),
+        },
+        Some(out) => {
+            let count = document["rules"].as_array().map_or(0, Vec::len);
+            let body = serde_json::to_string_pretty(&document)
+                .expect("a serde_json::Value always serializes");
+            if let Err(e) = std::fs::write(out, format!("{body}\n")) {
+                let why = format!("cannot write {out}: {e}");
+                return Outcome {
+                    code: EXIT_USAGE,
+                    stdout: Some(one_line(&result_err("usage", &why))),
+                    stderr: vec![format!("jev: {why}")],
+                };
+            }
+            Outcome {
+                code: EXIT_OK,
+                stdout: Some(one_line(&json!({
+                    "schema": RESULT_SCHEMA,
+                    "ok": true,
+                    "path": out,
+                    "rules": count,
+                }))),
+                stderr: Vec::new(),
+            }
+        }
     }
 }
 
@@ -2283,6 +2341,90 @@ mod tests {
             .collect();
         beside.sort();
         assert_eq!(beside, vec![".jev".to_string(), "copy".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One rule, written in YAML, for `rules compile`: the fields a rule file needs, and nothing
+    /// that exists only in the JSON spelling — so the emitted JSON is the whole of the rule.
+    const YAML_RULE: &str = "\
+schema: jev.rules/1
+rules:
+  - id: yaml-rule
+    title: A rule from YAML
+    text: Prose without a JSON escape in it.
+    applies_to: [\"**/*.rs\"]
+    inspection: {kind: regex, pattern: 'TODO'}
+    judgement: {question: Is it a violation?}
+";
+
+    #[test]
+    fn rules_compile_emits_the_json_the_loader_reads_and_writes_it_where_told() {
+        let dir = bare_dir("compile");
+        let yaml = dir.join("a.yaml");
+        std::fs::write(&yaml, YAML_RULE).unwrap();
+        let yaml_arg = yaml.to_str().unwrap().to_string();
+        let harness = Harness::new(Box::new(Scripted::new(&[])), Box::new(Fs));
+
+        // Without `-o`, the document itself is the one JSON line: the artifact, like every other
+        // command's output.
+        let out = harness.run(&["rules", "compile", &yaml_arg]);
+        assert_eq!(out.code, EXIT_OK, "{:?}", out.stderr);
+        let body = line(&out);
+        assert_eq!(body["schema"], "jev.rules/1");
+        assert_eq!(body["rules"][0]["id"], "yaml-rule");
+        assert_eq!(body["rules"][0]["inspection"]["pattern"], "TODO");
+
+        // With `-o`, the file is written and stdout carries the result instead of the document.
+        let json = dir.join(".jev/rules/a.json");
+        std::fs::create_dir_all(json.parent().unwrap()).unwrap();
+        let json_arg = json.to_str().unwrap().to_string();
+        let out = harness.run(&["rules", "compile", &yaml_arg, "-o", &json_arg]);
+        assert_eq!(out.code, EXIT_OK, "{:?}", out.stderr);
+        let body = line(&out);
+        assert_eq!(body["ok"], true, "{body}");
+        assert_eq!(body["path"], json_arg.as_str());
+        assert_eq!(body["rules"], 1);
+
+        // And what was written is a rule file: the loader reads it back, by itself, as the rule
+        // the YAML holds.
+        let loaded = jev_core::rules::load(&dir, false, &[]);
+        assert!(loaded.skipped.is_empty(), "{:?}", loaded.skipped);
+        assert_eq!(loaded.rules.len(), 1);
+        assert_eq!(loaded.rules[0].id, "yaml-rule");
+        assert_eq!(loaded.rules[0].title, "A rule from YAML");
+
+        // A file the pass would skip is refused with the reason, exit 2, and `-o` is untouched:
+        // a conversion that cannot be done writes nothing.
+        let bad = dir.join("bad.yaml");
+        std::fs::write(&bad, "schema: jev.rules/9\nrules: []\n").unwrap();
+        let kept = dir.join("kept.json");
+        let out = harness.run(&[
+            "rules",
+            "compile",
+            bad.to_str().unwrap(),
+            "-o",
+            kept.to_str().unwrap(),
+        ]);
+        assert_eq!(out.code, EXIT_USAGE, "{:?}", out.stderr);
+        assert!(line(&out)["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("jev.rules/9"));
+        assert!(!kept.exists(), "a refused conversion writes nothing");
+
+        // A file that is not there, and a file that is not a rule file, are usage errors too.
+        let out = harness.run(&["rules", "compile", dir.join("nope.yaml").to_str().unwrap()]);
+        assert_eq!(out.code, EXIT_USAGE, "{:?}", out.stderr);
+        assert!(line(&out)["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot be read"));
+        let out = harness.run(&["rules", "compile", dir.join("notes.md").to_str().unwrap()]);
+        assert_eq!(out.code, EXIT_USAGE, "{:?}", out.stderr);
+        assert!(line(&out)["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not a rule file"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

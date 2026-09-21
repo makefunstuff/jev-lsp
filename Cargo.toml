@@ -21,6 +21,11 @@ license-file = "LICENSE"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The rules are authored by hand, and a hand-authored rule file wants readable prose and a
+# regex that is not escaped twice. `serde_yaml` parses `jev.rules/1` files written as YAML
+# into the same structures `serde_json` parses the JSON spelling into, so the loader reads
+# both and nothing downstream knows which spelling a rule arrived in.
+serde_yaml = "0.9"
 
 [profile.release]
 lto = "thin"

@@ -112,7 +112,7 @@ pub struct RulesConfig {
     /// produced no ambient findings at all, so a fresh install and a broken one looked the same,
     /// and the conventions this project ships for its own tree published nothing on the
     /// repository it was written for. `false` is the behaviour that predates the shipped set,
-    /// exactly: `.jev/rules/*.json` and nothing else, and `no_rules` when there are none. A
+    /// exactly: `.jev/rules/` and nothing else, and `no_rules` when there is nothing there. A
     /// repository can also adopt the shipped rules as its own with `jev rules init`, after
     /// which they are its files and this setting stops mattering to them.
     pub defaults: bool,
