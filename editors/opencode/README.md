@@ -6,10 +6,13 @@ display lie to bypass a client filter — not the rule’s real severity. Prefer
 as Warning when OpenCode will show it; until then set `JEV_OPENCODE_REMAP=0` to opt out of the
 remap (findings may then be invisible to the agent).
 
-OpenCode 1.18 shows jev findings through a bridge: a small stdio proxy that starts
-`jev-lsp --stdio` and translates the server's pull-based finding path into the
-`textDocument/publishDiagnostics` push OpenCode listens for. This is the **supported
-workaround**, not a fix of OpenCode’s native path (issue #21 stays open).
+OpenCode 1.18 uses a bridge under `editors/opencode/` for the **push/probe** path
+(not bare `jev-lsp --stdio`). The bridge is a small stdio proxy that starts
+`jev-lsp --stdio` and translates the server’s pull-based finding path into the
+`textDocument/publishDiagnostics` push OpenCode’s probe/`debug lsp diagnostics` path
+listens for. That is the **supported workaround** for refresh + Warning-filter gaps —
+not a fix of the native path, and **not** ambient TUI chrome in a coding session
+(issue #21 stays open for both).
 
 ```
 OpenCode  ──stdio──▶  jev-lsp-opencode-bridge.py  ──stdio──▶  jev-lsp --stdio
@@ -102,9 +105,12 @@ are forwarded with the same severity remap.
 
 ## Limits
 
-- **A finding appears after the pass, not on keystroke.** Ambient analysis runs on the
-  synthesized save and calls the decide tier, so the diagnostic lands a few seconds after
-  OpenCode opens or changes the file. The agent transcript shows it on the write that follows.
+- **Proven for push/probe, not ambient TUI.** `verify-bridge.sh` and
+  `opencode debug lsp diagnostics` show the finding behind the bridge. Ambient edit/save in
+  an OpenCode coding session still often has green `LSP · jev` with no readable
+  `[jev warning]` chrome — that hole stays on #21. When a push does land, ambient analysis
+  has already run on the synthesized save, so the diagnostic is after the pass, not on
+  keystroke.
 - **Only documents OpenCode has opened are pushed.** A refresh for a file no client opened has
   nothing to push, which is also true of the pull path.
 - **Severity is a display concession.** A rule finding is a Warning in `jev-lsp`; OpenCode sees
