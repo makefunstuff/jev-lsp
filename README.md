@@ -86,7 +86,9 @@ Lazy.nvim: `{ dir = '/path/to/jev-lsp/nvim', name = 'jev', lazy = false, config 
 
 ## Other clients
 
-`jev-lsp --stdio` is a standard language server — any client that can start one works. Plugin is Neovim-only extras (attach, keymaps, `:Jev`).
+`jev-lsp --stdio` is a standard language server for clients that finish the pull path
+(`workspace/diagnostic/refresh` → re-pull; PROTOCOL §3.4/§9). Neovim and VS Code/Cursor do.
+OpenCode 1.18 does not yet — see below. Plugin is Neovim-only extras (attach, keymaps, `:Jev`).
 
 Export endpoints before launch (`JEV_DECIDE_*`, `JEV_BASE_URL`, …) or set them in the client config. Other routes / local decide: [`docs/MODEL.md`](docs/MODEL.md) §8.
 
@@ -111,10 +113,10 @@ export JEV_API_KEY_ENV=OPENROUTER_API_KEY   # name of the env var, not the key
 
 ### OpenCode
 
-```json
-{"lsp":{"jev-lsp":{"command":["/path/to/jev-lsp/target/release/jev-lsp","--stdio"],"extensions":[".rs"],
-  "env":{"JEV_DECIDE_BASE_URL":"http://127.0.0.1:8009/v1","JEV_DECIDE_MODEL":"kev-latest"}}}}
-```
+**Unsupported for ambient findings on OpenCode 1.18** until
+[#21](https://github.com/makefunstuff/jev-lsp/issues/21) — native path stays empty after edit/save.
+Use Neovim or VS Code/Cursor for now. Do not configure bare `jev-lsp --stdio` in OpenCode and
+expect findings.
 
 ### Cursor / VS Code
 
