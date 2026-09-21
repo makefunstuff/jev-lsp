@@ -124,7 +124,8 @@ rather than `jev-lsp --stdio` directly:
 
 [`editors/opencode/README.md`](editors/opencode/README.md) documents the four things the bridge
 translates, the limits, and `bash editors/opencode/verify-bridge.sh`, which reproduces the empty
-native path and proves the bridge surfaces a finding to a client shaped like OpenCode 1.18.
+native path and proves the **push/probe** path surfaces a finding. Ambient TUI chrome in a coding
+session is still missing — issue [#21](https://github.com/makefunstuff/jev-lsp/issues/21).
 
 ### Cursor / VS Code
 
