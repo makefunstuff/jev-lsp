@@ -14,6 +14,7 @@ not for the code they touch.
 | `verify/rules_test.py` | built | 45/45 — the rules pass end to end: inspections, gates, cache, skips |
 | `verify/lsp_framing_test.py` | built | 9/9 — the test client's own stdio framing; written for a defect the suite found in itself (§8) |
 | `verify/omp_lsp.sh` | built | 0 failures, 0 skips — OMP, a third client that shares no code with this repository, receives a rule's finding and calls `jev.inspect` (§1.1) |
+| `editors/opencode/verify-bridge.sh` | built | 0 failures, 0 skips with `opencode` 1.18 on `PATH` — the native path reports nothing for a rule (issue #21) and the bridge reports the finding at severity 1; the client stage SKIPs where `opencode` is absent (§1.2) |
 | `verify/queue_test.py` | built | 5/5; proven to fail on the pre-fix behaviour |
 | `verify/supersede_probe.py` | built | 7/7 — written independently by the verifier agent; control case plus a race case, and it asserts the race was actually set up |
 | `verify/plan_test.py` | built | 35/35 — the plan loop, server-side apply, revert, staleness, divergence, multi-file creation |
@@ -202,6 +203,36 @@ Server failures:
 
 The server is not missing a feature here; a client is asking for one it was not told existed.
 
+### 1.2 A client that does not finish the pull: OpenCode
+
+OpenCode 1.18 is the one client in the support set whose finding path had to be built rather than
+configured, and `editors/opencode/verify-bridge.sh` is the harness behind that claim. It is a
+two-stage row, because the stages answer different questions.
+
+`editors/opencode/opencode_probe.py` is a client written to OpenCode 1.18's behaviour, and the
+behaviours are the defect (issue #21): `workspace.diagnostics.refreshSupport: false` and an empty
+OK to the `workspace/diagnostic/refresh` the server sends anyway; one `textDocument/diagnostic`
+pull when a document opens, whose answer it keeps for the session; no `didSave`; and
+`textDocument/publishDiagnostics` as the only surface it reads. Against `jev-lsp --stdio`
+directly, that client ends with nothing, and the record says why rather than only that:
+`pulls: 1, first_pull_items: 0, refresh_requests_acked: 2, pushes: 0` (the second refresh is the
+lenses' own). Against `editors/opencode/jev-lsp-opencode-bridge.py`, the same fixture and the same
+server produce `provider_advertised: false, pulls: 0, pushes: 2` and a diagnostic at
+`severity: 1` whose message begins `[jev warning]`.
+
+The second stage is OpenCode itself, because a probe of one's own writing agreeing with the
+implementation is the weaker claim. With `opencode` on `PATH`, the row runs
+`opencode debug lsp diagnostics handler.rs` in the fixture twice, changing only `lsp.jev.command`:
+`["<server>", "--stdio"]` prints `[]` for a file the rule flags, and `["python3", "<bridge>"]`
+prints the finding at severity `1` with `[jev warning]` in the message. `opencode` absent is a SKIP
+with the reason, and the probe stages still run.
+
+The fixture's decide call is stalled 1.2 s (`BRIDGE_STUB_DELAY_MS`), so the native pull lands
+before the finding exists rather than sometimes winning the race the issue describes as "often
+empty". The row is falsifiable in both directions and was checked that way: a `bridge` that is a
+plain `exec` of the server turns the bridge stage red (`3 failure(s)`, exit 1) and leaves the
+native reproduction green.
+
 ## 2. Live Neovim
 
 `verify/nvim_live.lua` — real Neovim, real plugin, real server, run under
@@ -281,6 +312,7 @@ suite is the actual regression net; it is run in CI *and* as part of the design 
 | An answer below the rule's floor published anyway | `verify/rules_test.py` — a below-floor answer publishes nothing, and the counts still say it was looked at |
 | The test client's framing desynchronising on a header split across reads | `verify/lsp_framing_test.py` — the frame is completed on the next read, and a bad frame is reported and skipped by length instead of killing the reader |
 | A client the server was not written against cannot get a finding | `verify/omp_lsp.sh` — OMP receives the rule's finding through its own `lsp` tool and reaches `jev.inspect`; the no-rules control receives nothing |
+| A client that advertises no refresh and keeps its first pull empty never sees a finding | `editors/opencode/verify-bridge.sh` — the probe's native run records one empty pull, two acknowledged refreshes and no push, and the bridge run surfaces the finding; `opencode debug lsp diagnostics` says the same (§1.2) |
 | A rule that matches nothing because the pattern is root-relative | `verify/cli_parity.py`'s nested-file case (a repository-relative `applies_to`, below the root) and `jev-core` `gates` tests — the path is reduced to the workspace root before matching |
 | The CLI finding no rules where the server finds them | `verify/cli_parity.py` — a nested file (`crates/.../rules.rs`) with the rules at the repository root: both front ends report the same findings. The CLI used to look for `.jev/rules/` beside the file |
 | A workspace sweep dying on the chat tiers' call cap | `verify/rules_test.py` and the budget tests — a rules pass takes a permit from `budget.max_decisions_per_min` (its own window), not `max_calls_per_min` |
@@ -312,6 +344,7 @@ is measured separately and reported as `[U]` context, never as a pass condition.
 | "Both front ends answer a rule the same way" | `verify/cli_parity.py` — `jev inspect` and the LSP path produce identical findings for the same rules and text |
 | "A pass that had nothing to run says so" | `verify/rules_test.py` — `("no_rules", …)` in the result, and `:Jev inspect` renders the skip section |
 | "It is an LSP server, not a Neovim feature" | `verify/omp_lsp.sh` green — OMP, through its own LSP support and with no code from this repository, receives a rule's finding over `textDocument/diagnostic` and calls `workspace/executeCommand jev.inspect` |
+| "OpenCode 1.18 gets jev findings" | `editors/opencode/verify-bridge.sh` green — `opencode debug lsp diagnostics` prints nothing for the rule with `lsp.jev.command` pointing at the server and the finding at severity 1 behind `editors/opencode/`, and a client written to OpenCode's behaviour records the empty pull and the no-op refresh in between (§1.2) |
 | "The harness itself is not the source of an intermittent red run" | `verify/lsp_framing_test.py` green — the split-header, bad-body and length-less-header cases, all deterministic and server-free |
 
 Anything not covered above is reported as unverified, with the exact probe that would

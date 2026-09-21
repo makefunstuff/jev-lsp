@@ -86,7 +86,7 @@ Lazy.nvim: `{ dir = '/path/to/jev-lsp/nvim', name = 'jev', lazy = false, config 
 
 ## Other clients
 
-`jev-lsp --stdio` is a standard language server — any client that can start one works. Plugin is Neovim-only extras (attach, keymaps, `:Jev`).
+`jev-lsp --stdio` is a standard language server — any client that can start one works, provided it re-pulls diagnostics on `workspace/diagnostic/refresh` (PROTOCOL §3.4/§9). Plugin is Neovim-only extras (attach, keymaps, `:Jev`).
 
 Export endpoints before launch (`JEV_DECIDE_*`, `JEV_BASE_URL`, …) or set them in the client config. Other routes / local decide: [`docs/MODEL.md`](docs/MODEL.md) §8.
 
@@ -111,10 +111,20 @@ export JEV_API_KEY_ENV=OPENROUTER_API_KEY   # name of the env var, not the key
 
 ### OpenCode
 
+OpenCode 1.18 does not finish the pull path: it answers `workspace/diagnostic/refresh` with an
+empty OK, pulls `textDocument/diagnostic` once per open (before the pass has run), and shows its
+agent only `severity: 1`. Configure the bridge in [`editors/opencode/`](editors/opencode/README.md)
+rather than `jev-lsp --stdio` directly:
+
 ```json
-{"lsp":{"jev-lsp":{"command":["/path/to/jev-lsp/target/release/jev-lsp","--stdio"],"extensions":[".rs"],
-  "env":{"JEV_DECIDE_BASE_URL":"http://127.0.0.1:8009/v1","JEV_DECIDE_MODEL":"kev-latest"}}}}
+{"lsp":{"jev":{"command":["python3","/path/to/jev-lsp/editors/opencode/jev-lsp-opencode-bridge.py"],
+  "extensions":[".rs"],"env":{"JEV_LSP_BIN":"/path/to/jev-lsp/target/release/jev-lsp",
+  "JEV_DECIDE_BASE_URL":"http://127.0.0.1:8009/v1","JEV_DECIDE_MODEL":"kev-latest"}}}}
 ```
+
+[`editors/opencode/README.md`](editors/opencode/README.md) documents the four things the bridge
+translates, the limits, and `bash editors/opencode/verify-bridge.sh`, which reproduces the empty
+native path and proves the bridge surfaces a finding to a client shaped like OpenCode 1.18.
 
 ### Cursor / VS Code
 

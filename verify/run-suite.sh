@@ -373,6 +373,14 @@ if [ "${NVIM_ONLY:-0}" != "1" ]; then
   # unavailable.
   run "omp_lsp" bash verify/omp_lsp.sh "$BIN_NAME"
 
+  # A fourth client, and the one the issue named: OpenCode 1.18's diagnostics path. The row holds
+  # its own stub on its own port (8098, not the runner's 8099) with the decision call stalled, so
+  # the native client's single pull lands before the finding exists and the reproduction is
+  # deterministic; it then requires the same client, behind `editors/opencode/`, to receive the
+  # finding. Both directions are asserted, so neither a green run nor a red one can be an artifact
+  # of the fixture. A missing binary or a busy port is a SKIP with the reason.
+  run "opencode_bridge" bash editors/opencode/verify-bridge.sh "$REPO/target/release/$BIN_NAME"
+
   # The real-endpoint row. `JEV_API_KEY_ENV` names the variable that holds the key — the chat
   # tiers read the *name*, never the value, and the value never reaches this script's output.
   # A missing key or an endpoint that does not answer is `?` with the reason: never a pass, and
