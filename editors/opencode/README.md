@@ -1,8 +1,15 @@
 # jev for OpenCode
 
+**Known distortion:** by default the bridge remaps rule findings Warning→Error and prefixes
+the message `[jev warning]`, because OpenCode 1.18’s agent transcript drops Warning. That is a
+display lie to bypass a client filter — not the rule’s real severity. Prefer keeping Warning
+as Warning when OpenCode will show it; until then set `JEV_OPENCODE_REMAP=0` to opt out of the
+remap (findings may then be invisible to the agent).
+
 OpenCode 1.18 shows jev findings through a bridge: a small stdio proxy that starts
 `jev-lsp --stdio` and translates the server's pull-based finding path into the
-`textDocument/publishDiagnostics` push OpenCode listens for.
+`textDocument/publishDiagnostics` push OpenCode listens for. This is the **supported
+workaround**, not a fix of OpenCode’s native path (issue #21 stays open).
 
 ```
 OpenCode  ──stdio──▶  jev-lsp-opencode-bridge.py  ──stdio──▶  jev-lsp --stdio
