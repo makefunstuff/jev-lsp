@@ -114,9 +114,17 @@ export JEV_API_KEY_ENV=OPENROUTER_API_KEY   # name of the env var, not the key
 ### OpenCode
 
 **Unsupported for ambient findings on OpenCode 1.18** until
-[#21](https://github.com/makefunstuff/jev-lsp/issues/21) — native path stays empty after edit/save.
-Use Neovim or VS Code/Cursor for now. Do not configure bare `jev-lsp --stdio` in OpenCode and
-expect findings.
+[#21](https://github.com/makefunstuff/jev-lsp/issues/21). Same `jev-lsp` ambient-surfaces in
+Neovim and VS Code; OpenCode does not. Upstream client holes (not a server bug):
+
+- [anomalyco/opencode#17869](https://github.com/anomalyco/opencode/issues/17869) — agent/TUI path
+  keeps **Error only**; Warnings never reach it
+- [anomalyco/opencode#23911](https://github.com/anomalyco/opencode/issues/23911) /
+  [#23873](https://github.com/anomalyco/opencode/issues/23873) — LSP connects green, diagnostics
+  stay empty (no finished pull/refresh)
+
+Do not configure bare `jev-lsp --stdio` in OpenCode and expect findings. Use Neovim or
+VS Code/Cursor for now.
 
 ### Cursor / VS Code
 
