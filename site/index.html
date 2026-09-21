@@ -42,7 +42,9 @@ require('jev').setup({})</code></pre>
       Open a file. <code>:checkhealth jev</code>. Save.
     </li>
   </ol>
-  <p class="note">Other editors: start <code>jev-lsp</code> as a normal language server.</p>
+  <p class="note">Ambient: background decide → <code>publishDiagnostics</code>. If not sub-second, <code>jev.checking</code> (~500ms) until Warning/clear (8s budget). Not instant LSP.</p>
+  <p class="note">omp: edit-inline may flash early OK until decide lands.</p>
+  <p class="note">OpenCode 1.18 ambient unsupported — <a href="https://github.com/makefunstuff/jev-lsp/issues/21">#21</a>, upstream <a href="https://github.com/anomalyco/opencode/issues/17869">#17869</a>. Use Neovim or VS Code.</p>
 
   <h2>Rule example</h2>
   <p class="note"><code>.jev/rules/no-unwrap-in-handlers.json</code></p>
