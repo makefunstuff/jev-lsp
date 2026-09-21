@@ -1,235 +1,79 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>jev-lsp · rules on the line</title>
-<meta name="description" content="jev-lsp is an LSP that runs your repo’s Jev rules as per-line diagnostics. Jev is a classifier, not a chat model: so local and cheap models can steer code without token maxxing.">
-<link rel="stylesheet" href="./styles.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>jev-lsp</title>
+  <meta name="description" content="LSP server: Jev rules as diagnostics.">
+  <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-<a class="skip" href="#main">Skip to content</a>
+<main>
+  <h1>jev-lsp</h1>
+  <p>An <strong>LSP server</strong>. It loads classifier rules from <code>.jev/rules/*.json</code> and publishes normal LSP diagnostics, code actions, and code lens. Not a chat product.</p>
+  <p class="warn"><strong>WIP</strong> — expect breakage.</p>
 
-<header class="site-head">
-  <div class="shell">
-    <div class="brand">
-      <a class="wordmark" href="./">jev-lsp</a>
-      <span class="wip">WIP</span>
-    </div>
-    <nav class="toc" aria-label="Primary">
-      <a href="#loop">How it works</a>
-      <a href="#demo">Demo</a>
-      <a href="#start">Start</a>
-      <a class="toc-gh" href="https://github.com/makefunstuff/jev-lsp">GitHub</a>
-    </nav>
-  </div>
-</header>
+  <h2>What you can do</h2>
+  <ul>
+    <li>Match lines with a pattern, ask a typed question about each hit</li>
+    <li>Get editor diagnostics when the answer clears the rule floor</li>
+    <li>Use code actions the server exposes</li>
+    <li>Run the same rules via CLI (<code>jev</code>) locally or in CI</li>
+    <li>Point decide at hosted Jev or another compatible endpoint</li>
+  </ul>
 
-<main id="main">
+  <h2>Setup</h2>
+  <ol>
+    <li>Install (Rust ≥ 1.75):
+      <pre><code>cargo install --git https://github.com/makefunstuff/jev-lsp --locked jev-lsp jev</code></pre>
+    </li>
+    <li>Decide key (hosted default):
+      <pre><code>export TYPESAFE_API_KEY=…</code></pre>
+    </li>
+    <li>Neovim plugin (repo <code>nvim/</code>, Neovim ≥ 0.12):
+      <pre><code>ln -s /path/to/jev-lsp/nvim ~/.local/share/nvim/site/pack/jev/start/jev</code></pre>
+      <pre><code>require('jev').setup({})</code></pre>
+      Open a real file, run <code>:checkhealth jev</code>, save.
+    </li>
+  </ol>
+  <p>Other editors: run <code>jev-lsp</code> as a standard LSP server.</p>
 
-<!-- ========== HERO: dark cinematic fold ========== -->
-<section class="hero" id="hero">
-  <div class="hero-atmosphere" aria-hidden="true"></div>
-  <div class="hero-grid-bg" aria-hidden="true"></div>
-  <div class="shell hero-layout">
-    <div class="hero-copy">
-      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Language server · classifier</p>
-      <h1>Steer code with rules, not with token maxxing.</h1>
-      <p class="lead"><strong>Jev is a classifier, not a chat model:</strong> one typed question about one line → a value and a probability, never prose. <strong>jev-lsp</strong> runs repo rules as ordinary LSP diagnostics, code actions, and code lens.</p>
-      <div class="hero-actions">
-        <a class="btn btn-primary" href="https://github.com/makefunstuff/jev-lsp">GitHub</a>
-        <a class="btn btn-ghost" href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/TUTORIAL.md">Tutorial</a>
-      </div>
-      <ul class="fact-strip" aria-label="Product facts">
-        <li><strong>1 line</strong> → 1 value + p</li>
-        <li><strong>LSP</strong> diagnostics</li>
-        <li><strong>local / cheap</strong> models</li>
-      </ul>
-    </div>
+  <h2>Rule example</h2>
+  <p>Create <code>.jev/rules/no-unwrap-in-handlers.json</code>:</p>
+  <pre><code>{
+  "schema": "jev.rules/1",
+  "rules": [
+    {
+      "id": "no-unwrap-in-handlers",
+      "title": "Unwrap in a request handler",
+      "text": "A handler must not unwrap: a bad request would take the worker down. Return the error instead.",
+      "severity": "warning",
+      "applies_to": ["**/src/**/*.rs"],
+      "inspection": {
+        "kind": "regex",
+        "pattern": "\\.unwrap\\(\\)"
+      },
+      "judgement": {
+        "question": "Is this unwrap in request-handling code that can fail on bad input?",
+        "criteria": {
+          "true": "ships in a handler / request path and the value is not proven safe",
+          "false": "tests, docs, or an invariant on the surrounding lines covers it"
+        },
+        "min_probability": 0.85
+      },
+      "verb_hint": "fix"
+    }
+  ]
+}</code></pre>
+  <p>Regex selects candidates; Jev only judges those lines. No match → no decide call.</p>
 
-    <div class="hero-stage" aria-label="Product demo">
-      <!-- Back card: rule JSON, peeking -->
-      <div class="float-card float-rule" aria-hidden="true">
-        <div class="win-chrome">
-          <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
-          <span class="win-title">.jev/rules/no-unwrap.json</span>
-        </div>
-        <pre class="win-body mono-sm">{
-  <span class="k">"id"</span>: <span class="s">"no-unwrap"</span>,
-  <span class="k">"floor"</span>: <span class="n">0.8</span>
-}</pre>
-      </div>
-
-      <!-- Dominant diagnostic window -->
-      <div class="float-card float-diag hero-panel" role="img" aria-label="Example diagnostic on save">
-        <div class="win-chrome">
-          <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
-          <div class="win-tabs">
-            <span class="win-tab on">server.rs</span>
-            <span class="win-tab">mod.rs</span>
-          </div>
-          <span class="win-meta">diagnostic · save</span>
-        </div>
-        <div class="win-body editor-pane">
-          <div class="ed-gutter" aria-hidden="true">
-            <span>410</span><span>411</span><span class="g-warn">412</span><span>413</span><span>414</span>
-          </div>
-          <div class="ed-lines">
-            <div class="ed-row"><span class="tok">fn</span> <span class="fn">handle_request</span>(msg: Request) {</div>
-            <div class="ed-row">    <span class="tok">let</span> body = msg.payload();</div>
-            <div class="ed-row find">
-              <span class="find-bar" aria-hidden="true"></span>
-              <span>    <span class="tok">let</span> data = body.<span class="fn">unwrap</span>();</span>
-              <span class="virt">■ jev · fail · p=0.91</span>
-            </div>
-            <div class="ed-row">    process(data);</div>
-            <div class="ed-row">}</div>
-          </div>
-        </div>
-        <div class="win-status">
-          <span class="st-mode">NORMAL</span>
-          <span class="st-file">server.rs:412</span>
-          <span class="st-right">utf-8 · rust · jev</span>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-
-<!-- ========== DEMO: silent slop-detection triptych ========== -->
-<section id="demo" class="sec sec-demo">
-  <div class="shell">
-    <div class="win win-lg demo-screen" aria-label="Demo: OpenCode, Neovim, VS Code">
-      <div class="win-chrome">
-        <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
-        <span class="win-title">demo</span>
-        <span class="win-meta">OpenCode · Neovim · VS Code</span>
-      </div>
-      <div class="demo-video">
-        <video controls playsinline preload="metadata"
-               poster="./assets/demo-slop-triptych-poster.jpg"
-               aria-label="Silent screencap across OpenCode, Neovim, and VS Code">
-          <source src="./assets/demo-slop-triptych.mp4" type="video/mp4">
-        </video>
-      </div>
-    </div>
-  </div>
-</section>
-
-
-<!-- ========== NOT CHAT: asymmetric compare ========== -->
-<section id="not-chat" class="sec">
-  <div class="shell split">
-    <div class="split-copy">
-      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Model shape</p>
-      <h2>Classifier, not chat</h2>
-      <p class="sec-lead">Chat reviews emit prose about the whole file. Jev answers one rule question about one candidate line: a typed value and a confidence <code>p</code>.</p>
-      <ul class="plain">
-        <li><strong>One question → one answer</strong>: <code>pass</code>/<code>fail</code> (or another typed value), plus <code>p</code>.</li>
-        <li><strong>Rules in the repo</strong>: <code>.jev/rules/*.json</code>, reviewed like code.</li>
-        <li><strong>Gate before publish</strong>: regex picks the line; <code>p</code> must clear the rule <code>floor</code> or nothing is emitted.</li>
-      </ul>
-    </div>
-    <div class="compare-stack">
-      <div class="chat-reject">
-        <p class="compare-label">chat review · reject</p>
-        <p class="chat-blob">Here are several thoughts about this file… consider error handling on line 412, also naming, also whether the module boundary is right, also…</p>
-      </div>
-      <div class="win win-answer">
-        <div class="win-chrome">
-          <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
-          <span class="win-title">Jev decide</span>
-          <span class="win-meta">one line · one rule</span>
-        </div>
-        <pre class="win-body">{
-  <span class="k">"value"</span>: <span class="amb">"fail"</span>,
-  <span class="k">"p"</span>: <span class="n">0.91</span>
-}</pre>
-        <div class="win-foot">publish only if p ≥ floor (e.g. 0.8)</div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ========== LOOP: steps + floating rule ========== -->
-<section id="loop" class="sec sec-loop">
-  <div class="shell loop-layout">
-    <div>
-      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Workflow</p>
-      <h2>The loop</h2>
-      <ol class="loop-steps">
-        <li><span class="step-n">01</span><div><strong>Spec</strong>: what the code must do.</div></li>
-        <li><span class="step-n">02</span><div><strong>Rules</strong>: <code>.jev/rules/*.json</code> (words + pattern for candidate lines).</div></li>
-        <li><span class="step-n">03</span><div><strong>Steer</strong>: jev-lsp on save, human or harness.</div></li>
-        <li><span class="step-n">04</span><div><strong>Stay on track</strong>: ordinary diagnostics.</div></li>
-      </ol>
-      <p class="muted-line">Full schema → <a href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/GUIDE.md">docs/GUIDE.md</a>.</p>
-    </div>
-    <div class="win win-rule">
-      <div class="win-chrome">
-        <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
-        <span class="win-title">.jev/rules/no-unwrap.json</span>
-        <span class="win-meta">minimal</span>
-      </div>
-      <pre class="win-body">{
-  <span class="k">"id"</span>: <span class="s">"no-unwrap"</span>,
-  <span class="k">"question"</span>: <span class="s">"Does this line unwrap a Result/Option unsafely?"</span>,
-  <span class="k">"pattern"</span>: <span class="s">"\\.unwrap\\(\\)"</span>,
-  <span class="k">"floor"</span>: <span class="n">0.8</span>
-}</pre>
-    </div>
-  </div>
-</section>
-
-
-
-<!-- ========== START: sticky-feeling install ========== -->
-<section id="start" class="sec sec-start">
-  <div class="shell start-layout">
-    <div class="start-copy">
-      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Install</p>
-      <h2>Start</h2>
-      <p class="muted-line">Rust ≥1.75; decision-tier endpoint + key (hosted Jev default).</p>
-      <ol class="next-steps">
-        <li>Plugin: <code>ln -s /path/to/jev-lsp/nvim ~/.local/share/nvim/site/pack/jev/start/jev</code> then <code>require('jev').setup({})</code></li>
-        <li>Export <code>TYPESAFE_API_KEY</code> (or local decide: <a href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/MODEL.md">MODEL.md</a>).</li>
-        <li>Add <code>.jev/rules/*.json</code>, open a file, save → finding or <code>no_rules</code>.</li>
-      </ol>
-      <div class="hero-actions">
-        <a class="btn btn-primary" href="https://github.com/makefunstuff/jev-lsp">GitHub</a>
-        <a class="btn btn-ghost" href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/TUTORIAL.md">Tutorial</a>
-        <a class="btn btn-ghost" href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/GUIDE.md">Guide</a>
-      </div>
-    </div>
-    <div class="start-wins">
-      <div class="win win-install">
-        <div class="win-chrome">
-          <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
-          <span class="win-title">install</span>
-          <span class="win-meta">cargo · locked</span>
-        </div>
-        <pre class="win-body">cargo install --git https://github.com/makefunstuff/jev-lsp --locked jev-lsp jev</pre>
-      </div>
-      <div class="win win-config">
-        <div class="win-chrome">
-          <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
-          <span class="win-title">init.lua</span>
-          <span class="win-meta">after symlink</span>
-        </div>
-        <pre class="win-body">require(<span class="s">'jev'</span>).setup({})</pre>
-      </div>
-    </div>
-  </div>
-</section>
-
+  <h2>Docs</h2>
+  <ul>
+    <li><a href="https://github.com/makefunstuff/jev-lsp">GitHub</a></li>
+    <li><a href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/TUTORIAL.md">Tutorial</a></li>
+    <li><a href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/GUIDE.md">Guide</a></li>
+    <li><a href="https://github.com/makefunstuff/jev-lsp/blob/main/docs/MODEL.md">Model / endpoints</a></li>
+  </ul>
 </main>
-
-<footer class="site-foot">
-  <div class="shell">
-    <p>jev-lsp · MIT · early PoC (APIs may change). <a href="https://github.com/makefunstuff/jev-lsp">Source on GitHub</a>.</p>
-  </div>
-</footer>
-
 </body>
 </html>
